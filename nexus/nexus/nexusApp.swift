@@ -31,15 +31,17 @@ final class NexusAppState: ObservableObject {
     private weak var window: NSWindow?
 
     func attach(_ window: NSWindow) {
-        guard self.window !== window else { return }
+        let isNewWindow = self.window !== window
         self.window = window
-        window.titleVisibility = .hidden
-        window.titlebarAppearsTransparent = true
-        window.isOpaque = false
-        window.backgroundColor = .clear
-        window.hasShadow = true
-        window.level = .statusBar
-        window.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary]
+        if isNewWindow {
+            window.titleVisibility = .hidden
+            window.titlebarAppearsTransparent = true
+            window.isOpaque = false
+            window.backgroundColor = .clear
+            window.hasShadow = true
+            window.level = .statusBar
+            window.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary]
+        }
         positionWindow(animated: false)
     }
 
