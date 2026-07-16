@@ -20,6 +20,10 @@ final class ResponseSpeaker {
     private var streamingSessionIsActive = false
     private var isMuted = false
     private var scheduledBufferCount = 0
+    private var pcmEmissionEpoch: UInt64 = 0
+    private var lastPCMActivityUptime: TimeInterval = 0
+    private var pipelineGeneration = UUID()
+    private var orderedPCM = OrderedDataChunkBuffer()
 
     init() {
         audioEngine.attach(playerNode)
@@ -45,6 +49,21 @@ final class ResponseSpeaker {
         enqueue(text)
     }
 
+    /// Speaks an acknowledgement and does not return until its audio has
+    /// drained. The notch uses this gate so thinking never appears while the
+    /// acknowledgement is still being spoken.
+    func speakImmediatelyAndWait(_ text: String) async {
+        guard !isMuted else { return }
+        let startingEpoch = pcmEmissionEpoch
+        let expectsPiperAudio = piperInput != nil
+        enqueue(text)
+        if expectsPiperAudio {
+            await waitForPiperPlayback(after: startingEpoch, text: text)
+        } else {
+            await waitForSystemVoice()
+        }
+    }
+
     func append(_ delta: String) {
         guard streamingSessionIsActive, !isMuted else { return }
         chunker.append(delta).forEach(enqueue)
@@ -54,7 +73,9 @@ final class ResponseSpeaker {
     func finishStreaming() {
         flushTask?.cancel()
         flushTask = nil
-        guard streamingSessionIsActive, !isMuted else { return }
+        guard streamingSessionIsActive else { return }
+        streamingSessionIsActive = false
+        guard !isMuted else { return }
         if let remainder = chunker.flush() { enqueue(remainder) }
         try? piperInput?.close()
         piperInput = nil
@@ -78,10 +99,39 @@ final class ResponseSpeaker {
     private func schedulePendingPhraseFlush() {
         flushTask?.cancel()
         flushTask = Task { [weak self] in
-            try? await Task.sleep(for: .milliseconds(260))
+            try? await Task.sleep(for: .milliseconds(500))
             guard !Task.isCancelled, let self, !self.isMuted,
-                  let phrase = self.chunker.flush() else { return }
+                  let phrase = self.chunker.flushReadyPrefix() else { return }
             self.enqueue(phrase)
+        }
+    }
+
+    private func waitForPiperPlayback(after startingEpoch: UInt64, text: String) async {
+        let wordCount = max(1, text.split(whereSeparator: { $0.isWhitespace }).count)
+        let timeout = min(15.0, max(5.0, Double(wordCount) / 2.2 + 4.0))
+        let deadline = ProcessInfo.processInfo.systemUptime + timeout
+        var observedAudio = false
+
+        while ProcessInfo.processInfo.systemUptime < deadline {
+            guard !Task.isCancelled, !isMuted else { return }
+            if systemSynthesizer.isSpeaking {
+                await waitForSystemVoice()
+                return
+            }
+            if pcmEmissionEpoch > startingEpoch { observedAudio = true }
+            let quietFor = ProcessInfo.processInfo.systemUptime - lastPCMActivityUptime
+            if observedAudio, scheduledBufferCount == 0, quietFor >= 0.20 { return }
+            try? await Task.sleep(for: .milliseconds(25))
+        }
+    }
+
+    private func waitForSystemVoice() async {
+        let deadline = ProcessInfo.processInfo.systemUptime + 15
+        await Task.yield()
+        while systemSynthesizer.isSpeaking,
+              ProcessInfo.processInfo.systemUptime < deadline {
+            guard !Task.isCancelled, !isMuted else { return }
+            try? await Task.sleep(for: .milliseconds(25))
         }
     }
 
@@ -103,6 +153,10 @@ final class ResponseSpeaker {
 
     private func startPiperStream(_ configuration: PiperVoiceConfiguration) throws {
         guard piperProcess == nil else { return }
+        let generation = UUID()
+        let sequence = LockedSequenceCounter()
+        pipelineGeneration = generation
+        orderedPCM = OrderedDataChunkBuffer()
         let format = AVAudioFormat(
             commonFormat: .pcmFormatFloat32,
             sampleRate: configuration.sampleRate,
@@ -138,7 +192,10 @@ final class ResponseSpeaker {
                 handle.readabilityHandler = nil
                 return
             }
-            Task { @MainActor [weak self] in self?.schedulePCM(data) }
+            let index = sequence.next()
+            Task { @MainActor [weak self] in
+                self?.receivePCM(data, sequence: index, generation: generation)
+            }
         }
         process.terminationHandler = { [weak self, weak process] _ in
             Task { @MainActor [weak self, weak process] in
@@ -154,8 +211,17 @@ final class ResponseSpeaker {
         piperOutput = output
     }
 
-    private func schedulePCM(_ incoming: Data) {
-        guard !isMuted, let audioFormat else { return }
+    private func receivePCM(_ incoming: Data, sequence: UInt64, generation: UUID) {
+        guard generation == pipelineGeneration else { return }
+        for orderedChunk in orderedPCM.insert(incoming, sequence: sequence) {
+            schedulePCM(orderedChunk, generation: generation)
+        }
+    }
+
+    private func schedulePCM(_ incoming: Data, generation: UUID) {
+        guard generation == pipelineGeneration, !isMuted, let audioFormat else { return }
+        pcmEmissionEpoch &+= 1
+        lastPCMActivityUptime = ProcessInfo.processInfo.systemUptime
         pendingPCM.append(incoming)
         let byteCount = pendingPCM.count - (pendingPCM.count % MemoryLayout<Int16>.size)
         guard byteCount > 0 else { return }
@@ -174,7 +240,7 @@ final class ResponseSpeaker {
         scheduledBufferCount += 1
         playerNode.scheduleBuffer(buffer, completionCallbackType: .dataPlayedBack) { [weak self] _ in
             Task { @MainActor [weak self] in
-                guard let self else { return }
+                guard let self, self.pipelineGeneration == generation else { return }
                 self.scheduledBufferCount = max(0, self.scheduledBufferCount - 1)
             }
         }
@@ -182,6 +248,8 @@ final class ResponseSpeaker {
     }
 
     private func stopPipeline() {
+        pipelineGeneration = UUID()
+        orderedPCM = OrderedDataChunkBuffer()
         flushTask?.cancel()
         flushTask = nil
         systemSynthesizer.stopSpeaking(at: .immediate)
@@ -208,6 +276,34 @@ final class ResponseSpeaker {
     }
 }
 
+struct OrderedDataChunkBuffer: Equatable {
+    private var nextSequence: UInt64 = 0
+    private var pending: [UInt64: Data] = [:]
+
+    mutating func insert(_ data: Data, sequence: UInt64) -> [Data] {
+        guard sequence >= nextSequence else { return [] }
+        pending[sequence] = data
+        var ready: [Data] = []
+        while let chunk = pending.removeValue(forKey: nextSequence) {
+            ready.append(chunk)
+            nextSequence &+= 1
+        }
+        return ready
+    }
+}
+
+private final class LockedSequenceCounter: @unchecked Sendable {
+    private let lock = NSLock()
+    private var value: UInt64 = 0
+
+    func next() -> UInt64 {
+        lock.withLock {
+            defer { value &+= 1 }
+            return value
+        }
+    }
+}
+
 struct SpeechSentenceChunker: Equatable {
     private var storage = ""
     private let maximumCharacters = 56
@@ -222,10 +318,20 @@ struct SpeechSentenceChunker: Equatable {
         while storage.count >= maximumCharacters {
             let limit = storage.index(storage.startIndex, offsetBy: maximumCharacters)
             let candidate = storage[..<limit]
-            let split = candidate.lastIndex(where: { $0.isWhitespace }) ?? limit
+            guard let split = candidate.lastIndex(where: { $0.isWhitespace }),
+                  split != storage.startIndex else { break }
             if let phrase = takePrefix(through: split) { chunks.append(phrase) }
         }
         return chunks
+    }
+
+    /// Flushes only text ending at a confirmed whitespace boundary. The final
+    /// word stays buffered because a streamed token may still be only half of
+    /// that word.
+    mutating func flushReadyPrefix() -> String? {
+        guard storage.count >= 18,
+              let boundary = storage.lastIndex(where: { $0.isWhitespace }) else { return nil }
+        return takePrefix(through: storage.index(after: boundary))
     }
 
     mutating func flush() -> String? {
@@ -238,6 +344,33 @@ struct SpeechSentenceChunker: Equatable {
         let phrase = String(storage[..<end]).trimmingCharacters(in: .whitespacesAndNewlines)
         storage = String(storage[end...]).trimmingCharacters(in: .whitespacesAndNewlines)
         return phrase.isEmpty ? nil : phrase
+    }
+}
+
+/// Uses the authoritative accumulated model text to emit each spoken suffix
+/// once. Duplicate or stale network events can no longer repeat or reorder TTS.
+struct StreamedSpeechCursor: Equatable {
+    private(set) var text = ""
+
+    mutating func consume(delta: String, accumulated snapshot: String) -> String {
+        if snapshot.hasPrefix(text) {
+            let suffix = String(snapshot.dropFirst(text.count))
+            text = snapshot
+            return suffix
+        }
+        if text.hasPrefix(snapshot) {
+            return ""
+        }
+        if snapshot.isEmpty, !delta.isEmpty {
+            text += delta
+            return delta
+        }
+
+        // A provider correction may replace earlier text. Update the visible
+        // answer, but do not speak the divergent section because spoken audio
+        // cannot be retracted safely.
+        text = snapshot
+        return ""
     }
 }
 

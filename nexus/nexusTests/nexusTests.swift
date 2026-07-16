@@ -152,6 +152,60 @@ final class NexusGeometryTests: XCTestCase {
         XCTAssertEqual(chunker.flush(), "The first streamed phrase")
     }
 
+    func testIdleSpeechFlushNeverCutsAStreamedWordInHalf() {
+        var chunker = SpeechSentenceChunker()
+
+        XCTAssertEqual(chunker.append("Streaming can become confu"), [])
+        XCTAssertEqual(chunker.flushReadyPrefix(), "Streaming can become")
+        XCTAssertEqual(
+            chunker.append("sed when token delivery pauses."),
+            ["confused when token delivery pauses."]
+        )
+    }
+
+    func testSpeechCursorDropsDuplicateAndStaleStreamingEvents() {
+        var cursor = StreamedSpeechCursor()
+
+        XCTAssertEqual(cursor.consume(delta: "Hel", accumulated: "Hel"), "Hel")
+        XCTAssertEqual(cursor.consume(delta: "Hel", accumulated: "Hel"), "")
+        XCTAssertEqual(cursor.consume(delta: "lo", accumulated: "Hello"), "lo")
+        XCTAssertEqual(cursor.consume(delta: "l", accumulated: "Hel"), "")
+        XCTAssertEqual(cursor.text, "Hello")
+        XCTAssertEqual(cursor.consume(delta: "!", accumulated: "Hello!"), "!")
+    }
+
+    func testPCMChunksAreRestoredToArrivalOrderBeforePlayback() {
+        var buffer = OrderedDataChunkBuffer()
+        let first = Data([1])
+        let second = Data([2])
+        let third = Data([3])
+
+        XCTAssertEqual(buffer.insert(second, sequence: 1), [])
+        XCTAssertEqual(buffer.insert(first, sequence: 0), [first, second])
+        XCTAssertEqual(buffer.insert(third, sequence: 2), [third])
+        XCTAssertEqual(buffer.insert(second, sequence: 1), [], "Played PCM must not be replayed")
+    }
+
+    func testDefaultModelInstructionsRequireConciseDirectAnswers() {
+        let instructions = NexusResponseInstructions.conciseSystemPrompt
+
+        XCTAssertTrue(instructions.contains("shortest complete answer"))
+        XCTAssertTrue(instructions.contains("three short sentences"))
+        XCTAssertTrue(instructions.contains("explicitly asks for detail"))
+    }
+
+    func testThinkingBeginsOnlyAfterAcknowledgementStateIsFinished() {
+        var state = NotchInteractionState()
+        state.beginDictation()
+        state.updateTranscript("Explain streaming")
+        state.finishDictation()
+        state.acknowledge("Got it. Let me work through that.")
+
+        XCTAssertEqual(state.presentation, .overlay)
+        state.beginThinking()
+        XCTAssertEqual(state.presentation, .thinking)
+    }
+
     func testAcknowledgementMatchesThePromptIntent() {
         XCTAssertEqual(PromptAcknowledgement.text(for: "Search Google for Swift"), "Got it. I’ll look into that.")
         XCTAssertEqual(PromptAcknowledgement.text(for: "Build a prototype"), "Understood. I’ll put that together.")

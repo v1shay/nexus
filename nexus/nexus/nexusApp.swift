@@ -113,6 +113,7 @@ final class NotchController: ObservableObject {
     private let responseSpeaker = ResponseSpeaker()
     private var responseTask: Task<Void, Never>?
     private var responseGeneration = UUID()
+    private var responseSpeechCursor = StreamedSpeechCursor()
     private var hoverSession = NotchHoverSession()
     private var suppressAutomaticResponseReveal = false
 
@@ -205,6 +206,7 @@ final class NotchController: ObservableObject {
         closeTask?.cancel()
         responseTask?.cancel()
         responseGeneration = UUID()
+        responseSpeechCursor = StreamedSpeechCursor()
         responseSpeaker.stop()
         suppressAutomaticResponseReveal = false
         interaction.beginDictation()
@@ -232,6 +234,7 @@ final class NotchController: ObservableObject {
         responseTask?.cancel()
         let generation = UUID()
         responseGeneration = generation
+        responseSpeechCursor = StreamedSpeechCursor()
         responseTask = Task { [weak self] in
             guard let self else { return }
             guard !Task.isCancelled, responseGeneration == generation else { return }
@@ -239,8 +242,7 @@ final class NotchController: ObservableObject {
             responseSpeaker.beginStreaming()
             interaction.acknowledge(acknowledgement)
             if let screen { resize(to: expandedSize(for: screen), animated: true) }
-            responseSpeaker.speakImmediately(acknowledgement)
-            try? await Task.sleep(for: .milliseconds(240))
+            await responseSpeaker.speakImmediatelyAndWait(acknowledgement)
             guard !Task.isCancelled, responseGeneration == generation else { return }
             interaction.beginThinking()
             if let screen { resize(to: listeningSize(for: screen), animated: true) }
@@ -250,8 +252,10 @@ final class NotchController: ObservableObject {
                     await self.receiveResponseDelta(delta, accumulated: accumulated, generation: generation)
                 }
                 guard !Task.isCancelled, responseGeneration == generation else { return }
+                let finalSpeechDelta = responseSpeechCursor.consume(delta: "", accumulated: answer)
+                if !finalSpeechDelta.isEmpty { responseSpeaker.append(finalSpeechDelta) }
                 let reveal = !suppressAutomaticResponseReveal
-                interaction.receiveAnswer(answer, reveal: reveal)
+                interaction.receiveAnswer(responseSpeechCursor.text, reveal: reveal)
                 automaticRevealIsWaitingForNotchVisit = reveal
                 if reveal, let screen { resize(to: expandedSize(for: screen), animated: true) }
                 responseSpeaker.finishStreaming()
@@ -271,11 +275,13 @@ final class NotchController: ObservableObject {
 
     private func receiveResponseDelta(_ delta: String, accumulated: String, generation: UUID) {
         guard !Task.isCancelled, responseGeneration == generation else { return }
+        let speechDelta = responseSpeechCursor.consume(delta: delta, accumulated: accumulated)
+        guard !responseSpeechCursor.text.isEmpty else { return }
         let reveal = !suppressAutomaticResponseReveal
-        interaction.receivePartialAnswer(accumulated, reveal: reveal)
+        interaction.receivePartialAnswer(responseSpeechCursor.text, reveal: reveal)
         automaticRevealIsWaitingForNotchVisit = reveal
         if reveal, let screen { resize(to: expandedSize(for: screen), animated: true) }
-        responseSpeaker.append(delta)
+        if !speechDelta.isEmpty { responseSpeaker.append(speechDelta) }
     }
 
     func toggleVoiceMute() {

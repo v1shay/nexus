@@ -1,5 +1,11 @@
 import Foundation
 
+enum NexusResponseInstructions {
+    static let conciseSystemPrompt = """
+    You are Nexus, a fast voice-first assistant. Give the shortest complete answer that satisfies the request. Lead with the direct answer. Do not restate the question, expose hidden reasoning, narrate your process, or add greetings, filler, conclusions, or offers to do more. Use no more than three short sentences unless the user explicitly asks for detail, steps, code, math, a list, or a longer format. Preserve essential accuracy, safety, and requested formatting.
+    """
+}
+
 final class OllamaManager: @unchecked Sendable {
     static let serverURL = URL(string: "http://127.0.0.1:11434")!
     static let officialMacDownloadURL = URL(string: "https://ollama.com/download/Ollama-darwin.zip")!
@@ -114,7 +120,14 @@ final class OllamaManager: @unchecked Sendable {
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.httpBody = try JSONEncoder().encode(
-            OllamaChatRequest(model: model, messages: [.init(role: "user", content: prompt)], stream: true)
+            OllamaChatRequest(
+                model: model,
+                messages: [
+                    .init(role: "system", content: NexusResponseInstructions.conciseSystemPrompt),
+                    .init(role: "user", content: prompt)
+                ],
+                stream: true
+            )
         )
         let (bytes, response) = try await session.bytes(for: request)
         try Self.requireSuccess(response)
@@ -292,7 +305,14 @@ final class LMStudioManager: @unchecked Sendable {
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.httpBody = try JSONEncoder().encode(
-            OpenAIChatRequest(model: resolvedModel, messages: [.init(role: "user", content: prompt)], stream: true)
+            OpenAIChatRequest(
+                model: resolvedModel,
+                messages: [
+                    .init(role: "system", content: NexusResponseInstructions.conciseSystemPrompt),
+                    .init(role: "user", content: prompt)
+                ],
+                stream: true
+            )
         )
         let (bytes, response) = try await session.bytes(for: request)
         try Self.requireSuccess(response)
