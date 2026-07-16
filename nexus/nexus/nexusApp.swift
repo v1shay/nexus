@@ -29,6 +29,8 @@ final class NexusAppDelegate: NSObject, NSApplicationDelegate {
 final class NotchController: ObservableObject {
     @Published private(set) var isExpanded = false
     @Published private(set) var isListening = false
+    @Published private(set) var isHoverPreview = false
+    @Published private(set) var hasTranscript = false
     @Published private(set) var currentSize = CGSize(width: 190, height: 32)
 
     private var panel: NexusNotchPanel?
@@ -103,6 +105,8 @@ final class NotchController: ObservableObject {
     private func startGlobalDictation() {
         closeTask?.cancel()
         isListening = true
+        isHoverPreview = false
+        hasTranscript = false
         if let screen {
             isExpanded = true
             resize(to: listeningSize(for: screen), animated: true)
@@ -111,6 +115,8 @@ final class NotchController: ObservableObject {
 
     private func finishGlobalDictation() {
         isListening = false
+        isHoverPreview = false
+        hasTranscript = true
         if let screen {
             isExpanded = true
             resize(to: expandedSize(for: screen), animated: true)
@@ -120,14 +126,24 @@ final class NotchController: ObservableObject {
     func toggleListening() {
         closeTask?.cancel()
         isListening.toggle()
-        if !isListening { collapse() }
+        if isListening {
+            isHoverPreview = false
+            hasTranscript = false
+        } else {
+            hasTranscript = true
+            if let screen { resize(to: expandedSize(for: screen), animated: true) }
+        }
     }
 
     func updateHover(_ hovering: Bool) {
         closeTask?.cancel()
         if hovering {
-            expand()
+            if !isListening && !hasTranscript {
+                isHoverPreview = true
+                expand(to: listeningSize)
+            }
         } else {
+            guard !isListening else { return }
             closeTask = Task { [weak self] in
                 try? await Task.sleep(for: .milliseconds(180))
                 guard !Task.isCancelled else { return }
@@ -137,14 +153,20 @@ final class NotchController: ObservableObject {
     }
 
     private func expand() {
-        guard !isExpanded, let screen else { return }
+        expand(to: expandedSize)
+    }
+
+    private func expand(to size: (NSScreen) -> CGSize) {
+        guard let screen else { return }
         isExpanded = true
-        resize(to: expandedSize(for: screen), animated: true)
+        resize(to: size(screen), animated: true)
     }
 
     private func collapse() {
         guard isExpanded, let screen else { return }
         isExpanded = false
+        isHoverPreview = false
+        hasTranscript = false
         resize(to: closedSize(for: screen), animated: true)
     }
 
