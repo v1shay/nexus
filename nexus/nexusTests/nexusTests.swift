@@ -189,9 +189,12 @@ final class NexusGeometryTests: XCTestCase {
     func testDefaultModelInstructionsRequireConciseDirectAnswers() {
         let instructions = NexusResponseInstructions.conciseSystemPrompt
 
-        XCTAssertTrue(instructions.contains("shortest complete answer"))
-        XCTAssertTrue(instructions.contains("three short sentences"))
-        XCTAssertTrue(instructions.contains("explicitly asks for detail"))
+        XCTAssertTrue(instructions.contains("You are Nex"))
+        XCTAssertTrue(instructions.contains("highly advanced personal assistant and occasional babysitter"))
+        XCTAssertTrue(instructions.contains("one to three sharp sentences"))
+        XCTAssertTrue(instructions.contains("provide the complete deliverable"))
+        XCTAssertTrue(instructions.contains("Never truncate code"))
+        XCTAssertTrue(instructions.contains("heavily sarcastic"))
     }
 
     func testThinkingBeginsOnlyAfterAcknowledgementStateIsFinished() {

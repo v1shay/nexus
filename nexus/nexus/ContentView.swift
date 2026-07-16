@@ -192,6 +192,7 @@ private struct ListeningWings: View {
 
 private struct TranscriptContents: View {
     @EnvironmentObject private var notch: NotchController
+    private static let responseBottomID = "nex-response-bottom"
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -220,23 +221,35 @@ private struct TranscriptContents: View {
                 }
             }
 
-            ScrollView(.vertical, showsIndicators: false) {
-                VStack(alignment: .leading, spacing: 14) {
-                    Text(notch.transcript)
-                        .font(.system(size: notch.answer.isEmpty ? 25 : 17, weight: .medium, design: .rounded))
-                        .foregroundStyle(.white.opacity(notch.answer.isEmpty ? 0.96 : 0.62))
-                        .textSelection(.enabled)
+            ScrollViewReader { scrollProxy in
+                ScrollView(.vertical, showsIndicators: false) {
+                    VStack(alignment: .leading, spacing: 14) {
+                        Text(notch.transcript)
+                            .font(.system(size: notch.answer.isEmpty ? 25 : 17, weight: .medium, design: .rounded))
+                            .foregroundStyle(.white.opacity(notch.answer.isEmpty ? 0.96 : 0.62))
+                            .textSelection(.enabled)
 
-                    if !notch.answer.isEmpty {
-                        Capsule()
-                            .fill(.white.opacity(0.14))
+                        if !notch.answer.isEmpty {
+                            Capsule()
+                                .fill(.white.opacity(0.14))
+                                .frame(height: 1)
+                            RichMarkdownView(markdown: notch.answer)
+                        }
+
+                        Color.clear
                             .frame(height: 1)
-                        RichMarkdownView(markdown: notch.answer)
+                            .id(Self.responseBottomID)
+                    }
+                    .tracking(-0.2)
+                    .lineSpacing(4)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .onChange(of: notch.answer) { _, _ in
+                    Task { @MainActor in
+                        await Task.yield()
+                        scrollProxy.scrollTo(Self.responseBottomID, anchor: .bottom)
                     }
                 }
-                .tracking(-0.2)
-                .lineSpacing(4)
-                .frame(maxWidth: .infinity, alignment: .leading)
             }
             .padding(.top, 18)
         }
