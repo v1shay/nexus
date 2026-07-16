@@ -21,3 +21,19 @@
 
 <img width="672" alt="one click download" src="https://github.com/user-attachments/assets/3492cf07-5b53-4bc0-ab7f-63d43fb6ee78" />
 
+### Nexus Connect
+
+Nexus Connect lets the Mac app securely and transparently route large-model inference, agents, OCR, indexing, approved process work, files, and downloads to a paired Mac Studio over Tailscale. Existing local Ollama/LM Studio behavior remains the offline fallback, and Connect stays off until you pair and enable it.
+
+Build and run:
+
+```bash
+./scripts/build-nexus.sh --run
+```
+
+Then open the model window from the notch and expand **Nexus Connect**. Follow the exact two-Mac steps in [Nexus Connect setup](docs/NEXUS_CONNECT_SETUP.md).
+
+- [Architecture and security](docs/NEXUS_CONNECT_ARCHITECTURE.md)
+- [Unified workload API](docs/NEXUS_CONNECT_API.md)
+- [Migration and rollback](docs/NEXUS_CONNECT_MIGRATION.md)
+- [Voice setup](VOICE_SETUP.md)

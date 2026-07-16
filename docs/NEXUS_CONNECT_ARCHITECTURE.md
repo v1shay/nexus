@@ -13,7 +13,7 @@ The current app has four useful boundaries that Nexus Connect must preserve:
 3. `OllamaManager` and `LMStudioManager` already use structured `Foundation.Process` calls and `URLSession` streaming. They remain the local executors and the offline fallback.
 4. Tests import the app module directly and the Xcode project lists source files explicitly. New modules therefore remain small, Codable, dependency-injected, and independently testable.
 
-Baseline on 2026-07-16: all 29 existing tests pass. The Air sees one online macOS peer named `vishays mac studio`; a Tailscale-layer probe upgraded to a direct path at roughly 11 ms.
+Baseline on 2026-07-16: all 29 pre-Connect tests passed before implementation. The completed suite has 59 unit tests: the original regressions plus protocol, discovery, security, session, host-service, routing, transfer, and controller coverage.
 
 ## Compatibility contract
 
@@ -101,30 +101,28 @@ All operations use `NexusWorkloadRequest` and stream `NexusWorkloadEvent` values
 - `ocr`: image bytes or a workspace file token; emits recognized text blocks.
 - `index`: allowed root token, paths, and options; emits progress and index summary.
 - `searchIndex`: query and limits; emits ranked matches.
-- `process`: executable ID, argument array, environment allowlist, working-directory token, timeout, CPU/memory/output limits; emits stdout/stderr chunks and exit status.
+- `processApproval` and `process`: an intentional Air confirmation obtains a short-lived single-use host token; execution then carries an executable ID, argument array, environment allowlist, working-directory token, timeout, and output limit and emits stdout/stderr plus exit status.
 - `fileStat`, `fileRead`, `fileWrite`, and `fileList`: operate only inside configured roots and use canonical path validation.
 - `download`: HTTPS URL, expected digest, destination token, and range state; emits progress and final artifact metadata.
 
-No workload accepts an arbitrary shell command string. The host maps executable IDs to absolute binaries and validates arguments against a capability policy. Agent-produced process requests require an explicit approval token issued by the Air UI.
+No workload accepts an arbitrary shell command string. The host maps executable IDs to absolute binaries and validates arguments against a capability policy. Shell interpreters remain forbidden. Process requests require a short-lived single-use approval token obtained after an explicit Air-side **Run Once** confirmation.
 
 ## Files, downloads, and resumption
 
 - File content is divided into independently authenticated chunks with transfer ID, offset, length, and SHA-256 digest.
 - The receiver persists a compact transfer manifest next to a temporary file. Reconnect resumes from the first missing or invalid chunk.
 - Finalization verifies size and whole-file SHA-256 before an atomic rename.
-- Concurrent chunks are bounded by measured bandwidth and memory. Small control frames always have priority over bulk transfer frames.
-- Remote URL downloads use HTTP range requests when the origin supports them and persist resume metadata. Nexus never claims that two internet connections are bonded; acceleration comes from using the Studio's connection, storage, and parallel range support when it is measurably advantageous.
+- Concurrent bulk transfers are bounded by the route-aware bandwidth policy, and every transfer uses bounded chunks. Small control frames always have priority over bulk transfer frames.
+- Remote URL downloads use HTTP range requests when the origin supports them and persist resume metadata. Nexus never claims that two internet connections are bonded; acceleration comes from using the Studio's connection and storage when that placement is advantageous.
 
 ## Health, bandwidth, and scheduling
 
-Health reports include uptime, app/protocol version, capabilities, total/free RAM, disk availability, model inventory digest, queue depth, active jobs, thermal state, and load average.
+Health reports include uptime, app/protocol version, capabilities, total/free RAM, disk availability, model inventory digest, queue depth, active jobs, and load average.
 
-The client maintains exponentially weighted moving averages for:
+The quality monitor supports exponentially weighted moving averages for:
 
-- handshake and ping round-trip time
-- request time-to-first-byte
-- upload/download throughput
-- recent failure rate
+- ping round-trip time
+- observed upload/download throughput
 
 Interactive inference and agent control traffic are latency-priority. Model downloads, indexing, and file replication are throughput-priority. Concurrency is bounded per capability so a 120B model download cannot starve token streaming or health traffic.
 
@@ -141,9 +139,9 @@ Interactive inference and agent control traffic are latency-priority. Model down
 
 1. Shared models, framing, cryptographic handshake, Keychain storage abstraction, replay protection, policy types, and deterministic tests.
 2. Tailscale discovery, peer scoring, persistent connection lifecycle, health telemetry, bandwidth estimator, reconnect state machine, and mocked transport tests.
-3. Studio host listener and bounded service implementations for health, inference/model management, OCR, indexing, process execution, file access, and downloads.
-4. Local and remote executors behind `NexusWorkloadRouter`; adapt `ModelDownloadViewModel` without removing its current managers or persistence.
-5. Resumable transfer integration, setup/provisioning, lightweight status UI, operational docs, compatibility tests, and end-to-end Air/Studio validation.
+3. Studio host listener and bounded service implementations for health, inference/model management, OCR, indexing, process execution, file access, and downloads. Completed in `19e7695`.
+4. Local and remote executors behind `NexusWorkloadRouter`; adapt `ModelDownloadViewModel` without removing its current managers or persistence. Completed in `ba3ede3` and `2c8188d`.
+5. Resumable transfer integration, setup/provisioning, lightweight status UI, operational docs, compatibility tests, and Air/Studio route validation. The data plane completed in `da4418a`; single-use process approval completed in `69b0767`; route-aware transfer limits completed in `d729747`; operational documentation is the final checkpoint.
 
 ## Plan review
 
@@ -162,7 +160,8 @@ The design was reviewed against the request and existing code before implementat
 - Tailscale connection types: <https://tailscale.com/docs/reference/connection-types>
 - Tailscale Grants: <https://tailscale.com/docs/features/access-control/grants>
 - Tailscale access control: <https://tailscale.com/docs/features/access-control>
+- Tailscale connection troubleshooting: <https://tailscale.com/docs/reference/troubleshooting/poor-performance-tailnet>
 - Apple Network framework: <https://developer.apple.com/documentation/network>
 - Apple CryptoKit: <https://developer.apple.com/documentation/cryptokit>
+- Apple ChaChaPoly: <https://developer.apple.com/documentation/cryptokit/chachapoly>
 - Apple Keychain generic passwords: <https://developer.apple.com/documentation/security/ksecclassgenericpassword>
-
