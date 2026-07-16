@@ -31,6 +31,7 @@ final class NotchController: ObservableObject {
     @Published private(set) var isListening = false
     @Published private(set) var isHoverPreview = false
     @Published private(set) var hasTranscript = false
+    @Published private(set) var transcript = ""
     @Published private(set) var currentSize = CGSize(width: 190, height: 32)
 
     private var panel: NexusNotchPanel?
@@ -108,8 +109,9 @@ final class NotchController: ObservableObject {
         isListening = true
         isHoverPreview = false
         hasTranscript = false
+        transcript = ""
         if let screen {
-            isExpanded = true
+            isExpanded = false
             resize(to: listeningSize(for: screen), animated: true)
         }
     }
@@ -119,8 +121,8 @@ final class NotchController: ObservableObject {
         isHoverPreview = false
         hasTranscript = true
         if let screen {
-            isExpanded = true
-            resize(to: expandedSize(for: screen), animated: true)
+            isExpanded = false
+            resize(to: closedSize(for: screen), animated: true)
         }
     }
 
@@ -130,9 +132,17 @@ final class NotchController: ObservableObject {
         if isListening {
             isHoverPreview = false
             hasTranscript = false
+            transcript = ""
+            if let screen {
+                isExpanded = false
+                resize(to: listeningSize(for: screen), animated: true)
+            }
         } else {
             hasTranscript = true
-            if let screen { resize(to: expandedSize(for: screen), animated: true) }
+            if let screen {
+                isExpanded = false
+                resize(to: closedSize(for: screen), animated: true)
+            }
         }
     }
 
@@ -161,10 +171,9 @@ final class NotchController: ObservableObject {
     func updateHover(_ hovering: Bool) {
         closeTask?.cancel()
         if hovering {
-            if !isListening && !hasTranscript {
-                isHoverPreview = true
-                expand(to: listeningSize)
-            }
+            guard !isListening else { return }
+            isHoverPreview = false
+            expand()
         } else {
             guard !isListening else { return }
             closeTask = Task { [weak self] in
@@ -189,7 +198,6 @@ final class NotchController: ObservableObject {
         guard isExpanded, let screen else { return }
         isExpanded = false
         isHoverPreview = false
-        hasTranscript = false
         resize(to: closedSize(for: screen), animated: true)
     }
 
@@ -226,7 +234,8 @@ final class NotchController: ObservableObject {
     }
 
     private func listeningSize(for screen: NSScreen) -> CGSize {
-        CGSize(width: min(260, screen.frame.width * 0.24), height: 58)
+        let notch = closedSize(for: screen)
+        return CGSize(width: notch.width + 124, height: notch.height + 10)
     }
 
     private func frame(for size: CGSize, on screen: NSScreen) -> NSRect {
@@ -241,7 +250,10 @@ final class NotchController: ObservableObject {
     @objc private func displayConfigurationChanged() {
         guard let screen = NSScreen.main ?? NSScreen.screens.first else { return }
         self.screen = screen
-        resize(to: isExpanded ? expandedSize(for: screen) : closedSize(for: screen), animated: false)
+        let size = isListening
+            ? listeningSize(for: screen)
+            : (isExpanded ? expandedSize(for: screen) : closedSize(for: screen))
+        resize(to: size, animated: false)
     }
 }
 
