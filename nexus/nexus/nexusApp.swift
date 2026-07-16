@@ -108,6 +108,9 @@ final class NotchController: ObservableObject {
         panel.contentView = hostingView
         panel.orderFrontRegardless()
         self.panel = panel
+        if ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] == nil {
+            responseSpeaker.prewarm()
+        }
         installHotKeyMonitor()
         installPointerMonitor()
 
@@ -157,7 +160,7 @@ final class NotchController: ObservableObject {
         closeTask?.cancel()
         responseTask?.cancel()
         responseGeneration = UUID()
-        responseSpeaker.stop()
+        responseSpeaker.prepareForNewRequest()
         interaction.beginDictation()
         if let screen {
             resize(to: listeningSize(for: screen), animated: true)
@@ -232,6 +235,7 @@ final class NotchController: ObservableObject {
         responseTask?.cancel()
         responseGeneration = UUID()
         responseSpeaker.stop()
+        responseSpeaker.prewarm()
         automaticRevealIsWaitingForNotchVisit = false
         interaction.dismiss()
         if let screen { resize(to: closedSize(for: screen), animated: true) }

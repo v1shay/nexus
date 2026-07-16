@@ -19,21 +19,39 @@ final class ResponseSpeaker {
     private var flushTask: Task<Void, Never>?
     private var streamingSessionIsActive = false
     private var isMuted = false
+    private var scheduledBufferCount = 0
+    private var lastPhraseSentAt: Date?
 
     init() {
         audioEngine.attach(playerNode)
     }
 
+    func prewarm() {
+        guard !isMuted, piperProcess == nil,
+              let configuration = PiperVoiceConfiguration.detect() else { return }
+        piperConfiguration = configuration
+        do { try startPiperStream(configuration) }
+        catch { piperConfiguration = nil }
+    }
+
+    func prepareForNewRequest() {
+        streamingSessionIsActive = false
+        flushTask?.cancel()
+        flushTask = nil
+        chunker = SpeechSentenceChunker()
+        systemSynthesizer.stopSpeaking(at: .immediate)
+        let recentlyQueued = lastPhraseSentAt.map { Date().timeIntervalSince($0) < 0.8 } ?? false
+        if scheduledBufferCount > 0 || recentlyQueued {
+            stopPipeline()
+            prewarm()
+        }
+    }
+
     func beginStreaming() {
-        stopPipeline()
         streamingSessionIsActive = true
         chunker = SpeechSentenceChunker()
         guard !isMuted else { return }
-        piperConfiguration = PiperVoiceConfiguration.detect()
-        if let configuration = piperConfiguration {
-            do { try startPiperStream(configuration) }
-            catch { piperConfiguration = nil }
-        }
+        prewarm()
     }
 
     /// Bypasses phrase buffering for acknowledgements and tool-status speech.
@@ -53,7 +71,6 @@ final class ResponseSpeaker {
         flushTask = nil
         guard streamingSessionIsActive, !isMuted else { return }
         if let remainder = chunker.flush() { enqueue(remainder) }
-        finishPiperInput()
     }
 
     func setMuted(_ muted: Bool) {
@@ -62,12 +79,8 @@ final class ResponseSpeaker {
         if muted {
             stopPipeline()
             chunker = SpeechSentenceChunker()
-        } else if streamingSessionIsActive {
-            piperConfiguration = PiperVoiceConfiguration.detect()
-            if let configuration = piperConfiguration {
-                do { try startPiperStream(configuration) }
-                catch { piperConfiguration = nil }
-            }
+        } else {
+            prewarm()
         }
     }
 
@@ -91,7 +104,10 @@ final class ResponseSpeaker {
         let cleaned = SpeechSanitizer.forSpeech(phrase)
         guard !cleaned.isEmpty, !isMuted else { return }
         if let input = piperInput {
-            do { try input.write(contentsOf: Data((cleaned + "\n").utf8)) }
+            do {
+                try input.write(contentsOf: Data((cleaned + "\n").utf8))
+                lastPhraseSentAt = Date()
+            }
             catch {
                 piperConfiguration = nil
                 speakWithSystemVoice(cleaned)
@@ -109,6 +125,7 @@ final class ResponseSpeaker {
             channels: 1,
             interleaved: false
         )!
+        if audioEngine.isRunning { audioEngine.stop() }
         audioEngine.disconnectNodeOutput(playerNode)
         audioEngine.connect(playerNode, to: audioEngine.mainMixerNode, format: format)
         audioEngine.prepare()
@@ -168,13 +185,14 @@ final class ResponseSpeaker {
             guard let source = bytes.baseAddress else { return }
             memcpy(destination, source, byteCount)
         }
-        playerNode.scheduleBuffer(buffer)
+        scheduledBufferCount += 1
+        playerNode.scheduleBuffer(buffer, completionCallbackType: .dataPlayedBack) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                self.scheduledBufferCount = max(0, self.scheduledBufferCount - 1)
+            }
+        }
         if !playerNode.isPlaying { playerNode.play() }
-    }
-
-    private func finishPiperInput() {
-        try? piperInput?.close()
-        piperInput = nil
     }
 
     private func stopPipeline() {
@@ -191,6 +209,8 @@ final class ResponseSpeaker {
         audioEngine.stop()
         audioEngine.reset()
         audioFormat = nil
+        scheduledBufferCount = 0
+        lastPhraseSentAt = nil
         pendingPCM.removeAll(keepingCapacity: true)
     }
 
