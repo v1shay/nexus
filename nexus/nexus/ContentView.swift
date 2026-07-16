@@ -4,7 +4,6 @@ import SwiftUI
 /// Interaction state is supplied by the AppKit controller above the view.
 struct ContentView: View {
     @EnvironmentObject private var notch: NotchController
-    @State private var showingModels = false
 
     var body: some View {
         ZStack(alignment: .top) {
@@ -31,7 +30,7 @@ struct ContentView: View {
                     ListeningContents()
                         .transition(.opacity.combined(with: .scale(scale: 0.82)))
                 } else if notch.hasTranscript {
-                    TranscriptContents(showingModels: $showingModels)
+                    TranscriptContents()
                         .transition(.opacity.combined(with: .move(edge: .top)))
                 }
             }
@@ -39,10 +38,6 @@ struct ContentView: View {
         .frame(width: notch.currentSize.width, height: notch.currentSize.height)
         .contentShape(Rectangle())
         .onHover { notch.updateHover($0) }
-        .sheet(isPresented: $showingModels) {
-            ModelAggregatorView()
-                .frame(minWidth: 680, minHeight: 520)
-        }
         .animation(.interpolatingSpring(stiffness: 340, damping: 31), value: notch.currentSize)
         .animation(.easeInOut(duration: 0.18), value: notch.isListening)
         .animation(.easeInOut(duration: 0.22), value: notch.hasTranscript)
@@ -64,14 +59,14 @@ private struct ListeningContents: View {
 }
 
 private struct TranscriptContents: View {
-    @Binding var showingModels: Bool
+    @EnvironmentObject private var notch: NotchController
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             HStack(alignment: .top) {
                 AgentOrb(size: 34)
                 Spacer()
-                Button { showingModels = true } label: {
+                Button { notch.openModelAggregator() } label: {
                     Image(systemName: "cube.transparent")
                         .font(.system(size: 15, weight: .medium))
                         .frame(width: 30, height: 30)

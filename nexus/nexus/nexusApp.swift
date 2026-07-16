@@ -38,6 +38,7 @@ final class NotchController: ObservableObject {
     private var closeTask: Task<Void, Never>?
     private var globalHotKey: NexusGlobalHotKey?
     private var pointerMonitor: PointerProximityMonitor?
+    private var modelPanel: NSPanel?
 
     static let preview: NotchController = {
         let controller = NotchController()
@@ -133,6 +134,28 @@ final class NotchController: ObservableObject {
             hasTranscript = true
             if let screen { resize(to: expandedSize(for: screen), animated: true) }
         }
+    }
+
+    func openModelAggregator() {
+        if let modelPanel {
+            modelPanel.makeKeyAndOrderFront(nil)
+            NSApp.activate(ignoringOtherApps: true)
+            return
+        }
+
+        let panel = NSPanel(
+            contentRect: NSRect(x: 0, y: 0, width: 700, height: 540),
+            styleMask: [.titled, .closable, .utilityWindow],
+            backing: .buffered,
+            defer: false
+        )
+        panel.title = "Models"
+        panel.isReleasedWhenClosed = false
+        panel.contentView = NSHostingView(rootView: ModelAggregatorView())
+        panel.center()
+        panel.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
+        modelPanel = panel
     }
 
     func updateHover(_ hovering: Bool) {
