@@ -35,6 +35,7 @@ final class NotchController: ObservableObject {
     private var closeTask: Task<Void, Never>?
     private var hotKeyMonitor: Any?
     private var localKeyMonitor: Any?
+    private var pointerMonitor: PointerProximityMonitor?
 
     static let preview: NotchController = {
         let controller = NotchController()
@@ -57,6 +58,7 @@ final class NotchController: ObservableObject {
         panel.orderFrontRegardless()
         self.panel = panel
         installHotKeyMonitor()
+        installPointerMonitor()
 
         NotificationCenter.default.addObserver(
             self,
@@ -64,6 +66,24 @@ final class NotchController: ObservableObject {
             name: NSApplication.didChangeScreenParametersNotification,
             object: nil
         )
+    }
+
+    /// Watches a generous virtual region over the physical notch.  This means
+    /// the cursor is considered inside Nexus even in the camera cutout itself,
+    /// where a transparent AppKit view cannot reliably receive hover events.
+    private func installPointerMonitor() {
+        pointerMonitor = PointerProximityMonitor { [weak self] location in
+            Task { @MainActor in self?.updatePointerLocation(location) }
+        }
+    }
+
+    private func updatePointerLocation(_ location: NSPoint) {
+        guard let screen else { return }
+        let closed = closedSize(for: screen)
+        let isOverNotchZone = abs(location.x - screen.frame.midX) <= max(150, closed.width / 2 + 72)
+            && location.y >= screen.frame.maxY - 66
+        let isOverPanel = isExpanded && (panel?.frame.contains(location) ?? false)
+        updateHover(isOverNotchZone || isOverPanel)
     }
 
     /// ⌥Space starts/stops the voice session. The global monitor handles it
@@ -159,6 +179,26 @@ final class NotchController: ObservableObject {
     }
 }
 
+private final class PointerProximityMonitor {
+    private var globalMonitor: Any?
+    private var localMonitor: Any?
+
+    init(onMove: @escaping (NSPoint) -> Void) {
+        globalMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.mouseMoved, .leftMouseDragged, .rightMouseDragged]) { _ in
+            onMove(NSEvent.mouseLocation)
+        }
+        localMonitor = NSEvent.addLocalMonitorForEvents(matching: [.mouseMoved, .leftMouseDragged, .rightMouseDragged]) { event in
+            onMove(NSEvent.mouseLocation)
+            return event
+        }
+    }
+
+    deinit {
+        if let globalMonitor { NSEvent.removeMonitor(globalMonitor) }
+        if let localMonitor { NSEvent.removeMonitor(localMonitor) }
+    }
+}
+
 private final class NexusNotchPanel: NSPanel {
     override init(contentRect: NSRect, styleMask: NSWindow.StyleMask, backing: NSWindow.BackingStoreType, defer flag: Bool) {
         super.init(contentRect: contentRect, styleMask: styleMask, backing: backing, defer: flag)
@@ -167,6 +207,7 @@ private final class NexusNotchPanel: NSPanel {
         backgroundColor = .clear
         hasShadow = false
         isMovable = false
+        acceptsMouseMovedEvents = true
         level = .mainMenu + 3
         collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary, .ignoresCycle]
     }
