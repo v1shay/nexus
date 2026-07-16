@@ -79,6 +79,36 @@ enum MarkdownBlockParser {
     }
 }
 
+enum InlineMarkdownSegment: Equatable {
+    case text(String)
+    case math(String)
+}
+
+enum InlineMathParser {
+    static func parse(_ source: String) -> [InlineMarkdownSegment] {
+        guard let expression = try? NSRegularExpression(
+            pattern: #"(?<!\$)\$([^$\n]+)\$(?!\$)|\\\((.+?)\\\)"#
+        ) else { return [.text(source)] }
+        let matches = expression.matches(in: source, range: NSRange(source.startIndex..., in: source))
+        guard !matches.isEmpty else { return [.text(source)] }
+        var segments: [InlineMarkdownSegment] = []
+        var cursor = source.startIndex
+        for match in matches {
+            guard let fullRange = Range(match.range, in: source) else { continue }
+            if cursor < fullRange.lowerBound {
+                segments.append(.text(String(source[cursor..<fullRange.lowerBound])))
+            }
+            let capture = [match.range(at: 1), match.range(at: 2)]
+                .compactMap { Range($0, in: source).map { String(source[$0]) } }
+                .first ?? ""
+            segments.append(.math(capture))
+            cursor = fullRange.upperBound
+        }
+        if cursor < source.endIndex { segments.append(.text(String(source[cursor...]))) }
+        return segments
+    }
+}
+
 struct RichMarkdownView: View {
     let markdown: String
 
@@ -108,24 +138,48 @@ struct RichMarkdownView: View {
 private struct MarkdownProseView: View {
     let source: String
 
-    private var attributed: AttributedString {
+    private var segments: [InlineMarkdownSegment] { InlineMathParser.parse(source) }
+    private var containsMath: Bool { segments.contains { if case .math = $0 { true } else { false } } }
+
+    private func attributed(_ text: String, syntax: AttributedString.MarkdownParsingOptions.InterpretedSyntax = .full) -> AttributedString {
         (try? AttributedString(
-            markdown: source,
+            markdown: text,
             options: .init(
-                interpretedSyntax: .full,
+                interpretedSyntax: syntax,
                 failurePolicy: .returnPartiallyParsedIfPossible
             )
-        )) ?? AttributedString(source)
+        )) ?? AttributedString(text)
     }
 
+    @ViewBuilder
     var body: some View {
-        Text(attributed)
+        if containsMath {
+            HStack(alignment: .center, spacing: 3) {
+                ForEach(Array(segments.enumerated()), id: \.offset) { _, segment in
+                    switch segment {
+                    case .text(let text):
+                        Text(attributed(text, syntax: .inlineOnlyPreservingWhitespace))
+                            .textSelection(.enabled)
+                    case .math(let equation):
+                        MathJaxView(equation: equation, isInline: true)
+                            .frame(width: min(230, max(46, CGFloat(equation.count) * 10)), height: 34)
+                    }
+                }
+            }
             .font(.system(size: 19, weight: .regular, design: .rounded))
             .foregroundStyle(.white.opacity(0.96))
             .tint(.cyan)
             .lineSpacing(4)
-            .textSelection(.enabled)
             .frame(maxWidth: .infinity, alignment: .leading)
+        } else {
+            Text(attributed(source))
+                .font(.system(size: 19, weight: .regular, design: .rounded))
+                .foregroundStyle(.white.opacity(0.96))
+                .tint(.cyan)
+                .lineSpacing(4)
+                .textSelection(.enabled)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
     }
 }
 
@@ -168,7 +222,7 @@ private struct MarkdownMathBlock: View {
 
     var body: some View {
         ZStack(alignment: .topTrailing) {
-            MathJaxView(equation: equation)
+            MathJaxView(equation: equation, isInline: false)
                 .frame(height: min(150, max(64, CGFloat(equation.count / 48 + 1) * 38)))
             CopyControl(text: equation, label: "Copy equation")
                 .padding(8)
@@ -208,6 +262,7 @@ private struct CopyControl: View {
 
 private struct MathJaxView: NSViewRepresentable {
     let equation: String
+    let isInline: Bool
 
     final class Coordinator {
         var renderedEquation = ""
@@ -227,27 +282,30 @@ private struct MathJaxView: NSViewRepresentable {
     }
 
     func updateNSView(_ webView: WKWebView, context: Context) {
-        guard context.coordinator.renderedEquation != equation else { return }
-        context.coordinator.renderedEquation = equation
-        webView.loadHTMLString(Self.html(for: equation), baseURL: nil)
+        let renderingKey = "\(isInline):\(equation)"
+        guard context.coordinator.renderedEquation != renderingKey else { return }
+        context.coordinator.renderedEquation = renderingKey
+        webView.loadHTMLString(Self.html(for: equation, isInline: isInline), baseURL: nil)
     }
 
-    private static func html(for equation: String) -> String {
+    private static func html(for equation: String, isInline: Bool) -> String {
         let escaped = equation
             .replacingOccurrences(of: "&", with: "&amp;")
             .replacingOccurrences(of: "<", with: "&lt;")
             .replacingOccurrences(of: ">", with: "&gt;")
+        let padding = isInline ? "2px" : "12px 48px"
+        let delimiters = isInline ? ("\\(", "\\)") : ("\\[", "\\]")
         return """
         <!doctype html><html><head><meta charset="utf-8">
         <meta name="viewport" content="width=device-width,initial-scale=1">
         <style>
           html,body{margin:0;min-height:100%;background:transparent;color:rgba(255,255,255,.95);overflow:hidden}
-          body{display:flex;align-items:center;justify-content:center;padding:12px 48px;box-sizing:border-box;font-size:18px}
+          body{display:flex;align-items:center;justify-content:center;padding:\(padding);box-sizing:border-box;font-size:18px}
           mjx-container{margin:0!important;max-width:100%;overflow-x:auto;overflow-y:hidden}
         </style>
         <script>window.MathJax={svg:{fontCache:'local'},options:{enableMenu:false}};</script>
         <script defer src="https://cdn.jsdelivr.net/npm/mathjax@4/tex-svg.js"></script>
-        </head><body>\\[\(escaped)\\]</body></html>
+        </head><body>\(delimiters.0)\(escaped)\(delimiters.1)</body></html>
         """
     }
 }

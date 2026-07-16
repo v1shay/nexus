@@ -161,4 +161,15 @@ final class NexusGeometryTests: XCTestCase {
         }
     }
 
+    func testInlineLatexIsSeparatedFromMarkdownProse() {
+        XCTAssertEqual(
+            InlineMathParser.parse("Energy is $E=mc^2$ in this example."),
+            [.text("Energy is "), .math("E=mc^2"), .text(" in this example.")]
+        )
+        XCTAssertEqual(
+            InlineMathParser.parse(#"Use \(x + y\) next."#),
+            [.text("Use "), .math("x + y"), .text(" next.")]
+        )
+    }
+
 }
