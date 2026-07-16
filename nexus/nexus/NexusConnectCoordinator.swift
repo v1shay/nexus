@@ -118,7 +118,13 @@ protocol NexusRemoteSession: Sendable {
     func disconnect() async
 }
 
-protocol NexusManagedRemoteSession: NexusRemoteSession, NexusWorkloadExecuting {}
+protocol NexusManagedRemoteSession: NexusRemoteSession, NexusWorkloadExecuting {
+    func supports(_ feature: NexusConnectFeature) async -> Bool
+}
+
+extension NexusManagedRemoteSession {
+    func supports(_ feature: NexusConnectFeature) async -> Bool { false }
+}
 
 extension NexusRemoteClientSession: NexusManagedRemoteSession {}
 
@@ -235,12 +241,16 @@ final class NexusPairedNodeCoordinator: ObservableObject {
                 }
                 let quality = await connectionQuality(for: peer)
                 let inventory = try await loadInventory(from: session)
+                let runtimes = await session.supports(.runtimeProvisioning)
+                    ? try await loadRuntimes(from: session)
+                    : []
                 applyOnline(
                     nodeID: nodeID,
                     health: health,
                     peer: peer,
                     quality: quality,
-                    inventory: inventory
+                    inventory: inventory,
+                    runtimes: runtimes
                 )
                 attempt = 0
 
@@ -248,7 +258,14 @@ final class NexusPairedNodeCoordinator: ObservableObject {
                     try await Task.sleep(nanoseconds: healthIntervalNanoseconds)
                     let latest = try await session.health()
                     guard latest.nodeID == nodeID else { throw NexusConnectError.identityMismatch }
-                    applyOnline(nodeID: nodeID, health: latest, peer: peer, quality: quality, inventory: nil)
+                    applyOnline(
+                        nodeID: nodeID,
+                        health: latest,
+                        peer: peer,
+                        quality: quality,
+                        inventory: nil,
+                        runtimes: nil
+                    )
                 }
             } catch is CancellationError {
                 return
@@ -297,6 +314,19 @@ final class NexusPairedNodeCoordinator: ObservableObject {
         return []
     }
 
+    private func loadRuntimes(from session: any NexusManagedRemoteSession) async throws -> Set<NexusRuntimeAvailability> {
+        let request = try NexusWorkloadRequest(
+            kind: .runtimeStatus,
+            retrySafety: .idempotent,
+            payload: NexusEmptyPayload()
+        )
+        let stream = try await session.events(for: request)
+        for try await event in stream where event.kind == .result {
+            return try event.decodePayload(NexusRuntimeInventoryPayload.self).runtimes
+        }
+        return []
+    }
+
     private func connectionQuality(for peer: NexusTailscalePeer) async -> NexusConnectionQuality {
         let route = try? await discovery.routeSample(to: peer)
         return .init(
@@ -313,14 +343,16 @@ final class NexusPairedNodeCoordinator: ObservableObject {
         health: NexusNodeHealth,
         peer: NexusTailscalePeer,
         quality: NexusConnectionQuality,
-        inventory: [NexusModelDescriptor]?
+        inventory: [NexusModelDescriptor]?,
+        runtimes: Set<NexusRuntimeAvailability>?
     ) {
         update(nodeID) {
             $0.apply(
                 health: health,
                 endpoint: peer.connectionHost,
                 tailscaleNodeID: peer.id,
-                inventory: inventory
+                inventory: inventory,
+                runtimes: runtimes
             )
             $0.statusDetail = quality.roundTripMilliseconds.map { "\(Int($0.rounded())) ms" }
         }

@@ -123,6 +123,54 @@ extension NexusGeometryTests {
         XCTAssertEqual(pulledModel, "qwen3:235b")
     }
 
+    func testRuntimeProvisioningRequiresConfirmationAndReturnsHostInventory() async throws {
+        let models = NexusHostModelStub()
+        let host = NexusHostServiceExecutor(nodeID: UUID(), models: models)
+
+        let denied = try NexusWorkloadRequest(
+            kind: .runtimeProvision,
+            retrySafety: .resumable,
+            payload: NexusRuntimeProvisionPayload(preferredRuntime: .ollama, userConfirmed: false)
+        )
+        let deniedEvents = NexusEventCollector()
+        await host.execute(denied) { await deniedEvents.append($0) }
+        let deniedFailure = await deniedEvents.first(kind: .failed)
+        let deniedInventory = try await models.runtimeInventory()
+        XCTAssertNotNil(deniedFailure)
+        XCTAssertTrue(deniedInventory.runtimes.isEmpty)
+
+        let confirmed = try NexusWorkloadRequest(
+            kind: .runtimeProvision,
+            retrySafety: .resumable,
+            payload: NexusRuntimeProvisionPayload(preferredRuntime: .ollama, userConfirmed: true)
+        )
+        let confirmedEvents = NexusEventCollector()
+        await host.execute(confirmed) { await confirmedEvents.append($0) }
+        let confirmedResult = await confirmedEvents.first(kind: .result)
+        let result = try XCTUnwrap(confirmedResult).decodePayload(NexusRuntimeInventoryPayload.self)
+        XCTAssertEqual(result.defaultRuntime, .ollama)
+        XCTAssertEqual(result.runtimes, [.init(kind: .ollama, isManagedByNexus: true)])
+    }
+
+    func testRemoteModelDeleteMutatesOnlyThatHostsInventory() async throws {
+        let models = NexusHostModelStub()
+        let host = NexusHostServiceExecutor(nodeID: UUID(), models: models)
+        let request = try NexusWorkloadRequest(
+            kind: .modelDelete,
+            retrySafety: .neverReplay,
+            payload: NexusModelDeletePayload(runtime: .ollama, model: "large:120b")
+        )
+        let events = NexusEventCollector()
+        await host.execute(request) { await events.append($0) }
+
+        let completed = await events.first(kind: .completed)
+        let remaining = try await models.installedModels(runtime: .ollama)
+        XCTAssertNotNil(completed)
+        XCTAssertFalse(remaining.contains {
+            $0.identifier == "large:120b"
+        })
+    }
+
     func testHostProcessApprovalIsSingleUseAndShellRemainsDenied() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
@@ -187,6 +235,7 @@ private actor NexusEventCollector {
 private actor NexusHostModelStub: NexusHostModelServing {
     private var installed = [NexusModelDescriptor(runtime: .ollama, identifier: "large:120b")]
     private var pulledModel: String?
+    private var runtimes: Set<NexusRuntimeAvailability> = []
 
     func installedModels(runtime: NexusRuntimeKind?) async throws -> [NexusModelDescriptor] {
         installed.filter { runtime == nil || $0.runtime == runtime }
@@ -213,6 +262,25 @@ private actor NexusHostModelStub: NexusHostModelServing {
         await onDelta("Hello ", "Hello ")
         await onDelta("from Studio", "Hello from Studio")
         return "Hello from Studio"
+    }
+
+    func runtimeInventory() async throws -> NexusRuntimeInventoryPayload {
+        .init(runtimes: runtimes, defaultRuntime: runtimes.first?.kind)
+    }
+
+    func provisionDefaultRuntime(
+        preferred: NexusRuntimeKind?,
+        userConfirmed: Bool
+    ) async throws -> NexusRuntimeInventoryPayload {
+        guard userConfirmed else {
+            throw NexusConnectError.policyDenied("confirmation required")
+        }
+        runtimes = [.init(kind: preferred ?? .ollama, isManagedByNexus: true)]
+        return try await runtimeInventory()
+    }
+
+    func delete(runtime: NexusRuntimeKind, model: String) async throws {
+        installed.removeAll { $0.runtime == runtime && $0.identifier == model }
     }
 
     func lastPulledModel() -> String? { pulledModel }

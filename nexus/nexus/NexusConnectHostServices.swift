@@ -17,6 +17,23 @@ protocol NexusHostModelServing: Sendable {
         prompt: String,
         onDelta: @escaping @Sendable (String, String) async -> Void
     ) async throws -> String
+    func runtimeInventory() async throws -> NexusRuntimeInventoryPayload
+    func provisionDefaultRuntime(preferred: NexusRuntimeKind?, userConfirmed: Bool) async throws -> NexusRuntimeInventoryPayload
+    func delete(runtime: NexusRuntimeKind, model: String) async throws
+}
+
+extension NexusHostModelServing {
+    func runtimeInventory() async throws -> NexusRuntimeInventoryPayload {
+        .init(runtimes: [], defaultRuntime: nil)
+    }
+
+    func provisionDefaultRuntime(preferred: NexusRuntimeKind?, userConfirmed: Bool) async throws -> NexusRuntimeInventoryPayload {
+        throw NexusConnectError.requestFailed("This host version does not support runtime provisioning")
+    }
+
+    func delete(runtime: NexusRuntimeKind, model: String) async throws {
+        throw NexusConnectError.requestFailed("This host version does not support model deletion")
+    }
 }
 
 final class NexusLocalModelService: NexusHostModelServing, @unchecked Sendable {
@@ -87,7 +104,7 @@ final class NexusLocalModelService: NexusHostModelServing, @unchecked Sendable {
         }
     }
 
-    private static func awaitProgress(
+    static func awaitProgress(
         _ update: ModelDownloadProgress,
         handler: @escaping @Sendable (ModelDownloadProgress) async -> Void
     ) {
@@ -97,6 +114,121 @@ final class NexusLocalModelService: NexusHostModelServing, @unchecked Sendable {
             semaphore.signal()
         }
         semaphore.wait()
+    }
+}
+
+/// Uniform host-side facade for detection, one-confirmation provisioning,
+/// inventory, pull, delete, and inference. Runtime binaries and model bytes are
+/// always installed directly on this host.
+actor NexusHostRuntimeManager: NexusHostModelServing {
+    private let ollama: OllamaManager
+    private let lmStudio: LMStudioManager
+
+    init(ollama: OllamaManager = OllamaManager(), lmStudio: LMStudioManager = LMStudioManager()) {
+        self.ollama = ollama
+        self.lmStudio = lmStudio
+    }
+
+    func runtimeInventory() async throws -> NexusRuntimeInventoryPayload {
+        var runtimes: Set<NexusRuntimeAvailability> = []
+        if ollama.executableURL() != nil {
+            runtimes.insert(.init(kind: .ollama, isManagedByNexus: false))
+        }
+        if lmStudio.executableURL() != nil {
+            runtimes.insert(.init(kind: .lmStudio, isManagedByNexus: false))
+        }
+        let defaultRuntime: NexusRuntimeKind? = runtimes.contains(where: { $0.kind == .ollama })
+            ? .ollama
+            : (runtimes.contains(where: { $0.kind == .lmStudio }) ? .lmStudio : nil)
+        return .init(runtimes: runtimes, defaultRuntime: defaultRuntime)
+    }
+
+    func provisionDefaultRuntime(
+        preferred: NexusRuntimeKind?,
+        userConfirmed: Bool
+    ) async throws -> NexusRuntimeInventoryPayload {
+        guard userConfirmed else {
+            throw NexusConnectError.policyDenied("runtime installation requires one explicit user confirmation")
+        }
+        let current = try await runtimeInventory()
+        if !current.runtimes.isEmpty { return current }
+        guard preferred == nil || preferred == .ollama else {
+            throw NexusConnectError.requestFailed("Automatic LM Studio installation is not supported; Nexus can install Ollama")
+        }
+        try await ollama.installOfficialMacApp()
+        var result = try await runtimeInventory()
+        let managed = NexusRuntimeAvailability(kind: .ollama, isManagedByNexus: true)
+        result = .init(
+            runtimes: result.runtimes.filter { $0.kind != .ollama }.union([managed]),
+            defaultRuntime: .ollama
+        )
+        return result
+    }
+
+    func installedModels(runtime: NexusRuntimeKind?) async throws -> [NexusModelDescriptor] {
+        var models: [NexusModelDescriptor] = []
+        if runtime == nil || runtime == .ollama, ollama.executableURL() != nil {
+            models += try await ollama.installedModelNames().map {
+                .init(runtime: .ollama, identifier: $0)
+            }
+        }
+        if runtime == nil || runtime == .lmStudio, lmStudio.executableURL() != nil {
+            models += try await lmStudio.installedModelNames().map {
+                .init(runtime: .lmStudio, identifier: $0)
+            }
+        }
+        return models.sorted { $0.identifier.localizedCaseInsensitiveCompare($1.identifier) == .orderedAscending }
+    }
+
+    func pull(
+        runtime: NexusRuntimeKind,
+        model: String,
+        quantization: String?,
+        progress: @escaping @Sendable (ModelDownloadProgress) async -> Void
+    ) async throws {
+        switch runtime {
+        case .ollama:
+            guard ollama.executableURL() != nil else {
+                throw NexusConnectError.requestFailed("Ollama is not installed on this host. Confirm runtime installation and retry.")
+            }
+            try await ollama.pull(model: model) { update in
+                NexusLocalModelService.awaitProgress(update, handler: progress)
+            }
+        case .lmStudio:
+            guard lmStudio.executableURL() != nil else {
+                throw NexusConnectError.requestFailed("LM Studio is not installed on this host. Install it or provision Nexus's default Ollama runtime.")
+            }
+            let localModel = LocalModel(
+                name: model,
+                identifier: model,
+                family: "Remote Host",
+                backend: .lmStudio,
+                minimumRAMGB: ModelCatalog.estimatedMinimumRAM(for: model),
+                quantization: quantization ?? "Q4_K_M"
+            )
+            try await lmStudio.download(localModel) { update in
+                NexusLocalModelService.awaitProgress(update, handler: progress)
+            }
+        }
+    }
+
+    func delete(runtime: NexusRuntimeKind, model: String) async throws {
+        switch runtime {
+        case .ollama: try await ollama.deleteModel(model)
+        case .lmStudio: try await lmStudio.deleteModel(model)
+        }
+    }
+
+    func streamChat(
+        runtime: NexusRuntimeKind,
+        model: String,
+        prompt: String,
+        onDelta: @escaping @Sendable (String, String) async -> Void
+    ) async throws -> String {
+        switch runtime {
+        case .ollama: try await ollama.streamChat(model: model, prompt: prompt, onDelta: onDelta)
+        case .lmStudio: try await lmStudio.streamChat(model: model, prompt: prompt, onDelta: onDelta)
+        }
     }
 }
 
@@ -223,7 +355,7 @@ actor NexusHostWorkloadScheduler {
     }
 
     private static func isBulk(_ kind: NexusWorkloadKind) -> Bool {
-        [.modelPull, .index, .fileWrite, .download].contains(kind)
+        [.modelPull, .modelDelete, .runtimeProvision, .index, .fileWrite, .download].contains(kind)
     }
 }
 
@@ -254,7 +386,7 @@ actor NexusHostServiceExecutor {
         nodeID: UUID,
         nodeName: String = Host.current().localizedName ?? "Mac Studio",
         policy: NexusExecutionPolicy = .defaultStudioPolicy(),
-        models: any NexusHostModelServing = NexusLocalModelService(),
+        models: any NexusHostModelServing = NexusHostRuntimeManager(),
         runner: any NexusCommandRunning = NexusFoundationCommandRunner(),
         approvals: NexusApprovalStore = NexusApprovalStore(),
         index: NexusTextIndex = NexusTextIndex(),
@@ -335,6 +467,24 @@ actor NexusHostServiceExecutor {
             }
             inventoryDigest = Data(SHA256.hash(data: try NexusPayloadCoder.encoder.encode(installed)))
             await emitter.emit(kind: .result, payload: NexusModelInventoryPayload(models: installed))
+        case .modelDelete:
+            let payload: NexusModelDeletePayload = try request.decodePayload()
+            try await models.delete(runtime: payload.runtime, model: payload.model)
+            let installed = try await models.installedModels(runtime: payload.runtime)
+            inventoryDigest = Data(SHA256.hash(data: try NexusPayloadCoder.encoder.encode(installed)))
+            await emitter.emit(kind: .result, payload: NexusModelInventoryPayload(models: installed))
+        case .runtimeStatus:
+            _ = try request.decodePayload(NexusEmptyPayload.self)
+            await emitter.emit(kind: .result, payload: try await models.runtimeInventory())
+        case .runtimeProvision:
+            let payload: NexusRuntimeProvisionPayload = try request.decodePayload()
+            await emitter.emit(
+                kind: .result,
+                payload: try await models.provisionDefaultRuntime(
+                    preferred: payload.preferredRuntime,
+                    userConfirmed: payload.userConfirmed
+                )
+            )
         case .ocr:
             try await recognizeText(try request.decodePayload(), emitter: emitter)
         case .index:

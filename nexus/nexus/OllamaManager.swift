@@ -114,6 +114,19 @@ final class OllamaManager: @unchecked Sendable {
         return try JSONDecoder().decode(OllamaTagsResponse.self, from: data).models.map(\.name)
     }
 
+    func deleteModel(_ identifier: String) async throws {
+        try await ensureServerRunning()
+        var request = URLRequest(url: Self.serverURL.appendingPathComponent("api/delete"))
+        request.httpMethod = "DELETE"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try JSONEncoder().encode(OllamaDeleteRequest(model: identifier))
+        let (_, response) = try await session.data(for: request)
+        try Self.requireSuccess(response)
+        guard try await !installedModelNames().contains(where: { Self.namesMatch($0, identifier) }) else {
+            throw LocalModelError.verificationFailed(identifier)
+        }
+    }
+
     func streamChat(
         model: String,
         prompt: String,
@@ -201,6 +214,7 @@ final class OllamaManager: @unchecked Sendable {
 }
 
 private struct OllamaPullRequest: Encodable { let model: String; let stream: Bool }
+private struct OllamaDeleteRequest: Encodable { let model: String }
 private struct OllamaPullEvent: Decodable { let status: String; let completed: Int64?; let total: Int64?; let error: String? }
 private struct OllamaTagsResponse: Decodable {
     struct Model: Decodable { let name: String }
@@ -296,6 +310,53 @@ final class LMStudioManager: @unchecked Sendable {
         let (data, response) = try await session.data(from: Self.serverURL.appendingPathComponent("v1/models"))
         try Self.requireSuccess(response)
         return try JSONDecoder().decode(OpenAIModelsResponse.self, from: data).data.map(\.id)
+    }
+
+    /// LM Studio does not currently expose a documented delete command. Nexus
+    /// therefore resolves an exact record from `lms ls --json` and removes only
+    /// that record inside LM Studio's model root.
+    func deleteModel(_ identifier: String) async throws {
+        guard let executable = executableURL() else { throw LocalModelError.lmStudioMissing }
+        let process = Process()
+        let output = Pipe()
+        process.executableURL = executable
+        process.arguments = ["ls", "--json"]
+        process.standardOutput = output
+        process.standardError = FileHandle.nullDevice
+        try process.run()
+        let data = output.fileHandleForReading.readDataToEndOfFile()
+        process.waitUntilExit()
+        guard process.terminationStatus == 0 else {
+            throw LocalModelError.downloadFailed("LM Studio could not list models before deletion")
+        }
+        let records = try JSONDecoder().decode([LMStudioLocalModelRecord].self, from: data)
+        let needle = identifier.lowercased()
+        guard let record = records.first(where: {
+            [$0.modelKey, $0.path, $0.indexedModelIdentifier]
+                .compactMap { $0?.lowercased() }
+                .contains(needle)
+        }) else {
+            throw LocalModelError.verificationFailed(identifier)
+        }
+        let root = fileManager.homeDirectoryForCurrentUser
+            .appendingPathComponent(".lmstudio/models", isDirectory: true)
+            .resolvingSymlinksInPath()
+        let destination = root.appendingPathComponent(record.path).standardizedFileURL.resolvingSymlinksInPath()
+        let rootPrefix = root.path.hasSuffix("/") ? root.path : root.path + "/"
+        guard destination.path.hasPrefix(rootPrefix), destination.path != root.path else {
+            throw LocalModelError.downloadFailed("LM Studio returned an unsafe model path")
+        }
+        try fileManager.removeItem(at: destination)
+        var parent = destination.deletingLastPathComponent()
+        while parent.path.hasPrefix(rootPrefix), parent.path != root.path {
+            guard (try? fileManager.contentsOfDirectory(atPath: parent.path).isEmpty) == true else { break }
+            try fileManager.removeItem(at: parent)
+            parent.deleteLastPathComponent()
+        }
+        let remaining = try await installedModelNames()
+        guard !remaining.contains(where: { $0.caseInsensitiveCompare(identifier) == .orderedSame }) else {
+            throw LocalModelError.verificationFailed(identifier)
+        }
     }
 
     func streamChat(
@@ -431,6 +492,12 @@ final class LMStudioManager: @unchecked Sendable {
               let range = Range(match.range(at: 1), in: text) else { return nil }
         return Int(text[range]).map { min(100, $0) }
     }
+}
+
+private struct LMStudioLocalModelRecord: Decodable {
+    let modelKey: String?
+    let path: String
+    let indexedModelIdentifier: String?
 }
 
 private struct OpenAIChatRequest: Encodable {

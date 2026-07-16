@@ -60,6 +60,9 @@ enum NexusCapability: String, CaseIterable, Codable, Hashable, Sendable {
     case agent
     case modelList
     case modelPull
+    case modelDelete
+    case runtimeStatus
+    case runtimeProvision
     case ocr
     case index
     case searchIndex
@@ -77,6 +80,9 @@ enum NexusWorkloadKind: String, Codable, Sendable {
     case agent
     case modelList
     case modelPull
+    case modelDelete
+    case runtimeStatus
+    case runtimeProvision
     case ocr
     case index
     case searchIndex
@@ -95,6 +101,9 @@ enum NexusWorkloadKind: String, Codable, Sendable {
         case .agent: .agent
         case .modelList: .modelList
         case .modelPull: .modelPull
+        case .modelDelete: .modelDelete
+        case .runtimeStatus: .runtimeStatus
+        case .runtimeProvision: .runtimeProvision
         case .ocr: .ocr
         case .index: .index
         case .searchIndex: .searchIndex
@@ -275,6 +284,21 @@ struct NexusModelPullPayload: Codable, Equatable, Sendable {
     let runtime: NexusRuntimeKind
     let model: String
     let quantization: String?
+}
+
+struct NexusModelDeletePayload: Codable, Equatable, Sendable {
+    let runtime: NexusRuntimeKind
+    let model: String
+}
+
+struct NexusRuntimeProvisionPayload: Codable, Equatable, Sendable {
+    let preferredRuntime: NexusRuntimeKind?
+    let userConfirmed: Bool
+}
+
+struct NexusRuntimeInventoryPayload: Codable, Equatable, Sendable {
+    let runtimes: Set<NexusRuntimeAvailability>
+    let defaultRuntime: NexusRuntimeKind?
 }
 
 struct NexusModelDescriptor: Codable, Equatable, Hashable, Sendable {

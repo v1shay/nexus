@@ -8,7 +8,7 @@ enum NexusConnectRole: String, CaseIterable, Codable, Identifiable, Sendable {
     case studioHost
 
     var id: String { rawValue }
-    var title: String { self == .client ? "Use Mac Studio" : "This is the Mac Studio" }
+    var title: String { self == .client ? "Use paired Macs" : "Offer this Mac" }
     var vaultRole: NexusNodeRole { self == .client ? .client : .studioHost }
 }
 
@@ -146,7 +146,7 @@ final class NexusConnectController: ObservableObject {
     @Published private(set) var isPaired = false
     @Published private(set) var pairedNodes: [NexusPairedNode] = []
     @Published private(set) var modelRoute: NexusModelRoute
-    @Published var downloadTargets: Set<NexusDownloadTarget> = [.thisMac]
+    @Published private(set) var downloadTargets: Set<NexusDownloadTarget>
     @Published var pairingCode = ""
     @Published var setupMessage = ""
 
@@ -184,6 +184,7 @@ final class NexusConnectController: ObservableObject {
     private let preferredNodeKey = "nexus.connect.preferred-node"
     private let localNodeIDKey = "nexus.connect.local-node-id"
     private let modelRouteKey = "nexus.connect.model-route.v2"
+    private let downloadTargetsKey = "nexus.connect.download-targets.v2"
 
     init(
         defaults: UserDefaults = .standard,
@@ -195,6 +196,7 @@ final class NexusConnectController: ObservableObject {
         role = defaults.string(forKey: roleKey).flatMap(NexusConnectRole.init(rawValue:)) ?? Self.suggestedRole()
         enabled = defaults.bool(forKey: enabledKey)
         modelRoute = Self.restoreRoute(from: defaults.data(forKey: modelRouteKey))
+        downloadTargets = Self.restoreDownloadTargets(from: defaults.data(forKey: downloadTargetsKey))
 
         let clientVault = NexusIdentityVault(store: secretStore, role: .client)
         let hostVault = NexusIdentityVault(store: secretStore, role: .studioHost)
@@ -271,6 +273,23 @@ final class NexusConnectController: ObservableObject {
             defaults.set(data, forKey: modelRouteKey)
         }
         Task { await router.setRoute(route) }
+    }
+
+    func setDownloadTarget(_ target: NexusDownloadTarget, selected: Bool) {
+        if selected {
+            downloadTargets.insert(target)
+        } else {
+            downloadTargets.remove(target)
+        }
+        // A download with no destination is never meaningful. Keep the local
+        // target as a safe, visible default instead of guessing later.
+        if downloadTargets.isEmpty { downloadTargets = [.thisMac] }
+        persistDownloadTargets()
+    }
+
+    func useOnlyDownloadTarget(_ target: NexusDownloadTarget) {
+        downloadTargets = [target]
+        persistDownloadTargets()
     }
 
     func createPairingCode() {
@@ -360,6 +379,9 @@ final class NexusConnectController: ObservableObject {
             coordinator.forget(nodeID: nodeID)
             pairedNodes = try roster.load()
             if case .pairedNode(nodeID) = modelRoute { setModelRoute(.automatic) }
+            downloadTargets.remove(.pairedNode(nodeID))
+            if downloadTargets.isEmpty { downloadTargets = [.thisMac] }
+            persistDownloadTargets()
             isPaired = !pairedNodes.isEmpty
             setupMessage = "Device forgotten and its credentials revoked."
             synchronizeRouter()
@@ -489,6 +511,73 @@ final class NexusConnectController: ObservableObject {
             return try event.decodePayload(NexusModelInventoryPayload.self).models
         }
         return []
+    }
+
+    func runtimeInventory(on nodeID: UUID) async throws -> NexusRuntimeInventoryPayload {
+        let remote = try connectedExecutor(nodeID: nodeID)
+        guard pairedNodes.first(where: { $0.id == nodeID })?.capabilities.contains(.runtimeStatus) == true else {
+            throw NexusConnectError.requestFailed("This host version does not support runtime management. Model inference remains available; update Nexus on that host to install runtimes remotely.")
+        }
+        let request = try NexusWorkloadRequest(
+            kind: .runtimeStatus,
+            retrySafety: .idempotent,
+            payload: NexusEmptyPayload()
+        )
+        let stream = try await remote.events(for: request)
+        for try await event in stream where event.kind == .result {
+            return try event.decodePayload(NexusRuntimeInventoryPayload.self)
+        }
+        throw NexusConnectError.requestFailed("The remote host did not return its runtime inventory.")
+    }
+
+    @discardableResult
+    func provisionDefaultRuntime(
+        on nodeID: UUID,
+        preferred: NexusRuntimeKind? = .ollama,
+        userConfirmed: Bool
+    ) async throws -> NexusRuntimeInventoryPayload {
+        let remote = try connectedExecutor(nodeID: nodeID)
+        guard pairedNodes.first(where: { $0.id == nodeID })?.capabilities.contains(.runtimeProvision) == true else {
+            throw NexusConnectError.requestFailed("This host version cannot provision runtimes remotely. Update Nexus on that host and retry.")
+        }
+        let request = try NexusWorkloadRequest(
+            kind: .runtimeProvision,
+            priority: .utility,
+            retrySafety: .resumable,
+            payload: NexusRuntimeProvisionPayload(preferredRuntime: preferred, userConfirmed: userConfirmed)
+        )
+        let stream = try await remote.events(for: request)
+        for try await event in stream where event.kind == .result {
+            let inventory = try event.decodePayload(NexusRuntimeInventoryPayload.self)
+            try roster.update(nodeID: nodeID) { $0.runtimes = inventory.runtimes }
+            pairedNodes = try roster.load()
+            synchronizeRouter()
+            return inventory
+        }
+        throw NexusConnectError.requestFailed("Runtime installation ended without a result.")
+    }
+
+    func deleteModel(_ model: LocalModel, on nodeID: UUID) async throws {
+        let remote = try connectedExecutor(nodeID: nodeID)
+        guard pairedNodes.first(where: { $0.id == nodeID })?.capabilities.contains(.modelDelete) == true else {
+            throw NexusConnectError.requestFailed("This host version does not support remote model deletion.")
+        }
+        let request = try NexusWorkloadRequest(
+            kind: .modelDelete,
+            priority: .utility,
+            retrySafety: .neverReplay,
+            payload: NexusModelDeletePayload(
+                runtime: model.backend == .ollama ? .ollama : .lmStudio,
+                model: model.identifier
+            )
+        )
+        let stream = try await remote.events(for: request)
+        for try await event in stream where event.isFinal {
+            if event.kind == .failed {
+                throw NexusConnectError.requestFailed(try event.decodePayload(NexusRemoteErrorPayload.self).message)
+            }
+        }
+        try await refreshInventory(nodeID: nodeID)
     }
 
     /// Runs one allowlisted executable after an intentional user confirmation.
@@ -629,6 +718,22 @@ final class NexusConnectController: ObservableObject {
         synchronizeRouter()
     }
 
+    private func connectedExecutor(nodeID: UUID) throws -> any NexusWorkloadExecuting {
+        guard let node = pairedNodes.first(where: { $0.id == nodeID }) else {
+            throw NexusConnectError.unavailable("the paired device was forgotten")
+        }
+        guard node.status == .online, let remote = coordinator.executor(for: nodeID) else {
+            throw NexusConnectError.unavailable("\(node.displayName) is \(node.status.rawValue); Nexus did not fall back to this Mac")
+        }
+        return remote
+    }
+
+    private func persistDownloadTargets() {
+        if let data = try? NexusPayloadCoder.encoder.encode(Array(downloadTargets)) {
+            defaults.set(data, forKey: downloadTargetsKey)
+        }
+    }
+
     private var routeDisplayName: String {
         switch modelRoute {
         case .automatic: "the automatically selected Mac"
@@ -651,6 +756,13 @@ final class NexusConnectController: ObservableObject {
             return .automatic
         }
         return route
+    }
+
+    private static func restoreDownloadTargets(from data: Data?) -> Set<NexusDownloadTarget> {
+        guard let data,
+              let targets = try? NexusPayloadCoder.decoder.decode([NexusDownloadTarget].self, from: data),
+              !targets.isEmpty else { return [.thisMac] }
+        return Set(targets)
     }
 
     private static func gigabytes(_ bytes: UInt64) -> Int {

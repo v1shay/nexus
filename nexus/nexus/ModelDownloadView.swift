@@ -12,6 +12,7 @@ struct ModelDownloadView: View {
             }
             if let connect = viewModel.connectController {
                 NexusConnectSetupView(controller: connect)
+                NexusModelRoutingView(controller: connect)
             }
             HStack {
                 TextField("Search the registry or paste an exact model identifier", text: $viewModel.query)
@@ -50,6 +51,14 @@ struct ModelDownloadView: View {
                 secondaryButton: .cancel()
             )
         }
+        .alert(item: $viewModel.pendingRemoteRuntimeInstall) { request in
+            Alert(
+                title: Text("Install Ollama remotely?"),
+                message: Text("Nexus will install its supported Ollama runtime directly on \(request.deviceNames.joined(separator: ", ")). Model bytes will download from the internet to those Macs, never through this Mac."),
+                primaryButton: .default(Text("Install and Continue"), action: viewModel.installRemoteRuntimeAndContinue),
+                secondaryButton: .cancel()
+            )
+        }
     }
 
     private var selectedModel: LocalModel? {
@@ -60,6 +69,7 @@ struct ModelDownloadView: View {
         ModelDownloadRow(
             model: model,
             state: viewModel.states[model.id] ?? .idle,
+            placement: viewModel.placementDescription(for: model),
             cancel: { viewModel.cancel(model) },
             retry: { viewModel.retry(model) }
         )
@@ -74,8 +84,10 @@ struct ModelDownloadView: View {
         case .failed:
             Button("Retry") { viewModel.retry(model) }.keyboardShortcut(.defaultAction)
         case .installed:
-            if viewModel.activeModel?.id == model.id {
+            if viewModel.activeModel?.id == model.id && viewModel.isUsable(model) {
                 Label("In Use", systemImage: "checkmark.circle.fill").foregroundStyle(.green)
+            } else if !viewModel.isUsable(model) {
+                Button("Download to Selected") { viewModel.download(model) }
             } else {
                 Button("Use") { viewModel.use(model) }
             }
@@ -85,9 +97,66 @@ struct ModelDownloadView: View {
     }
 }
 
+private struct NexusModelRoutingView: View {
+    @ObservedObject var controller: NexusConnectController
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Picker("Run models on", selection: Binding(
+                get: { controller.modelRoute },
+                set: { controller.setModelRoute($0) }
+            )) {
+                Text("Automatic").tag(NexusModelRoute.automatic)
+                Text("This Mac").tag(NexusModelRoute.thisMac)
+                ForEach(controller.pairedNodes) { node in
+                    Text("\(node.displayName) · \(node.status.rawValue)")
+                        .tag(NexusModelRoute.pairedNode(node.id))
+                }
+            }
+            .frame(maxWidth: 310)
+
+            Menu {
+                Toggle("This Mac", isOn: targetBinding(.thisMac))
+                Divider()
+                ForEach(controller.pairedNodes) { node in
+                    Toggle(isOn: targetBinding(.pairedNode(node.id))) {
+                        Text("\(node.displayName) · \(node.status.rawValue)")
+                    }
+                }
+            } label: {
+                Label(downloadTargetSummary, systemImage: "arrow.down.circle")
+            }
+            .help("Choose one or more Macs. Each selected host downloads model bytes directly to its own disk.")
+            Spacer()
+        }
+        .font(.caption)
+    }
+
+    private func targetBinding(_ target: NexusDownloadTarget) -> Binding<Bool> {
+        Binding(
+            get: { controller.downloadTargets.contains(target) },
+            set: { controller.setDownloadTarget(target, selected: $0) }
+        )
+    }
+
+    private var downloadTargetSummary: String {
+        let count = controller.downloadTargets.count
+        if count > 1 { return "Download to \(count) Macs" }
+        guard let target = controller.downloadTargets.first else { return "Download target" }
+        switch target {
+        case .thisMac: return "Download to This Mac"
+        case .pairedNode(let id):
+            let name = controller.pairedNodes.first(where: { $0.id == id })?.displayName ?? "paired Mac"
+            return "Download to \(name)"
+        }
+    }
+}
+
 private struct NexusConnectSetupView: View {
     @ObservedObject var controller: NexusConnectController
     @State private var expanded = false
+    @State private var renamingNodeID: UUID?
+    @State private var renameText = ""
 
     var body: some View {
         DisclosureGroup(isExpanded: $expanded) {
@@ -109,19 +178,54 @@ private struct NexusConnectSetupView: View {
                     Spacer()
                 }
 
-                HStack {
-                    TextField("NX1 pairing code", text: $controller.pairingCode)
-                        .textFieldStyle(.roundedBorder)
-                    Button("Pair", action: controller.applyPairingCode)
-                    Button("Generate", action: controller.createPairingCode)
-                    Button("Copy", action: controller.copyPairingCode)
-                        .disabled(controller.pairingCode.isEmpty)
-                    if controller.isPaired {
-                        Button("Unpair", role: .destructive, action: controller.unpair)
+                if controller.role == .client {
+                    HStack {
+                        TextField("Paste NX2 code from another Mac", text: $controller.pairingCode)
+                            .textFieldStyle(.roundedBorder)
+                        Button("Pair device", action: controller.applyPairingCode)
+                            .disabled(controller.pairingCode.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                    }
+                    ForEach(controller.pairedNodes) { node in
+                        HStack(spacing: 8) {
+                            Circle().fill(statusColor(node.status)).frame(width: 7, height: 7)
+                            if renamingNodeID == node.id {
+                                TextField("Device name", text: $renameText)
+                                    .textFieldStyle(.roundedBorder)
+                                    .frame(maxWidth: 210)
+                                    .onSubmit { saveRename(node.id) }
+                                Button("Save") { saveRename(node.id) }
+                                Button("Cancel") { renamingNodeID = nil }
+                            } else {
+                                VStack(alignment: .leading, spacing: 1) {
+                                    Text(node.displayName).font(.caption.weight(.medium))
+                                    Text(nodeDetail(node)).font(.caption2).foregroundStyle(.secondary)
+                                }
+                                Spacer()
+                                Button("Reconnect") { controller.reconnect(nodeID: node.id) }
+                                    .disabled(node.status == .online)
+                                Button("Rename") {
+                                    renamingNodeID = node.id
+                                    renameText = node.displayName
+                                }
+                                Button("Forget", role: .destructive) { controller.forget(nodeID: node.id) }
+                            }
+                        }
+                    }
+                } else {
+                    HStack {
+                        Button("Create one-time pairing code", action: controller.createPairingCode)
+                        Button("Copy", action: controller.copyPairingCode)
+                            .disabled(controller.pairingCode.isEmpty)
+                    }
+                    if !controller.pairingCode.isEmpty {
+                        Text(controller.pairingCode)
+                            .font(.system(.caption2, design: .monospaced))
+                            .textSelection(.enabled)
+                            .lineLimit(2)
                     }
                 }
                 Text(controller.setupMessage.isEmpty
-                     ? "Generate on one Mac, paste the same one-time code on the other, then enable both."
+                     ? defaultHelp
                      : controller.setupMessage)
                     .font(.caption2)
                     .foregroundStyle(.secondary)
@@ -140,6 +244,35 @@ private struct NexusConnectSetupView: View {
                     .lineLimit(1)
                 Spacer()
             }
+        }
+    }
+
+    private var defaultHelp: String {
+        controller.role == .client
+            ? "Pair each Studio or iMac once. Saved devices reconnect independently after either Mac restarts."
+            : "The background Nexus Connect host stays available after the visible app quits. Create a separate code for each client you authorize."
+    }
+
+    private func saveRename(_ nodeID: UUID) {
+        controller.rename(nodeID: nodeID, to: renameText)
+        renamingNodeID = nil
+    }
+
+    private func nodeDetail(_ node: NexusPairedNode) -> String {
+        var parts = [node.status.rawValue, node.endpoint]
+        if let last = node.lastSuccessfulHealthCheck {
+            parts.append("seen \(last.formatted(.relative(presentation: .numeric)))")
+        }
+        if node.status == .incompatible, let detail = node.statusDetail { parts.append(detail) }
+        return parts.joined(separator: " · ")
+    }
+
+    private func statusColor(_ status: NexusPairedNodeStatus) -> Color {
+        switch status {
+        case .online: .green
+        case .reconnecting: .orange
+        case .offline: .secondary
+        case .incompatible, .revoked: .red
         }
     }
 
@@ -165,6 +298,7 @@ private struct NexusConnectSetupView: View {
 private struct ModelDownloadRow: View {
     let model: LocalModel
     let state: ModelDownloadState
+    let placement: String?
     let cancel: () -> Void
     let retry: () -> Void
 
@@ -173,6 +307,9 @@ private struct ModelDownloadRow: View {
             VStack(alignment: .leading, spacing: 2) {
                 Text(model.name)
                 Text(detail).font(.caption).foregroundStyle(.secondary)
+                if let placement {
+                    Text("On \(placement)").font(.caption2).foregroundStyle(.tertiary)
+                }
             }
             Spacer()
             stateView

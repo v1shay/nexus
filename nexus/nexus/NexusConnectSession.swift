@@ -139,6 +139,10 @@ actor NexusRemoteClientSession: NexusRemoteSession, NexusWorkloadExecuting {
         return result
     }
 
+    func supports(_ feature: NexusConnectFeature) -> Bool {
+        negotiatedFeatures.contains(feature)
+    }
+
     func events(for request: NexusWorkloadRequest) async throws -> AsyncThrowingStream<NexusWorkloadEvent, Error> {
         guard connection != nil, secureChannel != nil, let sessionID else {
             throw NexusConnectError.unavailable("Mac Studio is not connected")
@@ -462,7 +466,7 @@ actor NexusConnectHostSession {
     private func removeJob(_ id: UUID) { jobs.removeValue(forKey: id) }
 
     static func survivesClientDisconnect(_ kind: NexusWorkloadKind) -> Bool {
-        kind == .modelPull || kind == .download
+        kind == .modelPull || kind == .download || kind == .runtimeProvision
     }
 }
 

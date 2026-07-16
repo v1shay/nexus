@@ -1,6 +1,13 @@
 import Foundation
 import Combine
 
+struct RemoteRuntimeInstallRequest: Identifiable, Equatable {
+    let id = UUID()
+    let model: LocalModel
+    let nodeIDs: [UUID]
+    let deviceNames: [String]
+}
+
 @MainActor
 final class ModelDownloadViewModel: ObservableObject {
     @Published var query = ""
@@ -10,6 +17,7 @@ final class ModelDownloadViewModel: ObservableObject {
     @Published private(set) var states: [String: ModelDownloadState] = [:]
     @Published private(set) var catalogMessage = "Loading the model registry…"
     @Published var pendingOllamaInstall: LocalModel?
+    @Published var pendingRemoteRuntimeInstall: RemoteRuntimeInstallRequest?
     @Published private(set) var activeModel: LocalModel?
 
     var memoryGB: Int {
@@ -25,11 +33,12 @@ final class ModelDownloadViewModel: ObservableObject {
     private var downloadTasks: [String: Task<Void, Never>] = [:]
     private var cancellables: Set<AnyCancellable> = []
     private var installedModelRecords: [String: LocalModel] = [:]
-    private var studioModelIDs: Set<String>
+    private var placements: [String: Set<NexusDownloadTarget>] = [:]
+    private var targetProgress: [String: [NexusDownloadTarget: ModelDownloadProgress]] = [:]
     private let installedDefaultsKey = "nexus.installed-model-ids"
     private let installedModelsDefaultsKey = "nexus.installed-model-records"
     private let activeModelDefaultsKey = "nexus.active-model"
-    private let studioModelsDefaultsKey = "nexus.connect.studio-model-ids"
+    private let placementsDefaultsKey = "nexus.model-placements.v2"
 
     init(
         ollama: OllamaManager = .init(),
@@ -41,7 +50,10 @@ final class ModelDownloadViewModel: ObservableObject {
         self.lmStudio = lmStudio
         self.catalogService = catalogService
         self.connect = connect
-        studioModelIDs = Set(UserDefaults.standard.stringArray(forKey: studioModelsDefaultsKey) ?? [])
+        if let data = UserDefaults.standard.data(forKey: placementsDefaultsKey),
+           let saved = try? JSONDecoder().decode([String: [NexusDownloadTarget]].self, from: data) {
+            placements = saved.mapValues(Set.init)
+        }
         if let data = UserDefaults.standard.data(forKey: installedModelsDefaultsKey),
            let models = try? JSONDecoder().decode([LocalModel].self, from: data) {
             models.forEach {
@@ -65,15 +77,18 @@ final class ModelDownloadViewModel: ObservableObject {
         } else if let fallback = installedModelRecords.values.sorted(by: { $0.id < $1.id }).first {
             use(fallback)
         }
-        connect?.$state
+        connect?.$pairedNodes
             .receive(on: DispatchQueue.main)
-            .sink { [weak self] state in
+            .sink { [weak self] _ in
                 guard let self else { return }
                 objectWillChange.send()
-                if case .ready = state {
-                    Task { await self.discoverInstalledStudioModels() }
-                }
+                self.reconcileRemoteInventories()
             }
+            .store(in: &cancellables)
+        connect?.$modelRoute
+            .dropFirst()
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in self?.objectWillChange.send() }
             .store(in: &cancellables)
         Task {
             await discoverInstalledRuntimeModels()
@@ -122,17 +137,64 @@ final class ModelDownloadViewModel: ObservableObject {
 
     func download(_ model: LocalModel) {
         guard downloadTasks[model.id] == nil, !(states[model.id]?.isActive ?? false) else { return }
-        if connect?.shouldUseStudio != true, model.backend == .ollama && ollama.executableURL() == nil {
+        let targets = selectedDownloadTargets
+        if let connect,
+           let offline = targets.compactMap({ target -> NexusPairedNode? in
+               guard case .pairedNode(let id) = target else { return nil }
+               return connect.pairedNodes.first(where: { $0.id == id && $0.status != .online })
+           }).first {
+            states[model.id] = .failed("\(offline.displayName) is \(offline.status.rawValue). Remote downloads never fall back to this Mac.")
+            return
+        }
+        if targets.contains(.thisMac), model.backend == .ollama && ollama.executableURL() == nil {
             pendingOllamaInstall = model
             return
         }
-        startDownload(model, installOllamaFirst: false)
+        if let missing = remoteTargetsMissingRuntime(model: model, targets: targets), !missing.isEmpty {
+            guard model.backend == .ollama else {
+                let names = missing.compactMap(nodeName).joined(separator: ", ")
+                states[model.id] = .failed("LM Studio is not installed on \(names). Select Ollama for automatic provisioning, or install LM Studio there.")
+                return
+            }
+            pendingRemoteRuntimeInstall = .init(
+                model: model,
+                nodeIDs: missing,
+                deviceNames: missing.compactMap(nodeName)
+            )
+            return
+        }
+        startDownload(model, targets: targets, installOllamaFirst: false)
     }
 
     func installOllamaAndContinue() {
         guard let model = pendingOllamaInstall else { return }
         pendingOllamaInstall = nil
-        startDownload(model, installOllamaFirst: true)
+        startDownload(model, targets: selectedDownloadTargets, installOllamaFirst: true)
+    }
+
+    func installRemoteRuntimeAndContinue() {
+        guard let request = pendingRemoteRuntimeInstall else { return }
+        pendingRemoteRuntimeInstall = nil
+        let targets = selectedDownloadTargets
+        states[request.model.id] = .preparing("Installing Ollama on selected host\(request.nodeIDs.count == 1 ? "" : "s")…")
+        let task = Task { [weak self] in
+            guard let self, let connect else { return }
+            do {
+                for nodeID in request.nodeIDs {
+                    _ = try await connect.provisionDefaultRuntime(
+                        on: nodeID,
+                        preferred: .ollama,
+                        userConfirmed: true
+                    )
+                }
+                downloadTasks[request.model.id] = nil
+                startDownload(request.model, targets: targets, installOllamaFirst: false)
+            } catch {
+                states[request.model.id] = .failed(error.localizedDescription)
+                downloadTasks[request.model.id] = nil
+            }
+        }
+        downloadTasks[request.model.id] = task
     }
 
     func cancel(_ model: LocalModel) {
@@ -147,7 +209,7 @@ final class ModelDownloadViewModel: ObservableObject {
     }
 
     func use(_ model: LocalModel) {
-        guard states[model.id] == .installed else { return }
+        guard isUsable(model) else { return }
         activeModel = model
         if let data = try? JSONEncoder().encode(model) {
             UserDefaults.standard.set(data, forKey: activeModelDefaultsKey)
@@ -161,7 +223,7 @@ final class ModelDownloadViewModel: ObservableObject {
         guard let activeModel else {
             throw LocalModelError.invalidResponse("Choose an installed model in the model window first")
         }
-        if connect?.shouldUseStudio == true, let connect {
+        if let connect, connect.modelRoute != .thisMac {
             return try await connect.response(model: activeModel, prompt: prompt, onDelta: onDelta)
         }
         switch activeModel.backend {
@@ -194,6 +256,7 @@ final class ModelDownloadViewModel: ObservableObject {
         }
         discovered.forEach {
             installedModelRecords[$0.id] = $0
+            placements[$0.id, default: []].insert(.thisMac)
             states[$0.id] = .installed
         }
         if activeModel == nil, let first = discovered.first {
@@ -203,49 +266,61 @@ final class ModelDownloadViewModel: ObservableObject {
     }
 
     private func discoverInstalledStudioModels() async {
-        guard let connect, connect.shouldUseStudio,
-              let remote = try? await connect.installedStudioModels() else { return }
-        let discovered = remote.map {
-            LocalModel(
-                customIdentifier: $0.identifier,
-                backend: $0.runtime == .ollama ? .ollama : .lmStudio
-            )
+        reconcileRemoteInventories()
+        guard let connect else { return }
+        for node in connect.pairedNodes where node.status == .online {
+            _ = try? await connect.installedModels(on: node.id)
         }
-        discovered.forEach {
-            installedModelRecords[$0.id] = $0
-            studioModelIDs.insert($0.id)
-            states[$0.id] = .installed
-        }
-        if activeModel == nil, let first = discovered.first { use(first) }
-        if !discovered.isEmpty { persistInstalledModels() }
+        reconcileRemoteInventories()
     }
 
-    private func startDownload(_ model: LocalModel, installOllamaFirst: Bool) {
+    private func startDownload(
+        _ model: LocalModel,
+        targets: Set<NexusDownloadTarget>,
+        installOllamaFirst: Bool
+    ) {
         states[model.id] = .preparing("Preparing \(model.backend.title)…")
+        targetProgress[model.id] = [:]
         let task = Task { [weak self] in
             guard let self else { return }
             do {
-                let useStudio = connect?.shouldUseStudio == true
-                if installOllamaFirst, !useStudio {
+                if installOllamaFirst, targets.contains(.thisMac) {
                     states[model.id] = .preparing("Installing the official Ollama app…")
                     try await ollama.installOfficialMacApp()
                 }
-                if useStudio, let connect {
-                    states[model.id] = .preparing("Sending download to Mac Studio…")
-                    try await connect.pullModel(model) { update in
-                        await self.apply(update, to: model)
+                let ollama = self.ollama
+                let lmStudio = self.lmStudio
+                let connect = self.connect
+                try await withThrowingTaskGroup(of: NexusDownloadTarget.self) { group in
+                    for target in targets where self.placements[model.id]?.contains(target) != true {
+                        group.addTask { [weak self, ollama, lmStudio, connect] in
+                            guard let self else { throw CancellationError() }
+                            switch target {
+                            case .thisMac:
+                                switch model.backend {
+                                case .ollama:
+                                    try await ollama.pull(model: model.identifier) { update in
+                                        Task { @MainActor in self.apply(update, to: model, target: target) }
+                                    }
+                                case .lmStudio:
+                                    try await lmStudio.download(model) { update in
+                                        Task { @MainActor in self.apply(update, to: model, target: target) }
+                                    }
+                                }
+                            case .pairedNode(let nodeID):
+                                guard let connect else {
+                                    throw NexusConnectError.unavailable("Nexus Connect is unavailable")
+                                }
+                                try await connect.pullModel(model, on: nodeID) { update in
+                                    await self.apply(update, to: model, target: target)
+                                }
+                            }
+                            return target
+                        }
                     }
-                    studioModelIDs.insert(model.id)
-                } else {
-                    switch model.backend {
-                    case .ollama:
-                        try await ollama.pull(model: model.identifier) { [weak self] update in
-                            Task { @MainActor in self?.apply(update, to: model) }
-                        }
-                    case .lmStudio:
-                        try await lmStudio.download(model) { [weak self] update in
-                            Task { @MainActor in self?.apply(update, to: model) }
-                        }
+                    for try await completedTarget in group {
+                        self.placements[model.id, default: []].insert(completedTarget)
+                        self.persistInstalledModels()
                     }
                 }
                 states[model.id] = .installed
@@ -260,8 +335,23 @@ final class ModelDownloadViewModel: ObservableObject {
         downloadTasks[model.id] = task
     }
 
-    private func apply(_ update: ModelDownloadProgress, to model: LocalModel) {
-        states[model.id] = .downloading(progress: update.fraction, completedBytes: update.completedBytes, totalBytes: update.totalBytes, status: update.status)
+    private func apply(
+        _ update: ModelDownloadProgress,
+        to model: LocalModel,
+        target: NexusDownloadTarget
+    ) {
+        targetProgress[model.id, default: [:]][target] = update
+        let updates = Array(targetProgress[model.id, default: [:]].values)
+        let fraction = updates.isEmpty ? update.fraction : updates.map(\.fraction).reduce(0, +) / Double(updates.count)
+        let completed = updates.compactMap(\.completedBytes).reduce(0, +)
+        let totalValues = updates.compactMap(\.totalBytes)
+        let total = totalValues.isEmpty ? nil : totalValues.reduce(0, +)
+        states[model.id] = .downloading(
+            progress: fraction,
+            completedBytes: completed > 0 ? completed : nil,
+            totalBytes: total,
+            status: updates.count > 1 ? "Downloading to \(updates.count) devices" : update.status
+        )
     }
 
     private func persistInstalledModels() {
@@ -270,6 +360,77 @@ final class ModelDownloadViewModel: ObservableObject {
         if let data = try? JSONEncoder().encode(models) {
             UserDefaults.standard.set(data, forKey: installedModelsDefaultsKey)
         }
-        UserDefaults.standard.set(studioModelIDs.sorted(), forKey: studioModelsDefaultsKey)
+        let encodedPlacements = placements.mapValues(Array.init)
+        if let data = try? JSONEncoder().encode(encodedPlacements) {
+            UserDefaults.standard.set(data, forKey: placementsDefaultsKey)
+        }
+    }
+
+    func isUsable(_ model: LocalModel) -> Bool {
+        guard let targets = placements[model.id], !targets.isEmpty else { return false }
+        guard let connect else { return targets.contains(.thisMac) }
+        switch connect.modelRoute {
+        case .thisMac:
+            return targets.contains(.thisMac)
+        case .pairedNode(let id):
+            return targets.contains(.pairedNode(id)) && connect.pairedNodes.first(where: { $0.id == id })?.status == .online
+        case .automatic:
+            if targets.contains(.thisMac) { return true }
+            return connect.pairedNodes.contains { $0.status == .online && targets.contains(.pairedNode($0.id)) }
+        }
+    }
+
+    func placementDescription(for model: LocalModel) -> String? {
+        guard let targets = placements[model.id], !targets.isEmpty else { return nil }
+        return targets.map(targetName).sorted().joined(separator: ", ")
+    }
+
+    private var selectedDownloadTargets: Set<NexusDownloadTarget> {
+        connect?.downloadTargets ?? [.thisMac]
+    }
+
+    private func remoteTargetsMissingRuntime(
+        model: LocalModel,
+        targets: Set<NexusDownloadTarget>
+    ) -> [UUID]? {
+        guard let connect else { return nil }
+        let runtime: NexusRuntimeKind = model.backend == .ollama ? .ollama : .lmStudio
+        return targets.compactMap { target in
+            guard case .pairedNode(let id) = target,
+                  let node = connect.pairedNodes.first(where: { $0.id == id }) else { return nil }
+            guard node.status == .online else { return nil }
+            // Protocol-v1 hosts do not advertise runtime inventory. Preserve
+            // their existing pull behavior and let their clear host error win.
+            guard node.capabilities.contains(.runtimeStatus) else { return nil }
+            return node.runtimes.contains(where: { $0.kind == runtime }) ? nil : id
+        }
+    }
+
+    private func reconcileRemoteInventories() {
+        guard let connect else { return }
+        for node in connect.pairedNodes {
+            let target = NexusDownloadTarget.pairedNode(node.id)
+            for descriptor in node.modelInventory {
+                let model = LocalModel(
+                    customIdentifier: descriptor.identifier,
+                    backend: descriptor.runtime == .ollama ? .ollama : .lmStudio
+                )
+                installedModelRecords[model.id] = model
+                placements[model.id, default: []].insert(target)
+                states[model.id] = .installed
+            }
+        }
+        persistInstalledModels()
+    }
+
+    private func nodeName(_ id: UUID) -> String? {
+        connect?.pairedNodes.first(where: { $0.id == id })?.displayName
+    }
+
+    private func targetName(_ target: NexusDownloadTarget) -> String {
+        switch target {
+        case .thisMac: "This Mac"
+        case .pairedNode(let id): nodeName(id) ?? "Forgotten device"
+        }
     }
 }
