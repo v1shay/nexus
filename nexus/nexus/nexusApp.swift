@@ -40,6 +40,7 @@ final class NotchController: ObservableObject {
     private var globalHotKey: NexusGlobalHotKey?
     private var pointerMonitor: PointerProximityMonitor?
     private var modelPanel: NSPanel?
+    private let speechTranscriber = SpeechTranscriber()
 
     static let preview: NotchController = {
         let controller = NotchController()
@@ -114,9 +115,13 @@ final class NotchController: ObservableObject {
             isExpanded = false
             resize(to: listeningSize(for: screen), animated: true)
         }
+        speechTranscriber.start { [weak self] text in
+            Task { @MainActor in self?.transcript = text }
+        }
     }
 
     private func finishGlobalDictation() {
+        speechTranscriber.stop()
         isListening = false
         isHoverPreview = false
         hasTranscript = true
