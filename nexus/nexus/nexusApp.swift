@@ -114,6 +114,7 @@ final class NotchController: ObservableObject {
     private var responseTask: Task<Void, Never>?
     private var responseGeneration = UUID()
     private var responseSpeechCursor = StreamedSpeechCursor()
+    private var previousThinkingPhrase: String?
     private var hoverSession = NotchHoverSession()
     private var suppressAutomaticResponseReveal = false
 
@@ -238,7 +239,8 @@ final class NotchController: ObservableObject {
         responseTask = Task { [weak self] in
             guard let self else { return }
             guard !Task.isCancelled, responseGeneration == generation else { return }
-            let acknowledgement = PromptAcknowledgement.text(for: prompt)
+            let acknowledgement = PromptAcknowledgement.text(for: prompt, avoiding: previousThinkingPhrase)
+            previousThinkingPhrase = acknowledgement
             responseSpeaker.beginStreaming()
             interaction.acknowledge(acknowledgement)
             if let screen { resize(to: expandedSize(for: screen), animated: true) }

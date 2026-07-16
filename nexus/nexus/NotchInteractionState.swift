@@ -110,15 +110,102 @@ struct NotchInteractionState: Equatable {
 }
 
 enum PromptAcknowledgement {
-    static func text(for prompt: String) -> String {
+    enum Category: CaseIterable, Equatable {
+        case general
+        case search
+        case creation
+        case teaching
+        case math
+        case code
+    }
+
+    private static let phrases: [Category: [String]] = [
+        .general: [
+            "Looking into it…", "Thinking it through…", "Breaking it down…",
+            "Piecing it together…", "Making sense of it…", "Getting the picture…",
+            "Reading the situation…", "Mapping it out…"
+        ],
+        .search: [
+            "Tracking it down…", "Hunting for it…", "Scanning the field…",
+            "Following the trail…", "Digging into it…", "Searching the archives…",
+            "Narrowing it down…", "Chasing the signal…"
+        ],
+        .creation: [
+            "Building it out…", "Bringing it together…", "Shaping the idea…",
+            "Drafting it up…", "Making it real…", "Spinning it up…",
+            "Putting it together…", "Cooking something up…"
+        ],
+        .teaching: [
+            "Breaking it apart…", "Walking through it…", "Unpacking the idea…",
+            "Laying it out…", "Clearing it up…", "Connecting the pieces…",
+            "Making it click…", "Simplifying the picture…"
+        ],
+        .math: [
+            "Running the numbers…", "Working the logic…", "Crunching the figures…",
+            "Testing the angles…", "Solving it through…", "Tracing the pattern…",
+            "Reading the data…", "Following the math…"
+        ],
+        .code: [
+            "Tracing the issue…", "Reading the code…", "Following the stack…",
+            "Hunting the bug…", "Testing the flow…", "Inspecting the system…",
+            "Mapping the failure…", "Patching things up…"
+        ]
+    ]
+
+    static func category(for prompt: String) -> Category {
         let normalized = prompt.lowercased()
-        if normalized.contains("search") || normalized.contains("look up") || normalized.contains("research") {
-            return "Got it. I’ll look into that."
+        if containsAny(normalized, [
+            "code", "debug", "bug", "function", "class", "compile", "stack trace",
+            "error", "implement", "refactor", "python", "swift", "javascript",
+            "typescript", "xcode", "repository", " repo", "application code"
+        ]) {
+            return .code
         }
-        if normalized.contains("write") || normalized.contains("create") || normalized.contains("build") {
-            return "Understood. I’ll put that together."
+        if containsAny(normalized, [
+            "calculate", "equation", "probability", "statistics", "algebra", "geometry",
+            "calculus", "logic", "solve", "numbers", "dataset", "analyze the data"
+        ]) {
+            return .math
         }
-        return "Got it. Let me work through that."
+        if containsAny(normalized, ["find", "search", "look up", "locate", "research", "track down"]) {
+            return .search
+        }
+        if containsAny(normalized, ["explain", "teach", "walk me through", "clarify", "how does", "why does"]) {
+            return .teaching
+        }
+        if containsAny(normalized, [
+            "generate", "create", "build", "write", "draft", "design", "make", "compose"
+        ]) {
+            return .creation
+        }
+        return .general
+    }
+
+    static func candidates(for prompt: String) -> [String] {
+        phrases[category(for: prompt)] ?? phrases[.general]!
+    }
+
+    static func text(
+        for prompt: String,
+        avoiding previous: String? = nil,
+        choosing index: Int? = nil
+    ) -> String {
+        let allCandidates = candidates(for: prompt)
+        let candidates = allCandidates.filter { $0 != previous }
+        let available = candidates.isEmpty ? allCandidates : candidates
+        if let index { return available[index.modulo(available.count)] }
+        return available.randomElement() ?? "Thinking it through…"
+    }
+
+    private static func containsAny(_ source: String, _ needles: [String]) -> Bool {
+        needles.contains(where: source.contains)
+    }
+}
+
+private extension Int {
+    func modulo(_ divisor: Int) -> Int {
+        let remainder = self % divisor
+        return remainder >= 0 ? remainder : remainder + divisor
     }
 }
 

@@ -16,6 +16,7 @@ final class ResponseSpeaker {
     private var piperConfiguration: PiperVoiceConfiguration?
     private var pendingPCM = Data()
     private var chunker = SpeechSentenceChunker()
+    private var markdownFilter = StreamingSpeechMarkdownFilter()
     private var flushTask: Task<Void, Never>?
     private var streamingSessionIsActive = false
     private var isMuted = false
@@ -32,6 +33,7 @@ final class ResponseSpeaker {
     func beginStreaming() {
         streamingSessionIsActive = true
         chunker = SpeechSentenceChunker()
+        markdownFilter = StreamingSpeechMarkdownFilter()
         guard !isMuted, piperProcess == nil,
               let configuration = PiperVoiceConfiguration.detect() else { return }
         piperConfiguration = configuration
@@ -66,7 +68,8 @@ final class ResponseSpeaker {
 
     func append(_ delta: String) {
         guard streamingSessionIsActive, !isMuted else { return }
-        chunker.append(delta).forEach(enqueue)
+        let speakableText = markdownFilter.append(delta)
+        chunker.append(speakableText).forEach(enqueue)
         schedulePendingPhraseFlush()
     }
 
@@ -75,7 +78,9 @@ final class ResponseSpeaker {
         flushTask = nil
         guard streamingSessionIsActive else { return }
         streamingSessionIsActive = false
+        let finalSpeakableText = markdownFilter.finish()
         guard !isMuted else { return }
+        chunker.append(finalSpeakableText).forEach(enqueue)
         if let remainder = chunker.flush() { enqueue(remainder) }
         try? piperInput?.close()
         piperInput = nil
@@ -87,12 +92,14 @@ final class ResponseSpeaker {
         if muted {
             stopPipeline()
             chunker = SpeechSentenceChunker()
+            markdownFilter = StreamingSpeechMarkdownFilter()
         }
     }
 
     func stop() {
         streamingSessionIsActive = false
         chunker = SpeechSentenceChunker()
+        markdownFilter = StreamingSpeechMarkdownFilter()
         stopPipeline()
     }
 
@@ -371,6 +378,113 @@ struct StreamedSpeechCursor: Equatable {
         // cannot be retracted safely.
         text = snapshot
         return ""
+    }
+}
+
+/// Removes fenced code from streamed Markdown before it reaches TTS. The
+/// parser retains partial backtick runs across model tokens, so a split ```
+/// delimiter can never leak source code into Piper.
+struct StreamingSpeechMarkdownFilter: Equatable {
+    private enum Mode: Equatable {
+        case prose
+        case openingFence(language: String)
+        case code
+    }
+
+    private var mode: Mode = .prose
+    private var pendingBackticks = 0
+
+    mutating func append(_ text: String) -> String {
+        var output = ""
+        for character in text {
+            switch mode {
+            case .prose:
+                if character == "`" {
+                    pendingBackticks += 1
+                    if pendingBackticks == 3 {
+                        pendingBackticks = 0
+                        mode = .openingFence(language: "")
+                    }
+                } else {
+                    flushLiteralBackticks(into: &output)
+                    output.append(character)
+                }
+
+            case .openingFence(let currentLanguage):
+                if character == "\n" || character == "\r" {
+                    output += Self.codeAnnouncement(for: currentLanguage)
+                    pendingBackticks = 0
+                    mode = .code
+                } else {
+                    mode = .openingFence(language: currentLanguage + String(character))
+                }
+
+            case .code:
+                if character == "`" {
+                    pendingBackticks += 1
+                    if pendingBackticks == 3 {
+                        pendingBackticks = 0
+                        mode = .prose
+                        output.append(" ")
+                    }
+                } else {
+                    pendingBackticks = 0
+                }
+            }
+        }
+        return output
+    }
+
+    mutating func finish() -> String {
+        var output = ""
+        switch mode {
+        case .prose:
+            flushLiteralBackticks(into: &output)
+        case .openingFence(let language):
+            output = Self.codeAnnouncement(for: language)
+        case .code:
+            break
+        }
+        mode = .prose
+        pendingBackticks = 0
+        return output
+    }
+
+    private mutating func flushLiteralBackticks(into output: inout String) {
+        guard pendingBackticks > 0 else { return }
+        output += String(repeating: "`", count: pendingBackticks)
+        pendingBackticks = 0
+    }
+
+    private static func codeAnnouncement(for rawLanguage: String) -> String {
+        let identifier = rawLanguage
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .split(whereSeparator: { $0.isWhitespace })
+            .first
+            .map(String.init)?
+            .lowercased() ?? ""
+        let language: String? = switch identifier {
+        case "py", "python": "Python"
+        case "js", "javascript": "JavaScript"
+        case "ts", "typescript": "TypeScript"
+        case "sh", "shell", "bash", "zsh": "shell"
+        case "swift": "Swift"
+        case "kt", "kotlin": "Kotlin"
+        case "rs", "rust": "Rust"
+        case "rb", "ruby": "Ruby"
+        case "cpp", "c++": "C++"
+        case "csharp", "cs", "c#": "C sharp"
+        case "go", "golang": "Go"
+        case "java": "Java"
+        case "html": "HTML"
+        case "css": "CSS"
+        case "sql": "SQL"
+        case "json": "JSON"
+        case "yaml", "yml": "YAML"
+        case "": nil
+        default: identifier.prefix(24).capitalized
+        }
+        return language.map { " Here is the \($0) code. " } ?? " Here is the code. "
     }
 }
 

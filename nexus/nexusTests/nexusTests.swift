@@ -195,6 +195,31 @@ final class NexusGeometryTests: XCTestCase {
         XCTAssertTrue(instructions.contains("provide the complete deliverable"))
         XCTAssertTrue(instructions.contains("Never truncate code"))
         XCTAssertTrue(instructions.contains("heavily sarcastic"))
+        XCTAssertTrue(instructions.contains("Only if the user explicitly asks who you are"))
+        XCTAssertTrue(instructions.contains("do not mention your name"))
+        XCTAssertTrue(instructions.contains("Immediately before each code block"))
+    }
+
+    func testStreamingSpeechSkipsFencedCodeSplitAcrossTokens() {
+        var filter = StreamingSpeechMarkdownFilter()
+        var spoken = filter.append("I built the parser in Python.\n``")
+        spoken += filter.append("`python\nprint('do not speak me')\n``")
+        spoken += filter.append("`\nIt is ready.")
+        spoken += filter.finish()
+
+        XCTAssertTrue(spoken.contains("I built the parser in Python."))
+        XCTAssertTrue(spoken.contains("Here is the Python code."))
+        XCTAssertTrue(spoken.contains("It is ready."))
+        XCTAssertFalse(spoken.contains("print"))
+        XCTAssertFalse(spoken.contains("do not speak me"))
+    }
+
+    func testStreamingSpeechAnnouncesAnUnlabelledCodeBlockOnce() {
+        var filter = StreamingSpeechMarkdownFilter()
+        let spoken = filter.append("```\nlet secret = 1\n```") + filter.finish()
+
+        XCTAssertEqual(spoken.components(separatedBy: "Here is the code.").count - 1, 1)
+        XCTAssertFalse(spoken.contains("secret"))
     }
 
     func testThinkingBeginsOnlyAfterAcknowledgementStateIsFinished() {
@@ -210,8 +235,17 @@ final class NexusGeometryTests: XCTestCase {
     }
 
     func testAcknowledgementMatchesThePromptIntent() {
-        XCTAssertEqual(PromptAcknowledgement.text(for: "Search Google for Swift"), "Got it. I’ll look into that.")
-        XCTAssertEqual(PromptAcknowledgement.text(for: "Build a prototype"), "Understood. I’ll put that together.")
+        XCTAssertEqual(PromptAcknowledgement.text(for: "What is photosynthesis?", choosing: 0), "Looking into it…")
+        XCTAssertEqual(PromptAcknowledgement.text(for: "Find the missing document", choosing: 0), "Tracking it down…")
+        XCTAssertEqual(PromptAcknowledgement.text(for: "Generate a logo", choosing: 0), "Building it out…")
+        XCTAssertEqual(PromptAcknowledgement.text(for: "Explain photosynthesis", choosing: 0), "Breaking it apart…")
+        XCTAssertEqual(PromptAcknowledgement.text(for: "Solve this equation", choosing: 0), "Running the numbers…")
+        XCTAssertEqual(PromptAcknowledgement.text(for: "Debug this Swift code", choosing: 0), "Tracing the issue…")
+        XCTAssertEqual(Set(PromptAcknowledgement.candidates(for: "Find this")).count, 8)
+        XCTAssertNotEqual(
+            PromptAcknowledgement.text(for: "Find this", avoiding: "Tracking it down…", choosing: 0),
+            "Tracking it down…"
+        )
     }
 
     func testLegacyDownloadedOllamaModelBecomesRestorableDefault() {
