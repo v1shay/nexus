@@ -1,5 +1,6 @@
 import SwiftUI
 import AppKit
+import Carbon.HIToolbox
 
 @main
 struct NexusApp: App {
@@ -33,8 +34,7 @@ final class NotchController: ObservableObject {
     private var panel: NexusNotchPanel?
     private var screen: NSScreen?
     private var closeTask: Task<Void, Never>?
-    private var hotKeyMonitor: Any?
-    private var localKeyMonitor: Any?
+    private var globalHotKey: NexusGlobalHotKey?
     private var pointerMonitor: PointerProximityMonitor?
 
     static let preview: NotchController = {
@@ -86,18 +86,35 @@ final class NotchController: ObservableObject {
         updateHover(isOverNotchZone || isOverPanel)
     }
 
-    /// ⌥Space starts/stops the voice session. The global monitor handles it
-    /// outside Nexus when macOS Accessibility permission is granted.
+    /// Carbon hotkeys are delivered by macOS rather than by Nexus's focused
+    /// window, which is what makes this work above every other application.
     private func installHotKeyMonitor() {
-        let handler: (NSEvent) -> Void = { [weak self] event in
-            guard event.keyCode == 49, event.modifierFlags.contains(.option) else { return }
-            Task { @MainActor in self?.toggleListening() }
+        globalHotKey = NexusGlobalHotKey(
+            onPress: { [weak self] in
+                Task { @MainActor in self?.startGlobalDictation() }
+            },
+            onRelease: { [weak self] in
+                Task { @MainActor in self?.finishGlobalDictation() }
+            }
+        )
+        globalHotKey?.install()
+    }
+
+    private func startGlobalDictation() {
+        closeTask?.cancel()
+        isListening = true
+        if let screen {
+            isExpanded = true
+            resize(to: listeningSize(for: screen), animated: true)
         }
-        localKeyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
-            handler(event)
-            return event
+    }
+
+    private func finishGlobalDictation() {
+        isListening = false
+        if let screen {
+            isExpanded = true
+            resize(to: expandedSize(for: screen), animated: true)
         }
-        hotKeyMonitor = NSEvent.addGlobalMonitorForEvents(matching: .keyDown, handler: handler)
     }
 
     func toggleListening() {
@@ -160,7 +177,11 @@ final class NotchController: ObservableObject {
     }
 
     private func expandedSize(for screen: NSScreen) -> CGSize {
-        CGSize(width: min(620, screen.frame.width * 0.46), height: 210)
+        CGSize(width: min(680, screen.frame.width * 0.5), height: 245)
+    }
+
+    private func listeningSize(for screen: NSScreen) -> CGSize {
+        CGSize(width: min(260, screen.frame.width * 0.24), height: 58)
     }
 
     private func frame(for size: CGSize, on screen: NSScreen) -> NSRect {
@@ -177,6 +198,62 @@ final class NotchController: ObservableObject {
         self.screen = screen
         resize(to: isExpanded ? expandedSize(for: screen) : closedSize(for: screen), animated: false)
     }
+}
+
+private final class NexusGlobalHotKey {
+    private let onPress: () -> Void
+    private let onRelease: () -> Void
+    private var hotKey: EventHotKeyRef?
+    private var eventHandler: EventHandlerRef?
+
+    init(onPress: @escaping () -> Void, onRelease: @escaping () -> Void) {
+        self.onPress = onPress
+        self.onRelease = onRelease
+    }
+
+    func install() {
+        var eventTypes = [
+            EventTypeSpec(eventClass: OSType(kEventClassKeyboard), eventKind: UInt32(kEventHotKeyPressed)),
+            EventTypeSpec(eventClass: OSType(kEventClassKeyboard), eventKind: UInt32(kEventHotKeyReleased))
+        ]
+        InstallEventHandler(
+            GetEventDispatcherTarget(),
+            nexusGlobalHotKeyHandler,
+            eventTypes.count,
+            &eventTypes,
+            Unmanaged.passUnretained(self).toOpaque(),
+            &eventHandler
+        )
+        var identifier = EventHotKeyID(signature: 0x4E585553, id: 1) // "NXUS"
+        RegisterEventHotKey(
+            UInt32(kVK_Space),
+            UInt32(cmdKey | shiftKey),
+            identifier,
+            GetEventDispatcherTarget(),
+            0,
+            &hotKey
+        )
+    }
+
+    fileprivate func handle(_ event: EventRef?) {
+        switch GetEventKind(event) {
+        case UInt32(kEventHotKeyPressed): onPress()
+        case UInt32(kEventHotKeyReleased): onRelease()
+        default: break
+        }
+    }
+
+    deinit {
+        if let hotKey { UnregisterEventHotKey(hotKey) }
+        if let eventHandler { RemoveEventHandler(eventHandler) }
+    }
+}
+
+private let nexusGlobalHotKeyHandler: EventHandlerUPP = { _, event, userData in
+    guard let userData else { return noErr }
+    let manager = Unmanaged<NexusGlobalHotKey>.fromOpaque(userData).takeUnretainedValue()
+    manager.handle(event)
+    return noErr
 }
 
 private final class PointerProximityMonitor {
