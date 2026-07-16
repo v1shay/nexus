@@ -170,6 +170,9 @@ struct NexusHandshakeHello: Codable, Equatable, Sendable {
     let timestampMilliseconds: Int64
     let signature: Data
     let authenticationCode: Data
+    /// Optional to keep v1 hello messages decodable during rolling upgrades.
+    let appVersion: String?
+    let features: Set<NexusConnectFeature>?
 }
 
 struct NexusPendingHandshake: @unchecked Sendable {
@@ -186,20 +189,25 @@ enum NexusHandshake {
         pairing: NexusPairingMaterial,
         respondingToNonce: Data? = nil,
         timestampMilliseconds: Int64 = NexusClock.nowMilliseconds(),
-        nonce: Data? = nil
+        nonce: Data? = nil,
+        appVersion: String = NexusAppMetadata.version,
+        features: Set<NexusConnectFeature> = Set(NexusConnectFeature.allCases),
+        protocolRange: NexusProtocolVersionRange = .local
     ) throws -> NexusPendingHandshake {
         let signingKey = try Curve25519.Signing.PrivateKey(rawRepresentation: identity.signingPrivateKey)
         let ephemeralKey = Curve25519.KeyAgreement.PrivateKey()
         let unsigned = NexusUnsignedHello(
-            protocolMinimum: NexusConnectProtocol.minimumVersion,
-            protocolMaximum: NexusConnectProtocol.currentVersion,
+            protocolMinimum: protocolRange.minimum,
+            protocolMaximum: protocolRange.maximum,
             deviceID: identity.deviceID,
             role: role,
             signingPublicKey: signingKey.publicKey.rawRepresentation,
             ephemeralPublicKey: ephemeralKey.publicKey.rawRepresentation,
             nonce: nonce ?? randomBytes(count: 32),
             respondingToNonce: respondingToNonce,
-            timestampMilliseconds: timestampMilliseconds
+            timestampMilliseconds: timestampMilliseconds,
+            appVersion: appVersion,
+            features: features.sorted { $0.rawValue < $1.rawValue }
         )
         let unsignedData = try canonicalData(unsigned)
         let signature = try signingKey.signature(for: unsignedData)
@@ -221,7 +229,9 @@ enum NexusHandshake {
                 respondingToNonce: unsigned.respondingToNonce,
                 timestampMilliseconds: unsigned.timestampMilliseconds,
                 signature: signature,
-                authenticationCode: authenticationCode
+                authenticationCode: authenticationCode,
+                appVersion: unsigned.appVersion,
+                features: Set(unsigned.features ?? [])
             ),
             ephemeralPrivateKey: ephemeralKey
         )
@@ -254,7 +264,12 @@ enum NexusHandshake {
         if let peerKey = pairing.peerSigningPublicKey, peerKey != hello.signingPublicKey {
             throw NexusConnectError.identityMismatch
         }
-        let unsignedData = try canonicalData(hello.unsigned)
+        let unsignedData: Data
+        if hello.appVersion == nil, hello.features == nil {
+            unsignedData = try canonicalData(hello.legacyUnsigned)
+        } else {
+            unsignedData = try canonicalData(hello.unsigned)
+        }
         let signingKey = try Curve25519.Signing.PublicKey(rawRepresentation: hello.signingPublicKey)
         guard signingKey.isValidSignature(hello.signature, for: unsignedData) else {
             throw NexusConnectError.authenticationFailed
@@ -308,11 +323,51 @@ private struct NexusUnsignedHello: Codable {
     let nonce: Data
     let respondingToNonce: Data?
     let timestampMilliseconds: Int64
+    let appVersion: String?
+    let features: [NexusConnectFeature]?
 }
 
-private extension NexusHandshakeHello {
-    var unsigned: NexusUnsignedHello {
+/// Exact v1 signed shape. Re-encoding a legacy hello with new optional fields
+/// would change its signature even when those fields decode as nil.
+private struct NexusLegacyUnsignedHello: Codable {
+    let protocolMinimum: Int
+    let protocolMaximum: Int
+    let deviceID: UUID
+    let role: NexusNodeRole
+    let signingPublicKey: Data
+    let ephemeralPublicKey: Data
+    let nonce: Data
+    let respondingToNonce: Data?
+    let timestampMilliseconds: Int64
+}
+
+extension NexusHandshakeHello {
+    var advertisedProtocolRange: NexusProtocolVersionRange {
+        .init(minimum: protocolMinimum, maximum: protocolMaximum)
+    }
+
+    var advertisedFeatures: Set<NexusConnectFeature> {
+        features ?? [.streamingInference, .resumableModelPull]
+    }
+
+    fileprivate var unsigned: NexusUnsignedHello {
         NexusUnsignedHello(
+            protocolMinimum: protocolMinimum,
+            protocolMaximum: protocolMaximum,
+            deviceID: deviceID,
+            role: role,
+            signingPublicKey: signingPublicKey,
+            ephemeralPublicKey: ephemeralPublicKey,
+            nonce: nonce,
+            respondingToNonce: respondingToNonce,
+            timestampMilliseconds: timestampMilliseconds,
+            appVersion: appVersion,
+            features: features?.sorted { $0.rawValue < $1.rawValue }
+        )
+    }
+
+    fileprivate var legacyUnsigned: NexusLegacyUnsignedHello {
+        NexusLegacyUnsignedHello(
             protocolMinimum: protocolMinimum,
             protocolMaximum: protocolMaximum,
             deviceID: deviceID,
@@ -323,6 +378,12 @@ private extension NexusHandshakeHello {
             respondingToNonce: respondingToNonce,
             timestampMilliseconds: timestampMilliseconds
         )
+    }
+}
+
+enum NexusAppMetadata {
+    static var version: String {
+        Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "0"
     }
 }
 

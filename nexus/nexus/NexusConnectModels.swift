@@ -1,12 +1,52 @@
 import Foundation
 
 enum NexusConnectProtocol {
-    static let currentVersion = 1
+    /// Version 2 adds feature negotiation and per-node runtime/inventory
+    /// metadata. Version 1 remains accepted for rolling upgrades.
+    static let currentVersion = 2
     static let minimumVersion = 1
     static let servicePort: UInt16 = 49_718
     static let maximumControlFrameBytes = 1_048_576
     static let maximumDataFrameBytes = 8_388_608
     static let defaultChunkBytes = 1_048_576
+}
+
+enum NexusConnectFeature: String, CaseIterable, Codable, Hashable, Sendable {
+    case streamingInference
+    case resumableModelPull
+    case perNodeInventory
+    case runtimeProvisioning
+    case modelDelete
+    case backgroundHost
+
+    var introducedInProtocol: Int {
+        switch self {
+        case .streamingInference, .resumableModelPull: 1
+        case .perNodeInventory, .runtimeProvisioning, .modelDelete, .backgroundHost: 2
+        }
+    }
+}
+
+struct NexusNegotiatedProtocol: Codable, Equatable, Sendable {
+    let version: Int
+    let features: Set<NexusConnectFeature>
+}
+
+enum NexusProtocolNegotiator {
+    static func negotiate(
+        localRange: NexusProtocolVersionRange = .local,
+        localFeatures: Set<NexusConnectFeature> = Set(NexusConnectFeature.allCases),
+        remoteRange: NexusProtocolVersionRange,
+        remoteFeatures: Set<NexusConnectFeature>
+    ) throws -> NexusNegotiatedProtocol {
+        guard let version = localRange.highestCommonVersion(with: remoteRange) else {
+            throw NexusConnectError.unsupportedProtocol
+        }
+        let features = localFeatures.intersection(remoteFeatures).filter {
+            $0.introducedInProtocol <= version
+        }
+        return .init(version: version, features: features)
+    }
 }
 
 enum NexusNodeRole: String, Codable, Sendable {

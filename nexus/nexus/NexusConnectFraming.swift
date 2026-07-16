@@ -52,6 +52,7 @@ enum NexusWireDirection: String, Sendable {
 
 struct NexusSecureChannel {
     let sessionID: UUID
+    let protocolVersion: Int
     private let key: SymmetricKey
     private let outgoingDirection: NexusWireDirection
     private let incomingDirection: NexusWireDirection
@@ -62,9 +63,11 @@ struct NexusSecureChannel {
         sessionID: UUID,
         key: SymmetricKey,
         outgoingDirection: NexusWireDirection,
-        incomingDirection: NexusWireDirection
+        incomingDirection: NexusWireDirection,
+        protocolVersion: Int = NexusConnectProtocol.currentVersion
     ) {
         self.sessionID = sessionID
+        self.protocolVersion = protocolVersion
         self.key = key
         self.outgoingDirection = outgoingDirection
         self.incomingDirection = incomingDirection
@@ -72,7 +75,7 @@ struct NexusSecureChannel {
 
     mutating func seal(_ message: NexusConnectMessage) throws -> Data {
         guard message.sessionID == sessionID,
-              message.protocolVersion == NexusConnectProtocol.currentVersion else {
+              message.protocolVersion == protocolVersion else {
             throw NexusConnectError.malformedFrame
         }
         let sequence = nextOutgoingSequence
@@ -114,7 +117,7 @@ struct NexusSecureChannel {
         }
         let message = try NexusPayloadCoder.decoder.decode(NexusConnectMessage.self, from: plaintext)
         guard message.sessionID == sessionID,
-              message.protocolVersion == NexusConnectProtocol.currentVersion else {
+              message.protocolVersion == protocolVersion else {
             throw NexusConnectError.malformedFrame
         }
         nextIncomingSequence += 1
@@ -123,7 +126,7 @@ struct NexusSecureChannel {
 
     private func authenticatedData(direction: NexusWireDirection, sequence: UInt64) -> Data {
         Data(
-            "nexus-connect|\(NexusConnectProtocol.currentVersion)|\(sessionID.uuidString.lowercased())|\(direction.rawValue)|\(sequence)"
+            "nexus-connect|\(protocolVersion)|\(sessionID.uuidString.lowercased())|\(direction.rawValue)|\(sequence)"
                 .utf8
         )
     }

@@ -54,6 +54,8 @@ actor NexusRemoteClientSession: NexusRemoteSession, NexusWorkloadExecuting {
     private var receiveTask: Task<Void, Never>?
     private var continuations: [UUID: AsyncThrowingStream<NexusWorkloadEvent, Error>.Continuation] = [:]
     private var connectedPeer: NexusTailscalePeer?
+    private var negotiatedProtocol = NexusConnectProtocol.currentVersion
+    private(set) var negotiatedFeatures: Set<NexusConnectFeature> = []
 
     init(
         vault: NexusIdentityVault = NexusIdentityVault(role: .client),
@@ -88,6 +90,10 @@ actor NexusRemoteClientSession: NexusRemoteSession, NexusWorkloadExecuting {
             expectedRole: .studioHost,
             respondingToNonce: pending.hello.nonce
         )
+        let negotiation = try NexusProtocolNegotiator.negotiate(
+            remoteRange: response.hello.advertisedProtocolRange,
+            remoteFeatures: response.hello.advertisedFeatures
+        )
         pairing = try pairing.pinning(
             peerDeviceID: response.hello.deviceID,
             peerSigningPublicKey: response.hello.signingPublicKey
@@ -108,8 +114,11 @@ actor NexusRemoteClientSession: NexusRemoteSession, NexusWorkloadExecuting {
             sessionID: newSessionID,
             key: key,
             outgoingDirection: .clientToHost,
-            incomingDirection: .hostToClient
+            incomingDirection: .hostToClient,
+            protocolVersion: negotiation.version
         )
+        negotiatedProtocol = negotiation.version
+        negotiatedFeatures = negotiation.features
         receiveTask = Task { [weak self] in await self?.receiveLoop() }
         return try await health()
     }
@@ -170,6 +179,8 @@ actor NexusRemoteClientSession: NexusRemoteSession, NexusWorkloadExecuting {
         secureChannel = nil
         sessionID = nil
         connectedPeer = nil
+        negotiatedProtocol = NexusConnectProtocol.currentVersion
+        negotiatedFeatures = []
         finishAll(throwing: NexusConnectError.unavailable("Mac Studio disconnected"))
     }
 
@@ -183,6 +194,7 @@ actor NexusRemoteClientSession: NexusRemoteSession, NexusWorkloadExecuting {
             throw NexusConnectError.unavailable("Mac Studio is not connected")
         }
         let message = try NexusConnectMessage(
+            protocolVersion: negotiatedProtocol,
             sessionID: sessionID,
             kind: kind,
             requestID: requestID,
@@ -211,6 +223,8 @@ actor NexusRemoteClientSession: NexusRemoteSession, NexusWorkloadExecuting {
             connection = nil
             secureChannel = nil
             sessionID = nil
+            negotiatedProtocol = NexusConnectProtocol.currentVersion
+            negotiatedFeatures = []
         }
     }
 
@@ -261,6 +275,7 @@ actor NexusConnectHostSession {
     private var secureChannel: NexusSecureChannel?
     private var sessionID: UUID?
     private var jobs: [UUID: Task<Void, Never>] = [:]
+    private var negotiatedProtocol = NexusConnectProtocol.currentVersion
 
     init(
         transport: any NexusByteTransport,
@@ -291,6 +306,10 @@ actor NexusConnectHostSession {
         let requestData = try await framed.receivePayload(maximumBytes: NexusConnectProtocol.maximumControlFrameBytes)
         let request = try NexusPayloadCoder.decoder.decode(NexusHandshakeEnvelope.self, from: requestData)
         try NexusHandshake.verify(request.hello, pairing: pairing, expectedRole: .client)
+        let negotiation = try NexusProtocolNegotiator.negotiate(
+            remoteRange: request.hello.advertisedProtocolRange,
+            remoteFeatures: request.hello.advertisedFeatures
+        )
         pairing = try pairing.pinning(
             peerDeviceID: request.hello.deviceID,
             peerSigningPublicKey: request.hello.signingPublicKey
@@ -323,8 +342,10 @@ actor NexusConnectHostSession {
             sessionID: request.sessionID,
             key: key,
             outgoingDirection: .hostToClient,
-            incomingDirection: .clientToHost
+            incomingDirection: .clientToHost,
+            protocolVersion: negotiation.version
         )
+        negotiatedProtocol = negotiation.version
 
         while !Task.isCancelled {
             let packet = try await framed.receivePayload()
@@ -342,6 +363,7 @@ actor NexusConnectHostSession {
         connection = nil
         secureChannel = nil
         sessionID = nil
+        negotiatedProtocol = NexusConnectProtocol.currentVersion
     }
 
     private func handle(_ message: NexusConnectMessage) async throws {
@@ -385,6 +407,7 @@ actor NexusConnectHostSession {
             throw NexusConnectError.unavailable("host session closed")
         }
         let message = try NexusConnectMessage(
+            protocolVersion: negotiatedProtocol,
             sessionID: sessionID,
             kind: kind,
             requestID: requestID,
