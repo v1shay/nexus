@@ -62,9 +62,10 @@ enum NexusPairingCode {
         displayName: String,
         endpoint: String
     ) throws -> (material: NexusPairingMaterial, invitation: NexusPairingInvitation, code: String) {
-        let material = try NexusPairingMaterial.fresh()
+        let invitationID = UUID()
+        let material = try NexusPairingMaterial.fresh(pairingID: invitationID)
         let invitation = NexusPairingInvitation(
-            invitationID: UUID(),
+            invitationID: invitationID,
             hostNodeID: identity.deviceID,
             hostSigningPublicKey: identity.signingPublicKey,
             secret: material.secret,
@@ -145,6 +146,7 @@ final class NexusConnectController: ObservableObject {
     @Published private(set) var enabled: Bool
     @Published private(set) var isPaired = false
     @Published private(set) var pairedNodes: [NexusPairedNode] = []
+    @Published private(set) var authorizedClients: [NexusAuthorizedClient] = []
     @Published private(set) var modelRoute: NexusModelRoute
     @Published private(set) var downloadTargets: Set<NexusDownloadTarget>
     @Published var pairingCode = ""
@@ -172,6 +174,7 @@ final class NexusConnectController: ObservableObject {
     private let defaults: UserDefaults
     private let clientVault: NexusIdentityVault
     private let hostVault: NexusIdentityVault
+    private let hostTrust: NexusHostTrustStore
     private let roster: NexusPairedNodeStore
     private let router: NexusMultiNodeWorkloadRouter
     private let coordinator: NexusPairedNodeCoordinator
@@ -200,9 +203,11 @@ final class NexusConnectController: ObservableObject {
 
         let clientVault = NexusIdentityVault(store: secretStore, role: .client)
         let hostVault = NexusIdentityVault(store: secretStore, role: .studioHost)
+        let hostTrust = NexusHostTrustStore(secretStore: secretStore)
         let roster = NexusPairedNodeStore(secretStore: secretStore, scope: .client)
         self.clientVault = clientVault
         self.hostVault = hostVault
+        self.hostTrust = hostTrust
         self.roster = roster
         self.persistentHost = persistentHost
 
@@ -213,6 +218,7 @@ final class NexusConnectController: ObservableObject {
             try? roster.update(nodeID: migrated.id) { $0.tailscaleNodeID = tailscaleID }
         }
         pairedNodes = (try? roster.prepareForLaunch()) ?? []
+        authorizedClients = (try? hostTrust.load()) ?? []
 
         let localNodeID: UUID
         if let saved = defaults.string(forKey: localNodeIDKey).flatMap(UUID.init(uuidString:)) {
@@ -240,7 +246,9 @@ final class NexusConnectController: ObservableObject {
                 ))
             }
         )
-        isPaired = role == .client ? !pairedNodes.isEmpty || (try? clientVault.loadPairing()) != nil : (try? hostVault.loadPairing()) != nil
+        isPaired = role == .client
+            ? !pairedNodes.isEmpty || (try? clientVault.loadPairing()) != nil
+            : !authorizedClients.filter({ $0.status != .revoked }).isEmpty || (try? hostVault.loadPairing()) != nil
 
         coordinator.$nodes
             .receive(on: DispatchQueue.main)
@@ -261,7 +269,9 @@ final class NexusConnectController: ObservableObject {
         guard self.role != role else { return }
         self.role = role
         defaults.set(role.rawValue, forKey: roleKey)
-        isPaired = role == .client ? !pairedNodes.isEmpty : (try? hostVault.loadPairing()) != nil
+        isPaired = role == .client
+            ? !pairedNodes.isEmpty
+            : !authorizedClients.filter({ $0.status != .revoked }).isEmpty || (try? hostVault.loadPairing()) != nil
         pairingCode = ""
         setupMessage = ""
         restart()
@@ -302,7 +312,8 @@ final class NexusConnectController: ObservableObject {
                     displayName: name,
                     endpoint: name
                 )
-                try hostVault.savePairing(generated.material)
+                try hostTrust.registerInvitation(pairing: generated.material)
+                authorizedClients = try hostTrust.load()
                 pairingCode = generated.code
                 setupMessage = "Pair this device once. Nexus will pin \(name)'s identity and reconnect automatically."
             } else {
@@ -328,7 +339,8 @@ final class NexusConnectController: ObservableObject {
                 let pairing = try NexusPairingMaterial(
                     secret: invitation.secret,
                     peerDeviceID: invitation.hostNodeID,
-                    peerSigningPublicKey: invitation.hostSigningPublicKey
+                    peerSigningPublicKey: invitation.hostSigningPublicKey,
+                    pairingID: invitation.invitationID
                 )
                 let node = NexusPairedNode(
                     id: invitation.hostNodeID,
@@ -373,6 +385,31 @@ final class NexusConnectController: ObservableObject {
 
     func reconnect(nodeID: UUID) { coordinator.reconnect(nodeID: nodeID) }
 
+    func renameAuthorizedClient(pairingID: UUID, to name: String) {
+        do {
+            try hostTrust.rename(pairingID: pairingID, to: name)
+            authorizedClients = try hostTrust.load()
+            setupMessage = "Authorized device renamed."
+        } catch {
+            setupMessage = error.localizedDescription
+        }
+    }
+
+    func revokeAuthorizedClient(pairingID: UUID) {
+        do {
+            try hostTrust.revoke(pairingID: pairingID)
+            authorizedClients = try hostTrust.load()
+            isPaired = authorizedClients.contains { $0.status != .revoked }
+            setupMessage = "Device access revoked. Existing credentials can no longer reconnect."
+        } catch {
+            setupMessage = error.localizedDescription
+        }
+    }
+
+    func refreshAuthorizedClients() {
+        authorizedClients = (try? hostTrust.load()) ?? authorizedClients
+    }
+
     func forget(nodeID: UUID) {
         do {
             try roster.forget(nodeID: nodeID)
@@ -398,7 +435,11 @@ final class NexusConnectController: ObservableObject {
             pairedNodes = []
             coordinator.stop()
         } else {
+            for client in authorizedClients where client.status != .revoked {
+                try? hostTrust.revoke(pairingID: client.id)
+            }
             try? hostVault.removePairing()
+            authorizedClients = (try? hostTrust.load()) ?? []
         }
         isPaired = false
         pairingCode = ""
@@ -623,7 +664,9 @@ final class NexusConnectController: ObservableObject {
         hostStartTask?.cancel()
         hostStartTask = nil
         coordinator.stop()
-        isPaired = role == .client ? !pairedNodes.isEmpty : (try? hostVault.loadPairing()) != nil
+        isPaired = role == .client
+            ? !pairedNodes.isEmpty
+            : authorizedClients.contains { $0.status != .revoked } || (try? hostVault.loadPairing()) != nil
 
         guard enabled else {
             Task { await router.setRoute(.thisMac) }

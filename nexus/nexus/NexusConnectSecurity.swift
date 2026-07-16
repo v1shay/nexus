@@ -93,16 +93,25 @@ struct NexusPairingMaterial: Codable, Equatable, Sendable {
     let secret: Data
     let peerDeviceID: UUID?
     let peerSigningPublicKey: Data?
+    /// Identifies one host-issued invitation without exposing its secret. It is
+    /// optional so protocol-v1 and early-v2 pairing records remain decodable.
+    let pairingID: UUID?
 
-    init(secret: Data, peerDeviceID: UUID? = nil, peerSigningPublicKey: Data? = nil) throws {
+    init(
+        secret: Data,
+        peerDeviceID: UUID? = nil,
+        peerSigningPublicKey: Data? = nil,
+        pairingID: UUID? = nil
+    ) throws {
         guard secret.count == 32 else { throw NexusConnectError.authenticationFailed }
         self.secret = secret
         self.peerDeviceID = peerDeviceID
         self.peerSigningPublicKey = peerSigningPublicKey
+        self.pairingID = pairingID
     }
 
-    static func fresh() throws -> NexusPairingMaterial {
-        try NexusPairingMaterial(secret: Data(SymmetricKey(size: .bits256)))
+    static func fresh(pairingID: UUID? = nil) throws -> NexusPairingMaterial {
+        try NexusPairingMaterial(secret: Data(SymmetricKey(size: .bits256)), pairingID: pairingID)
     }
 
     func pinning(peerDeviceID: UUID, peerSigningPublicKey: Data) throws -> NexusPairingMaterial {
@@ -115,7 +124,8 @@ struct NexusPairingMaterial: Codable, Equatable, Sendable {
         return try NexusPairingMaterial(
             secret: secret,
             peerDeviceID: peerDeviceID,
-            peerSigningPublicKey: peerSigningPublicKey
+            peerSigningPublicKey: peerSigningPublicKey,
+            pairingID: pairingID
         )
     }
 }
@@ -204,6 +214,9 @@ struct NexusHandshakeHello: Codable, Equatable, Sendable {
     /// Optional to keep v1 hello messages decodable during rolling upgrades.
     let appVersion: String?
     let features: Set<NexusConnectFeature>?
+    /// Protocol-v2 invitation selector. The signed value lets a host choose the
+    /// correct per-client secret before authentication without revealing it.
+    let pairingID: UUID?
 }
 
 struct NexusPendingHandshake: @unchecked Sendable {
@@ -238,9 +251,27 @@ enum NexusHandshake {
             respondingToNonce: respondingToNonce,
             timestampMilliseconds: timestampMilliseconds,
             appVersion: appVersion,
-            features: features.sorted { $0.rawValue < $1.rawValue }
+            features: features.sorted { $0.rawValue < $1.rawValue },
+            pairingID: pairing.pairingID
         )
-        let unsignedData = try canonicalData(unsigned)
+        let unsignedData: Data
+        if unsigned.pairingID == nil {
+            unsignedData = try canonicalData(NexusPreMultiClientUnsignedHello(
+                protocolMinimum: unsigned.protocolMinimum,
+                protocolMaximum: unsigned.protocolMaximum,
+                deviceID: unsigned.deviceID,
+                role: unsigned.role,
+                signingPublicKey: unsigned.signingPublicKey,
+                ephemeralPublicKey: unsigned.ephemeralPublicKey,
+                nonce: unsigned.nonce,
+                respondingToNonce: unsigned.respondingToNonce,
+                timestampMilliseconds: unsigned.timestampMilliseconds,
+                appVersion: unsigned.appVersion,
+                features: unsigned.features
+            ))
+        } else {
+            unsignedData = try canonicalData(unsigned)
+        }
         let signature = try signingKey.signature(for: unsignedData)
         let authenticationCode = Data(
             HMAC<SHA256>.authenticationCode(
@@ -262,7 +293,8 @@ enum NexusHandshake {
                 signature: signature,
                 authenticationCode: authenticationCode,
                 appVersion: unsigned.appVersion,
-                features: Set(unsigned.features ?? [])
+                features: Set(unsigned.features ?? []),
+                pairingID: unsigned.pairingID
             ),
             ephemeralPrivateKey: ephemeralKey
         )
@@ -298,6 +330,10 @@ enum NexusHandshake {
         let unsignedData: Data
         if hello.appVersion == nil, hello.features == nil {
             unsignedData = try canonicalData(hello.legacyUnsigned)
+        } else if hello.pairingID == nil {
+            // Early protocol-v2 builds signed the app/features fields but did
+            // not yet include a pairing selector. Preserve that exact shape.
+            unsignedData = try canonicalData(hello.preMultiClientUnsigned)
         } else {
             unsignedData = try canonicalData(hello.unsigned)
         }
@@ -356,6 +392,7 @@ private struct NexusUnsignedHello: Codable {
     let timestampMilliseconds: Int64
     let appVersion: String?
     let features: [NexusConnectFeature]?
+    let pairingID: UUID?
 }
 
 /// Exact v1 signed shape. Re-encoding a legacy hello with new optional fields
@@ -372,6 +409,22 @@ private struct NexusLegacyUnsignedHello: Codable {
     let timestampMilliseconds: Int64
 }
 
+/// Exact signed shape emitted by protocol-v2 builds before multi-client host
+/// trust was added.
+private struct NexusPreMultiClientUnsignedHello: Codable {
+    let protocolMinimum: Int
+    let protocolMaximum: Int
+    let deviceID: UUID
+    let role: NexusNodeRole
+    let signingPublicKey: Data
+    let ephemeralPublicKey: Data
+    let nonce: Data
+    let respondingToNonce: Data?
+    let timestampMilliseconds: Int64
+    let appVersion: String?
+    let features: [NexusConnectFeature]?
+}
+
 extension NexusHandshakeHello {
     var advertisedProtocolRange: NexusProtocolVersionRange {
         .init(minimum: protocolMinimum, maximum: protocolMaximum)
@@ -383,6 +436,23 @@ extension NexusHandshakeHello {
 
     fileprivate var unsigned: NexusUnsignedHello {
         NexusUnsignedHello(
+            protocolMinimum: protocolMinimum,
+            protocolMaximum: protocolMaximum,
+            deviceID: deviceID,
+            role: role,
+            signingPublicKey: signingPublicKey,
+            ephemeralPublicKey: ephemeralPublicKey,
+            nonce: nonce,
+            respondingToNonce: respondingToNonce,
+            timestampMilliseconds: timestampMilliseconds,
+            appVersion: appVersion,
+            features: features?.sorted { $0.rawValue < $1.rawValue },
+            pairingID: pairingID
+        )
+    }
+
+    fileprivate var preMultiClientUnsigned: NexusPreMultiClientUnsignedHello {
+        NexusPreMultiClientUnsignedHello(
             protocolMinimum: protocolMinimum,
             protocolMaximum: protocolMaximum,
             deviceID: deviceID,

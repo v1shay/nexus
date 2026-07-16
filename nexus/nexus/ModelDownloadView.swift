@@ -216,12 +216,43 @@ private struct NexusConnectSetupView: View {
                         Button("Create one-time pairing code", action: controller.createPairingCode)
                         Button("Copy", action: controller.copyPairingCode)
                             .disabled(controller.pairingCode.isEmpty)
+                        Button("Refresh devices", action: controller.refreshAuthorizedClients)
                     }
                     if !controller.pairingCode.isEmpty {
                         Text(controller.pairingCode)
                             .font(.system(.caption2, design: .monospaced))
                             .textSelection(.enabled)
                             .lineLimit(2)
+                    }
+                    ForEach(controller.authorizedClients) { client in
+                        HStack(spacing: 8) {
+                            Circle()
+                                .fill(client.status == .authorized ? Color.green : (client.status == .revoked ? .red : .orange))
+                                .frame(width: 7, height: 7)
+                            if renamingNodeID == client.id {
+                                TextField("Device name", text: $renameText)
+                                    .textFieldStyle(.roundedBorder)
+                                    .frame(maxWidth: 210)
+                                    .onSubmit { saveClientRename(client.id) }
+                                Button("Save") { saveClientRename(client.id) }
+                                Button("Cancel") { renamingNodeID = nil }
+                            } else {
+                                VStack(alignment: .leading, spacing: 1) {
+                                    Text(client.displayName).font(.caption.weight(.medium))
+                                    Text(authorizedClientDetail(client)).font(.caption2).foregroundStyle(.secondary)
+                                }
+                                Spacer()
+                                if client.status != .revoked {
+                                    Button("Rename") {
+                                        renamingNodeID = client.id
+                                        renameText = client.displayName
+                                    }
+                                    Button("Revoke", role: .destructive) {
+                                        controller.revokeAuthorizedClient(pairingID: client.id)
+                                    }
+                                }
+                            }
+                        }
                     }
                 }
                 Text(controller.setupMessage.isEmpty
@@ -256,6 +287,21 @@ private struct NexusConnectSetupView: View {
     private func saveRename(_ nodeID: UUID) {
         controller.rename(nodeID: nodeID, to: renameText)
         renamingNodeID = nil
+    }
+
+    private func saveClientRename(_ pairingID: UUID) {
+        controller.renameAuthorizedClient(pairingID: pairingID, to: renameText)
+        renamingNodeID = nil
+    }
+
+    private func authorizedClientDetail(_ client: NexusAuthorizedClient) -> String {
+        var parts = [client.status.rawValue]
+        if let last = client.lastAuthenticatedAt {
+            parts.append("connected \(last.formatted(.relative(presentation: .numeric)))")
+        } else {
+            parts.append("not connected yet")
+        }
+        return parts.joined(separator: " · ")
     }
 
     private func nodeDetail(_ node: NexusPairedNode) -> String {

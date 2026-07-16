@@ -72,6 +72,81 @@ extension NexusGeometryTests {
         XCTAssertEqual(try roster.load().map(\.id), [imacID])
     }
 
+    func testHostTrustPersistsMultipleClientsAndRevokesOnlyOne() throws {
+        let secrets = NexusMemorySecretStore()
+        let trust = NexusHostTrustStore(secretStore: secrets)
+        let studioInvitation = try NexusPairingMaterial.fresh(pairingID: UUID())
+        let imacInvitation = try NexusPairingMaterial.fresh(pairingID: UUID())
+        try trust.registerInvitation(pairing: studioInvitation, displayName: "MacBook Air")
+        try trust.registerInvitation(pairing: imacInvitation, displayName: "Backup MacBook")
+        let firstClientID = UUID()
+        let secondClientID = UUID()
+        let firstKey = Data(repeating: 41, count: 32)
+        let secondKey = Data(repeating: 42, count: 32)
+        _ = try trust.authorize(
+            pairingID: studioInvitation.pairingID!,
+            clientDeviceID: firstClientID,
+            signingPublicKey: firstKey
+        )
+        _ = try trust.authorize(
+            pairingID: imacInvitation.pairingID!,
+            clientDeviceID: secondClientID,
+            signingPublicKey: secondKey
+        )
+
+        let restarted = NexusHostTrustStore(secretStore: secrets)
+        XCTAssertEqual(try restarted.load().filter { $0.status == .authorized }.count, 2)
+        XCTAssertEqual(
+            try restarted.pairing(for: studioInvitation.pairingID!)?.peerDeviceID,
+            firstClientID
+        )
+        XCTAssertEqual(
+            try restarted.pairing(for: imacInvitation.pairingID!)?.peerDeviceID,
+            secondClientID
+        )
+
+        try restarted.revoke(pairingID: studioInvitation.pairingID!)
+        XCTAssertNil(try restarted.pairing(for: studioInvitation.pairingID!))
+        XCTAssertNotNil(try restarted.pairing(for: imacInvitation.pairingID!))
+        XCTAssertThrowsError(try restarted.authorize(
+            pairingID: studioInvitation.pairingID!,
+            clientDeviceID: firstClientID,
+            signingPublicKey: firstKey
+        ))
+    }
+
+    func testPairingSelectorIsAuthenticatedAndLegacyV2HelloStillVerifies() throws {
+        let identity = NexusDeviceIdentity(
+            deviceID: UUID(),
+            signingPrivateKey: Curve25519.Signing.PrivateKey().rawRepresentation
+        )
+        let selected = try NexusPairingMaterial.fresh(pairingID: UUID())
+        let selectedHello = try NexusHandshake.makeHello(
+            identity: identity,
+            role: .client,
+            pairing: selected
+        ).hello
+        XCTAssertEqual(selectedHello.pairingID, selected.pairingID)
+        XCTAssertNoThrow(try NexusHandshake.verify(
+            selectedHello,
+            pairing: selected,
+            expectedRole: .client
+        ))
+
+        let earlyV2 = try NexusPairingMaterial.fresh()
+        let earlyV2Hello = try NexusHandshake.makeHello(
+            identity: identity,
+            role: .client,
+            pairing: earlyV2
+        ).hello
+        XCTAssertNil(earlyV2Hello.pairingID)
+        XCTAssertNoThrow(try NexusHandshake.verify(
+            earlyV2Hello,
+            pairing: earlyV2,
+            expectedRole: .client
+        ))
+    }
+
     func testProtocolNegotiationAllowsCompatibleAppVersionsAndLimitsFeatures() throws {
         let compatible = try NexusProtocolNegotiator.negotiate(
             localRange: .init(minimum: 1, maximum: 2),

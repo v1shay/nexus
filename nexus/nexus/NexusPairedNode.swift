@@ -325,6 +325,184 @@ final class NexusPairedNodeStore: @unchecked Sendable {
     }
 }
 
+enum NexusAuthorizedClientStatus: String, Codable, Sendable {
+    case pending
+    case authorized
+    case revoked
+}
+
+/// Non-secret host-side record for one client invitation. A pairing ID is not
+/// authority by itself; the corresponding 256-bit secret lives in a separate
+/// Keychain item and the client's public identity is pinned on first use.
+struct NexusAuthorizedClient: Codable, Equatable, Identifiable, Sendable {
+    let id: UUID
+    var clientDeviceID: UUID?
+    var pinnedPublicIdentityKey: Data?
+    var displayName: String
+    var createdAt: Date
+    var lastAuthenticatedAt: Date?
+    var status: NexusAuthorizedClientStatus
+}
+
+final class NexusHostTrustStore: @unchecked Sendable {
+    private struct Envelope: Codable {
+        var schemaVersion: Int
+        var clients: [NexusAuthorizedClient]
+    }
+
+    private let secretStore: NexusSecretStore
+    private let lock = NSRecursiveLock()
+    private let rosterAccount = "authorized-client-roster.host.v2"
+
+    init(secretStore: NexusSecretStore = NexusKeychainSecretStore()) {
+        self.secretStore = secretStore
+    }
+
+    func load() throws -> [NexusAuthorizedClient] {
+        try lock.withLock {
+            guard let data = try secretStore.data(for: rosterAccount) else { return [] }
+            return try NexusPayloadCoder.decoder.decode(Envelope.self, from: data).clients
+                .sorted { $0.displayName.localizedCaseInsensitiveCompare($1.displayName) == .orderedAscending }
+        }
+    }
+
+    func registerInvitation(
+        pairing: NexusPairingMaterial,
+        displayName: String = "Pending device"
+    ) throws {
+        try lock.withLock {
+            guard let pairingID = pairing.pairingID else {
+                throw NexusConnectError.authenticationFailed
+            }
+            var clients = try load()
+            let record = NexusAuthorizedClient(
+                id: pairingID,
+                clientDeviceID: pairing.peerDeviceID,
+                pinnedPublicIdentityKey: pairing.peerSigningPublicKey,
+                displayName: displayName,
+                createdAt: Date(),
+                lastAuthenticatedAt: nil,
+                status: pairing.peerDeviceID == nil ? .pending : .authorized
+            )
+            if let index = clients.firstIndex(where: { $0.id == pairingID }) {
+                guard clients[index].status != .revoked else {
+                    throw NexusConnectError.authenticationFailed
+                }
+                clients[index] = record
+            } else {
+                clients.append(record)
+            }
+            try secretStore.set(
+                try NexusPayloadCoder.encoder.encode(pairing),
+                for: pairingAccount(pairingID)
+            )
+            try save(clients)
+        }
+    }
+
+    func pairing(for pairingID: UUID) throws -> NexusPairingMaterial? {
+        try lock.withLock {
+            guard let record = try load().first(where: { $0.id == pairingID }),
+                  record.status != .revoked,
+                  let data = try secretStore.data(for: pairingAccount(pairingID)) else { return nil }
+            let pairing = try NexusPayloadCoder.decoder.decode(NexusPairingMaterial.self, from: data)
+            guard pairing.pairingID == pairingID else { throw NexusConnectError.identityMismatch }
+            return pairing
+        }
+    }
+
+    func activePairings() throws -> [NexusPairingMaterial] {
+        try lock.withLock {
+            try load().compactMap { client in
+                guard client.status != .revoked,
+                      let data = try secretStore.data(for: pairingAccount(client.id)) else { return nil }
+                return try NexusPayloadCoder.decoder.decode(NexusPairingMaterial.self, from: data)
+            }
+        }
+    }
+
+    @discardableResult
+    func authorize(
+        pairingID: UUID,
+        clientDeviceID: UUID,
+        signingPublicKey: Data,
+        defaultDisplayName: String = "Paired Mac"
+    ) throws -> NexusPairingMaterial {
+        try lock.withLock {
+            guard var pairing = try pairing(for: pairingID) else {
+                throw NexusConnectError.authenticationFailed
+            }
+            pairing = try pairing.pinning(
+                peerDeviceID: clientDeviceID,
+                peerSigningPublicKey: signingPublicKey
+            )
+            var clients = try load()
+            guard let index = clients.firstIndex(where: { $0.id == pairingID }),
+                  clients[index].status != .revoked else {
+                throw NexusConnectError.authenticationFailed
+            }
+            if let pinnedID = clients[index].clientDeviceID, pinnedID != clientDeviceID {
+                throw NexusConnectError.identityMismatch
+            }
+            if let pinnedKey = clients[index].pinnedPublicIdentityKey, pinnedKey != signingPublicKey {
+                throw NexusConnectError.identityMismatch
+            }
+            clients[index].clientDeviceID = clientDeviceID
+            clients[index].pinnedPublicIdentityKey = signingPublicKey
+            if clients[index].displayName == "Pending device" {
+                clients[index].displayName = defaultDisplayName
+            }
+            clients[index].lastAuthenticatedAt = Date()
+            clients[index].status = .authorized
+            try secretStore.set(
+                try NexusPayloadCoder.encoder.encode(pairing),
+                for: pairingAccount(pairingID)
+            )
+            try save(clients)
+            return pairing
+        }
+    }
+
+    func rename(pairingID: UUID, to name: String) throws {
+        try mutate(pairingID: pairingID) { client in
+            let cleaned = name.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !cleaned.isEmpty { client.displayName = cleaned }
+        }
+    }
+
+    func revoke(pairingID: UUID) throws {
+        try lock.withLock {
+            try mutate(pairingID: pairingID) { $0.status = .revoked }
+            try secretStore.delete(account: pairingAccount(pairingID))
+        }
+    }
+
+    private func mutate(
+        pairingID: UUID,
+        _ mutation: (inout NexusAuthorizedClient) throws -> Void
+    ) throws {
+        try lock.withLock {
+            var clients = try load()
+            guard let index = clients.firstIndex(where: { $0.id == pairingID }) else {
+                throw NexusConnectError.unavailable("authorized client was not found")
+            }
+            try mutation(&clients[index])
+            try save(clients)
+        }
+    }
+
+    private func save(_ clients: [NexusAuthorizedClient]) throws {
+        try secretStore.set(
+            try NexusPayloadCoder.encoder.encode(Envelope(schemaVersion: 2, clients: clients)),
+            for: rosterAccount
+        )
+    }
+
+    private func pairingAccount(_ pairingID: UUID) -> String {
+        "authorized-client.host.\(pairingID.uuidString.lowercased()).pairing.v2"
+    }
+}
+
 private extension NSRecursiveLock {
     func withLock<T>(_ operation: () throws -> T) rethrows -> T {
         lock()

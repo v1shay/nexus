@@ -301,6 +301,7 @@ actor NexusHostBackgroundJobRegistry {
 actor NexusConnectHostSession {
     private let transport: any NexusByteTransport
     private let vault: any NexusSessionCredentialProviding
+    private let trustStore: NexusHostTrustStore?
     private let executor: NexusHostServiceExecutor
     private let backgroundJobs: NexusHostBackgroundJobRegistry
     private var connection: NexusFramedConnection?
@@ -312,11 +313,13 @@ actor NexusConnectHostSession {
     init(
         transport: any NexusByteTransport,
         vault: any NexusSessionCredentialProviding = NexusIdentityVault(role: .studioHost),
+        trustStore: NexusHostTrustStore? = nil,
         executor: NexusHostServiceExecutor,
         backgroundJobs: NexusHostBackgroundJobRegistry = NexusHostBackgroundJobRegistry()
     ) {
         self.transport = transport
         self.vault = vault
+        self.trustStore = trustStore
         self.executor = executor
         self.backgroundJobs = backgroundJobs
     }
@@ -332,13 +335,34 @@ actor NexusConnectHostSession {
     }
 
     private func runAuthenticatedConnection() async throws {
-        guard var pairing = try vault.loadPairing() else {
-            throw NexusConnectError.unavailable("Studio host has not been paired")
-        }
         let identity = try vault.loadOrCreateIdentity()
         let framed = NexusFramedConnection(transport: transport)
         let requestData = try await framed.receivePayload(maximumBytes: NexusConnectProtocol.maximumControlFrameBytes)
         let request = try NexusPayloadCoder.decoder.decode(NexusHandshakeEnvelope.self, from: requestData)
+        var pairing: NexusPairingMaterial
+        if let pairingID = request.hello.pairingID, let trustStore {
+            guard let saved = try trustStore.pairing(for: pairingID) else {
+                throw NexusConnectError.authenticationFailed
+            }
+            pairing = saved
+        } else if let trustStore,
+                  let matched = try trustStore.activePairings().first(where: { candidate in
+                      (try? NexusHandshake.verify(
+                          request.hello,
+                          pairing: candidate,
+                          expectedRole: .client
+                      )) != nil
+                  }) {
+            // Early protocol-v2 clients did not send the selector. Match their
+            // HMAC against active per-client secrets without accepting an
+            // identity mismatch or weakening authentication.
+            pairing = matched
+        } else {
+            guard let legacy = try vault.loadPairing() else {
+                throw NexusConnectError.unavailable("this host has no matching pairing record")
+            }
+            pairing = legacy
+        }
         try NexusHandshake.verify(request.hello, pairing: pairing, expectedRole: .client)
         let negotiation = try NexusProtocolNegotiator.negotiate(
             remoteRange: request.hello.advertisedProtocolRange,
@@ -348,7 +372,15 @@ actor NexusConnectHostSession {
             peerDeviceID: request.hello.deviceID,
             peerSigningPublicKey: request.hello.signingPublicKey
         )
-        try vault.savePairing(pairing)
+        if let pairingID = pairing.pairingID, let trustStore {
+            pairing = try trustStore.authorize(
+                pairingID: pairingID,
+                clientDeviceID: request.hello.deviceID,
+                signingPublicKey: request.hello.signingPublicKey
+            )
+        } else {
+            try vault.savePairing(pairing)
+        }
         let pending = try NexusHandshake.makeHello(
             identity: identity,
             role: .studioHost,
@@ -474,6 +506,7 @@ final class NexusConnectHostListener: @unchecked Sendable {
     private let queue = DispatchQueue(label: "com.nexus.connect.listener", qos: .userInitiated)
     private let lock = NSLock()
     private let vault: any NexusSessionCredentialProviding
+    private let trustStore: NexusHostTrustStore?
     private let executor: NexusHostServiceExecutor
     private let backgroundJobs = NexusHostBackgroundJobRegistry()
     private var listener: NWListener?
@@ -481,9 +514,11 @@ final class NexusConnectHostListener: @unchecked Sendable {
 
     init(
         vault: any NexusSessionCredentialProviding = NexusIdentityVault(role: .studioHost),
+        trustStore: NexusHostTrustStore? = nil,
         executor: NexusHostServiceExecutor
     ) {
         self.vault = vault
+        self.trustStore = trustStore
         self.executor = executor
     }
 
@@ -534,6 +569,7 @@ final class NexusConnectHostListener: @unchecked Sendable {
                 let session = NexusConnectHostSession(
                     transport: transport,
                     vault: self.vault,
+                    trustStore: self.trustStore,
                     executor: self.executor,
                     backgroundJobs: self.backgroundJobs
                 )

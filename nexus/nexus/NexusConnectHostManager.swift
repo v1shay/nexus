@@ -140,6 +140,7 @@ struct NexusConnectHostManager: NexusPersistentHostManaging, @unchecked Sendable
 final class NexusConnectHostDaemon {
     private let manager: NexusConnectHostManager
     private let vault: NexusIdentityVault
+    private let trustStore: NexusHostTrustStore
     private var listener: NexusConnectHostListener?
     private var heartbeat: Task<Void, Never>?
 
@@ -149,6 +150,7 @@ final class NexusConnectHostDaemon {
     ) {
         self.manager = manager
         vault = NexusIdentityVault(store: secretStore, role: .studioHost)
+        trustStore = NexusHostTrustStore(secretStore: secretStore)
     }
 
     func start() async {
@@ -158,7 +160,11 @@ final class NexusConnectHostDaemon {
                 nodeID: identity.deviceID,
                 nodeName: Host.current().localizedName ?? "Nexus Host"
             )
-            let listener = NexusConnectHostListener(vault: vault, executor: executor)
+            let listener = NexusConnectHostListener(
+                vault: vault,
+                trustStore: trustStore,
+                executor: executor
+            )
             self.listener = listener
             writeStatus(nodeID: identity.deviceID, state: "starting", detail: nil)
             try await listener.start()
