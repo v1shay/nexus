@@ -10,6 +10,7 @@
 		156AB6BC30075C29006660E4 /* nexusApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 156AB6BB30075C29006660E4 /* nexusApp.swift */; };
 		156AB6BE30075C29006660E4 /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 156AB6BD30075C29006660E4 /* ContentView.swift */; };
 		A100000130075C29006660E4 /* ModelAggregatorView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A100000230075C29006660E4 /* ModelAggregatorView.swift */; };
+		A100000330075C29006660E4 /* SpeechTranscriber.swift in Sources */ = {isa = PBXBuildFile; fileRef = A100000430075C29006660E4 /* SpeechTranscriber.swift */; };
 		156AB6C030075C2A006660E4 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 156AB6BF30075C2A006660E4 /* Assets.xcassets */; };
 		156AB6C430075C2A006660E4 /* Preview Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 156AB6C330075C2A006660E4 /* Preview Assets.xcassets */; };
 		156AB6CE30075C2A006660E4 /* nexusTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 156AB6CD30075C2A006660E4 /* nexusTests.swift */; };
@@ -39,6 +40,7 @@
 		156AB6BB30075C29006660E4 /* nexusApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = nexusApp.swift; sourceTree = "<group>"; };
 		156AB6BD30075C29006660E4 /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
 		A100000230075C29006660E4 /* ModelAggregatorView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ModelAggregatorView.swift; sourceTree = "<group>"; };
+		A100000430075C29006660E4 /* SpeechTranscriber.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SpeechTranscriber.swift; sourceTree = "<group>"; };
 		156AB6BF30075C2A006660E4 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		156AB6C130075C2A006660E4 /* nexus.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = nexus.entitlements; sourceTree = "<group>"; };
 		156AB6C330075C2A006660E4 /* Preview Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = "Preview Assets.xcassets"; sourceTree = "<group>"; };
@@ -100,6 +102,7 @@
 				156AB6BB30075C29006660E4 /* nexusApp.swift */,
 				156AB6BD30075C29006660E4 /* ContentView.swift */,
 				A100000230075C29006660E4 /* ModelAggregatorView.swift */,
+				A100000430075C29006660E4 /* SpeechTranscriber.swift */,
 				156AB6BF30075C2A006660E4 /* Assets.xcassets */,
 				156AB6C130075C2A006660E4 /* nexus.entitlements */,
 				156AB6C230075C2A006660E4 /* Preview Content */,
@@ -265,6 +268,7 @@
 				156AB6BE30075C29006660E4 /* ContentView.swift in Sources */,
 				156AB6BC30075C29006660E4 /* nexusApp.swift in Sources */,
 				A100000130075C29006660E4 /* ModelAggregatorView.swift in Sources */,
+				A100000330075C29006660E4 /* SpeechTranscriber.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
