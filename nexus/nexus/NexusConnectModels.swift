@@ -188,6 +188,15 @@ struct NexusConnectMessage: Codable, Equatable, Sendable {
     }
 }
 
+struct NexusHandshakeEnvelope: Codable, Equatable, Sendable {
+    let sessionID: UUID
+    let hello: NexusHandshakeHello
+}
+
+struct NexusPingPayload: Codable, Equatable, Sendable {
+    let sentAtMilliseconds: Int64
+}
+
 enum NexusRuntimeKind: String, Codable, Sendable {
     case ollama
     case lmStudio
