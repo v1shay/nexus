@@ -2,6 +2,8 @@
 
 Nexus is a native macOS proof of concept for an agent that lives in the MacBook notch.
 
+The project builds on macOS 14 with Xcode 15. On macOS 26, build it with Xcode 26 or newer to compile and render SwiftUI's native Liquid Glass `glassEffect`; older SDKs compile the ultra-thin-material fallback instead.
+
 ## Included
 
 - A non-activating AppKit panel measured from the display's actual notch geometry—not a normal app window. It expands down from the notch on hover and collapses after the pointer leaves.

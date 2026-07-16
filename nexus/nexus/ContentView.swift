@@ -11,13 +11,7 @@ struct ContentView: View {
                 ListeningWings()
                     .transition(.opacity.combined(with: .scale(scale: 0.92, anchor: .top)))
             } else {
-                NotchSurface(cornerRadius: notch.isExpanded ? 29 : 10)
-                    .fill(.black.opacity(notch.isExpanded ? 0.82 : 1))
-                    .background(.ultraThinMaterial, in: NotchSurface(cornerRadius: notch.isExpanded ? 29 : 10))
-                    .overlay {
-                        NotchSurface(cornerRadius: notch.isExpanded ? 29 : 10)
-                            .stroke(.white.opacity(notch.isExpanded ? 0.18 : 0), lineWidth: 0.8)
-                    }
+                AdaptiveNotchGlass(isExpanded: notch.isExpanded)
 
                 if notch.isExpanded {
                     TranscriptContents()
@@ -33,6 +27,57 @@ struct ContentView: View {
         .onHover { notch.updateHover($0) }
         .animation(.easeInOut(duration: 0.18), value: notch.isListening)
         .animation(.easeInOut(duration: 0.22), value: notch.presentation)
+    }
+}
+
+private struct AdaptiveNotchGlass: View {
+    let isExpanded: Bool
+
+    @ViewBuilder
+    var body: some View {
+        #if compiler(>=6.2)
+        if #available(macOS 26.0, *) {
+            NativeLiquidGlassNotch(isExpanded: isExpanded)
+        } else {
+            LegacyNotchGlass(isExpanded: isExpanded)
+        }
+        #else
+        LegacyNotchGlass(isExpanded: isExpanded)
+        #endif
+    }
+}
+
+#if compiler(>=6.2)
+@available(macOS 26.0, *)
+private struct NativeLiquidGlassNotch: View {
+    let isExpanded: Bool
+
+    var body: some View {
+        let shape = NotchSurface(cornerRadius: isExpanded ? 29 : 10)
+        shape
+            .fill(.black.opacity(isExpanded ? 0.56 : 1))
+            .glassEffect(
+                .regular.tint(.black.opacity(isExpanded ? 0.42 : 0.72)).interactive(isExpanded),
+                in: shape
+            )
+            .overlay {
+                shape.stroke(.white.opacity(isExpanded ? 0.22 : 0), lineWidth: 0.8)
+            }
+    }
+}
+#endif
+
+private struct LegacyNotchGlass: View {
+    let isExpanded: Bool
+
+    var body: some View {
+        let shape = NotchSurface(cornerRadius: isExpanded ? 29 : 10)
+        shape
+            .fill(.black.opacity(isExpanded ? 0.82 : 1))
+            .background(.ultraThinMaterial, in: shape)
+            .overlay {
+                shape.stroke(.white.opacity(isExpanded ? 0.18 : 0), lineWidth: 0.8)
+            }
     }
 }
 
