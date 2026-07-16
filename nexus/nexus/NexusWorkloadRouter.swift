@@ -60,7 +60,7 @@ actor NexusWorkloadRouter: NexusWorkloadExecuting {
         case .localOnly:
             return try await local.events(for: request)
         case .remoteOnly:
-            guard let remote else { throw NexusConnectError.unavailable("Mac Studio is offline") }
+            guard let remote else { throw NexusConnectError.unavailable("the selected paired Mac is offline") }
             return try await remote.events(for: request)
         case .automatic:
             guard let remote else { return try await local.events(for: request) }

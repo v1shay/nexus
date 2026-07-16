@@ -166,11 +166,13 @@ enum NexusModelRoute: Codable, Equatable, Hashable, Identifiable, Sendable {
 }
 
 enum NexusDownloadTarget: Codable, Equatable, Hashable, Identifiable, Sendable {
+    case automatic
     case thisMac
     case pairedNode(UUID)
 
     var id: String {
         switch self {
+        case .automatic: "automatic"
         case .thisMac: "local"
         case .pairedNode(let id): "node:\(id.uuidString.lowercased())"
         }

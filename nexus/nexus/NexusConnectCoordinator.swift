@@ -470,6 +470,6 @@ final class NexusConnectCoordinator: ObservableObject {
                 }
             }
         }
-        if enabled { state = .offline(message: "Mac Studio is offline; Nexus is using this Mac.") }
+        if enabled { state = .offline(message: "The paired Mac is offline; Nexus is using this Mac.") }
     }
 }

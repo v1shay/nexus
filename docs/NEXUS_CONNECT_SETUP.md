@@ -1,116 +1,97 @@
 # Nexus Connect setup
 
-Nexus Connect uses Tailscale for transport and a separate app-level encrypted session for authorization and payload protection. Initial pairing is intentional; after that, connection, discovery, health checks, and reconnection happen whenever Nexus is open on both Macs.
+Nexus Connect uses Tailscale only as the private network path. Nexus also authenticates a pinned device identity, proves a separate per-device Keychain secret, negotiates a compatible protocol, and encrypts every application frame.
 
-## Requirements
+Pairing is a one-time operation. Restarting Nexus or either Mac does not require a new code.
 
-- The MacBook Air and Mac Studio are signed into the same Tailscale tailnet.
-- Both Macs run the same Nexus commit/build.
-- Nexus remains open on the Studio while the Air delegates work.
-- For model work, install Ollama or LM Studio on the Studio. Nexus starts the selected runtime when needed.
-- Keep the Studio awake and give it enough free disk for large models. A 120B+ quantized model can require tens of gigabytes of RAM and considerably more disk; the exact requirement depends on its quantization and context size.
+## Requirements and honest limits
 
-Nexus looks for the Tailscale CLI at `/opt/homebrew/bin/tailscale`, `/usr/local/bin/tailscale`, or inside `/Applications/Tailscale.app`.
+- Install Nexus on the MacBook and every Mac that will host work.
+- Sign all devices into the same Tailscale tailnet.
+- A host must be powered on, awake enough to accept network traffic, connected to Tailscale, and running the Nexus Connect LaunchAgent.
+- The visible Nexus window does **not** need to remain open on a host.
+- A sleeping, powered-off, offline, or never-installed Mac is shown as offline; Nexus cannot wake or reach it by pretending otherwise.
+- Compatible Nexus versions can connect even when their commits differ. A feature introduced by a newer protocol is disabled when necessary. Only a complete lack of protocol overlap requires an upgrade.
 
-## Build the same app on both Macs
+Nexus finds the Tailscale CLI in `/opt/homebrew/bin`, `/usr/local/bin`, or the Tailscale app bundle.
 
-From the repository root:
+## Build and run on each Mac
 
-```bash
-./scripts/build-nexus.sh
-open .build/Build/Products/Debug/nexus.app
-```
-
-To open the project in Xcode instead:
+Clone this private repository on the MacBook, Mac Studio, and iMac. From the repository root on each device:
 
 ```bash
-open nexus/nexus.xcodeproj
+./scripts/build-nexus.sh --run
 ```
 
-Select the `nexus` scheme and the local Mac, then press Run. The minimum deployment target remains macOS 14.2, preserving the existing app target.
+With Xcode, open `nexus/nexus.xcodeproj`, select the `nexus` scheme and the current Mac, and press Run.
 
-## Pair once
+## Pair the Mac Studio once
 
-1. On the Mac Studio, open Nexus's model window, expand **Nexus Connect**, and choose **This is the Mac Studio**.
-2. Press **Generate**, then **Copy**. Treat the `NX1...` value like a password; do not paste it into chat, logs, or source control.
-3. On the MacBook Air, open the same panel, choose **Use Mac Studio**, paste the code, and press **Pair**.
-4. Turn on **Enable automatically** on the Studio, then on the Air.
-5. The Studio should say `Studio host is ready on Tailscale`. The Air progresses through finding, connecting, and then `Connected to … · <RAM> GB · <latency> ms`.
+1. On the Studio, open the model window and expand **Nexus Connect**.
+2. Set **Role** to **Offer this Mac** and enable it.
+3. Click **Create one-time pairing code**, then **Copy**. The `NX2...` code is a secret; do not put it in chat, logs, or source control.
+4. On the MacBook, set the role to **Use paired Macs**, paste the code, and click **Pair device**.
+5. The Studio appears in the MacBook's saved device roster. The code is never needed again.
 
-The first authenticated connection pins each device's Ed25519 identity. A later identity mismatch is not silently accepted: press **Unpair** on both Macs and intentionally pair again.
+The Studio installs a per-user LaunchAgent named `na.nexus.connect-host`. Quitting or rebuilding the visible Studio UI does not stop the listener or an in-progress host-owned model download.
 
-## Normal use
+## Pair the iMac once
 
-- Leave Nexus open on both Macs. No Terminal window is opened and no reconnection action is required.
-- On the Air, select or search for a model in the existing model window. When Connect is ready, downloads run on the Studio and recommendations use Studio RAM.
-- Selecting the downloaded model makes it the current Nexus model. The existing notch response, token streaming, pet thinking animation, Markdown rendering, and Piper speech path remain unchanged; only the compute placement changes.
-- If the Studio sleeps or the network disappears, safe idempotent work falls back locally when the Air can satisfy it. Nexus reconnects in the background with bounded exponential backoff.
-- Remote-only operations such as a 120B model pull never silently download that model onto the Air.
+Repeat the same five steps on the iMac. Generate a new code on the iMac; do not reuse the Studio code. The MacBook then retains two independent records with different secrets and pinned identities.
 
-## Files and downloads
+The MacBook automatically reconnects to both hosts. Use **Rename**, **Reconnect**, or **Forget** on each saved device independently. **Forget** deletes only that relationship and prevents its old credential from reconnecting. On a host, **Revoke** performs the matching host-side revocation for an authorized client.
 
-The default Studio host exposes named, validated roots rather than arbitrary absolute paths:
+## Choose where models run and download
 
-- `home`: the Studio user's home folder
-- `downloads`: the Studio user's Downloads folder
-- `nexus`: `~/Nexus`
+The model window has two separate controls:
 
-Transfers use an authenticated transfer ID, bounded chunks, per-chunk SHA-256, a persistent resume manifest, whole-file SHA-256, and atomic final rename. Interrupted transfers continue when the caller reuses the same transfer ID. Internal transfer files reject symlinks.
+- **Run models on**: **Automatic**, **This Mac**, Mac Studio, or iMac.
+- **Download to**: **Automatic** or one or more checked concrete destinations. A model can be downloaded directly to both Studio and iMac in one operation.
 
-Remote URL downloads accept HTTPS only. Resumption uses HTTP Range when the origin supports it. Nexus does not claim to bond the Air and Studio connections; the speed benefit comes from placing the download and storage on the Studio when that path is faster.
+Automatic first chooses a healthy node that already owns the selected model. If a model must be placed, it chooses a healthy node with sufficient reported memory and disk. RAM is not added across computers: one model process runs on one selected Mac, so a 24 GB MacBook plus a 128 GB Studio does not become a single 152 GB memory pool.
 
-## Approved code and command work
+For a selected remote destination, model bytes travel from the model provider directly to that host's disk. They are never proxied through the MacBook. A remote pull never falls back to the MacBook.
 
-Nexus does not accept arbitrary shell strings, `zsh -c`, `sh -c`, or model-generated command text. A process request specifies an allowlisted executable ID, an argument array, an allowed working-directory token, a timeout, and an output limit.
+If a host has neither Ollama nor LM Studio, Nexus offers one confirmation on the MacBook and provisions the supported default Ollama runtime on that host. The headless helper does not display an invisible permission dialog. Existing Ollama or LM Studio installations are detected and used. Inventory refreshes after every pull or delete.
 
-The Air shows a **Run Once** confirmation. If accepted, the Studio issues a short-lived single-use token. The default executable IDs are `git`, `swift`, `xcodebuild`, `python3`, and `rg`; availability still depends on that exact binary existing on the Studio. Shell interpreters remain blocked even if misconfigured into the allowlist.
+## Status meanings
 
-## Recommended Tailscale policy
+| Status | Meaning |
+| --- | --- |
+| online | A fresh authenticated health check succeeded |
+| reconnecting | Nexus is retrying with bounded exponential backoff |
+| offline | Tailscale or the host helper cannot currently be reached |
+| incompatible | The app protocol ranges do not overlap; pairing is retained |
+| revoked | That credential is intentionally denied |
 
-Nexus rejects non-tailnet source addresses and still authenticates/encrypts at the app layer. Also restrict TCP port `49718` in your tailnet policy. A tag-based Grants example is:
+An identity-key mismatch is never accepted silently. Forget/revoke the old relationship and pair intentionally only after verifying why the host identity changed.
 
-```json
-{
-  "tagOwners": {
-    "tag:nexus-air": ["autogroup:admin"],
-    "tag:nexus-studio": ["autogroup:admin"]
-  },
-  "grants": [
-    {
-      "src": ["tag:nexus-air"],
-      "dst": ["tag:nexus-studio"],
-      "ip": ["tcp:49718"]
-    }
-  ]
-}
-```
+## Runtime and host diagnostics
 
-Merge this with your current policy rather than replacing unrelated rules. Apply the two tags to the intended devices in the Tailscale admin console.
-
-## Diagnostics
-
-Verify both peers and the current route:
+Check the tailnet and each route:
 
 ```bash
-/usr/local/bin/tailscale status
-/usr/local/bin/tailscale ping <studio-magic-dns-name>
+/opt/homebrew/bin/tailscale status
+/opt/homebrew/bin/tailscale ping <host-magic-dns-name>
 ```
 
-If your CLI is in `/opt/homebrew/bin`, use that path instead. A direct connection normally has the best latency. Peer relay or DERP remains encrypted but Nexus automatically uses smaller chunks and less bulk concurrency.
+Use `/usr/local/bin/tailscale` if that is where it is installed. Host state and logs are stored at:
 
-Common status messages:
+```text
+~/Library/Application Support/Nexus/ConnectHost/status.json
+~/Library/Application Support/Nexus/ConnectHost/host.log
+~/Library/Application Support/Nexus/ConnectHost/host-error.log
+```
 
-| Status | Meaning | Action |
-| --- | --- | --- |
-| Pairing code required | The selected role has no Keychain secret | Generate on one Mac and pair the other |
-| Finding your Mac Studio | Tailscale discovery is running | Confirm both peers are online |
-| Reconnecting | Health check or session failed | Nexus retries automatically; check Studio sleep/Tailscale |
-| Identity changed | The pinned device key differs | Unpair both sides and intentionally re-pair |
-| Studio host could not start | Port `49718` could not bind | Quit duplicate Studio builds, then reopen one Nexus instance |
+Inspect the LaunchAgent:
 
-## Verification commands
+```bash
+launchctl print gui/$(id -u)/na.nexus.connect-host
+```
 
-Run unit regressions:
+## Verification
+
+Run the app unit suite:
 
 ```bash
 xcodebuild test \
@@ -120,7 +101,7 @@ xcodebuild test \
   -only-testing:nexusTests
 ```
 
-Run signed UI and launch tests (do not disable code signing for the UI runner):
+Run UI tests with normal signing enabled:
 
 ```bash
 xcodebuild test \

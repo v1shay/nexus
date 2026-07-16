@@ -1,75 +1,88 @@
 # Nexus Connect unified API
 
-`NexusUnifiedWorkloadAPI` is the application-facing boundary. Feature code submits typed work and never selects a machine. `NexusWorkloadRouter` chooses the local executor or the authenticated Studio session according to the current mode and retry safety.
+`NexusConnectController.workloads` is the application-facing typed API. `NexusMultiNodeWorkloadRouter` owns placement, so callers do not manage sockets or remote clients.
 
-The live instance is available from `NexusConnectController.workloads`. Nexus Connect starts in `localOnly`, changes to automatic routing only for a paired Air, and returns to local-only routing when disabled or when this app is the Studio host.
+## Model routing
 
-## Stream any typed workload
+Set the persistent route once:
+
+```swift
+connect.setModelRoute(.automatic)
+connect.setModelRoute(.thisMac)
+connect.setModelRoute(.pairedNode(imacNodeID))
+```
+
+Inference streams through the route:
+
+```swift
+let answer = try await connect.response(model: model, prompt: prompt) { delta, accumulated in
+    await render(delta: delta, accumulated: accumulated)
+}
+```
+
+An explicit node route requires that exact node to be online. Automatic chooses an online owner of the requested model and retains safe pre-output local fallback.
+
+## Multi-target model placement
+
+The UI persists `NexusDownloadTarget.automatic` or a set of concrete targets. Automatic resolves to one concrete healthy destination before work starts; persisted placement is never vague. Remote pulls address a concrete node and never fall back:
+
+```swift
+try await connect.pullModel(model, on: studioNodeID) { progress in
+    await updateStudio(progress)
+}
+```
+
+`ModelDownloadViewModel` runs independent pulls concurrently when multiple targets are checked. Each host downloads directly to its own disk. Placement records and the node inventory stay separate, so a model installed on Studio is not falsely marked local or present on iMac.
+
+Host runtime operations are also node-specific:
+
+```swift
+let inventory = try await connect.runtimeInventory(on: imacNodeID)
+
+let provisioned = try await connect.provisionDefaultRuntime(
+    on: imacNodeID,
+    preferred: .ollama,
+    userConfirmed: true
+)
+
+try await connect.deleteModel(model, on: imacNodeID)
+```
+
+Only call provisioning after a visible user confirmation. Unsupported runtime-management features produce a version-specific message while other negotiated features remain usable.
+
+## Generic typed work
 
 ```swift
 let request = try NexusWorkloadRequest(
-    kind: .agent,
+    kind: .inference,
     priority: .interactive,
     retrySafety: .idempotent,
-    payload: NexusAgentPayload(
+    payload: NexusInferencePayload(
         runtime: .ollama,
         model: "qwen3:30b",
-        instructions: "Review this change",
-        context: [.init(role: "user", content: patch)],
-        maximumSteps: 8
+        messages: [.init(role: "user", content: "Explain this patch")],
+        temperature: nil,
+        maximumTokens: nil
     )
 )
 
 let stream = try await connect.workloads.events(for: request)
 for try await event in stream {
-    // token, progress, stdout/stderr, result, and terminal events
+    // accepted, token, progress, result, completed, or a typed failure
 }
 ```
 
-Every request has a UUID, priority, retry classification, and typed Codable payload. Concurrent request events may interleave on one encrypted connection, while events within a request remain sequenced.
-
-## High-level operations
-
-The actor provides direct methods for:
-
-- `recognizeText(imageData:languages:)`
-- `index(rootID:relativePaths:replaceExisting:)`
-- `searchIndex(query:limit:)`
-- `listFiles(in:recursive:maximumEntries:)`
-- `uploadFile(from:to:transferID:onProgress:)`
-- `downloadFile(from:to:transferID:onProgress:)`
-- `downloadOnStudio(sourceURL:destination:expectedSHA256:transferID:onProgress:)`
-- `requestProcessApproval(executableID:validFor:)`
-- `runApprovedProcess(_:)`
-
-Reuse a transfer UUID after a reconnect to resume safely:
-
-```swift
-let transferID = persistedTransferID
-try await connect.workloads.uploadFile(
-    from: localURL,
-    to: .init(rootID: "nexus", relativePath: "workspace/archive.bin"),
-    transferID: transferID
-) { progress in
-    await updateProgress(progress.fraction)
-}
-```
-
-`NexusConnectController.runApprovedProcess(...)` is the preferred UI entry point for command work because it presents the intentional **Run Once** confirmation before obtaining the Studio token.
+Requests have stable UUIDs, priorities, retry classifications, and bounded Codable payloads. Events for concurrent requests may interleave; each request's event sequence remains ordered.
 
 ## Routing and replay rules
 
-- Safe idempotent operations can fall back only before any substantive remote event is delivered.
-- Resumable operations retain their partial state and transfer ID; they are not redirected to the wrong machine.
-- `neverReplay` process work is never silently retried after an uncertain remote result.
-- Remote model pulls bypass local fallback so a very large model cannot accidentally fill the Air.
-- Terminal remote failures surface as typed errors; cancellation sends an explicit request cancel frame.
+- Explicit node routes are never silently replaced with a different node.
+- Automatic safe idempotent work can fall back only before substantive remote output.
+- Resumable operations retain their request/transfer identity and are not redirected.
+- `neverReplay` operations are never repeated after an uncertain result.
+- Remote model pulls and runtime provisioning do not fall back to This Mac.
+- Cancellation sends an explicit request-cancel frame.
 
-## Adding a workload
+## Existing high-level operations
 
-1. Add a capability and workload kind in `NexusConnectModels.swift`.
-2. Define a bounded Codable request/result payload with no arbitrary command or absolute-path fields.
-3. Add a policy-checked host handler in `NexusConnectHostServices.swift`.
-4. Decide its retry classification and fallback eligibility in `NexusWorkloadRouter.swift`.
-5. Add deterministic success, cancellation, malformed-input, authentication, and policy-negative tests.
-6. Preserve unknown-field tolerance for additive protocol changes; bump the protocol major version for breaking changes.
+The existing unified actor also exposes OCR, index/search, named-root files, resumable transfers, host-side HTTPS downloads, and intentionally approved structured processes. These are existing capabilities, not an agent harness or workflow engine. Their security contract remains: typed payloads, canonical named roots, bounded I/O, allowlisted executables, argument arrays, and no shell interpreter.

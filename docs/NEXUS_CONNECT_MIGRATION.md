@@ -1,101 +1,71 @@
-# Nexus Connect migration and rollback plan
+# Nexus Connect v2 migration and rollback
 
-Nexus Connect is introduced in opt-in stages. No stage rewrites existing model records or requires a Studio to keep using Nexus locally.
+This migration is additive. It preserves local-only Nexus, existing `LocalModel` values, notch behavior, and legacy Connect credentials while replacing the single-peer controller behind them.
 
-Implementation baseline: `ac8a5c4` (`Add battery status and quick notch dismiss`). Each stage below was committed and pushed before the next stage.
+## Automatic migration
 
-## Stage 0: pre-Connect baseline
+On first v2 launch:
 
-- Record the clean regression baseline.
-- Preserve all current `UserDefaults` keys and the `LocalModel` Codable layout.
-- Treat every existing installed model as local.
+1. Existing local model records remain unchanged.
+2. A legacy pinned client pairing is imported into `NexusPairedNodeStore` when its peer identity is known.
+3. The old pairing account is retained until the new roster connection succeeds, keeping rollback possible.
+4. Saved nodes are marked reconnecting and checked independently.
+5. Existing model installations are reconciled from the local runtimes and each authenticated host inventory.
+6. The old `shouldUseStudio` property remains as a source-compatibility shim; new code uses `NexusModelRoute` and `NexusDownloadTarget`.
 
-Rollback: checkout the baseline commit. No data conversion is involved.
+No migration deletes models or pairing material automatically.
 
-## Stage 1: dormant foundation
+## Rolling upgrades
 
-- Ship protocol, security, framing, policy, and router types without starting discovery.
-- Keep `ModelDownloadViewModel` constructed with its existing local managers.
+Upgrade hosts and the MacBook in any order. Version and feature negotiation allows protocol overlap instead of comparing Git commits.
 
-Rollback: remove the new source files. Existing code and data are untouched.
+- An older compatible host can continue inference and existing pulls.
+- The UI disables remote runtime provisioning/deletion when the host did not negotiate those capabilities.
+- A new host accepts early-v2 clients that lack the signed pairing selector by safely matching their HMAC against active per-client secrets.
+- An incompatible host remains saved and is shown incompatible until upgraded.
 
-Implementation: architecture review `193fa97`; secure dormant foundation `585bea2`.
+The background helper is intentionally not killed merely because the UI was rebuilt: it may own a multi-hour download. A normal host restart launches the updated executable through launchd and saved clients reconnect without pairing again.
 
-## Stage 2: discovery and health
+## Checkpoints
 
-- Start read-only Tailscale peer discovery when Nexus opens.
-- Do not route work until a paired host authenticates and reports healthy.
-- Persist only the pinned Studio ID and user-visible connection preferences.
+| Commit | State |
+| --- | --- |
+| `ac8a5c4` | Last pre-Connect app |
+| `585bea2` | Original secure protocol foundation |
+| `2385798` | Discovery and reconnect lifecycle |
+| `05d0ed2` | Persistent LaunchAgent host and host-owned downloads |
+| `3fda246` | Durable paired-node roster and protocol negotiation |
+| `17448b3` | Concurrent multi-node routing |
+| `984e2b8` | Per-node runtime management and multi-target model placement |
+| `79dc9fa` | Per-client host trust and revocation |
 
-Rollback: disable Nexus Connect through its feature setting or return to Stage 1. Local execution is unaffected.
+## Rollback
 
-Implementation: `2385798`.
-
-## Stage 3: paired Studio host
-
-- Run the version-matched Nexus app on the Studio and select its Studio host role after one explicit setup confirmation.
-- Store pairing and private key material in each machine's Keychain.
-- Bind the host to the Nexus Connect port and reject non-tailnet or unauthenticated clients.
-
-Rollback: disable Connect or quit Nexus on the Studio. Press **Unpair** to remove the role-specific Keychain pairing secret; no local model data is deleted.
-
-Implementation: host services `19e7695`; authenticated sessions `ba3ede3`.
-
-## Stage 4: remote placement
-
-- Record placement separately from `LocalModel` so old decoders remain valid.
-- Prefer Studio for workloads it alone can satisfy or when scoring predicts a material win.
-- Keep the local executor as the retry/fallback path.
-
-Rollback: set all placements to local or disable remote routing. Model metadata remains readable by old releases.
-
-Implementation: `2c8188d`. Studio model IDs use the additive `nexus.connect.studio-model-ids` preference; the existing `LocalModel` Codable layout and local keys remain unchanged.
-
-## Stage 5: transfers and expanded capabilities
-
-- Enable resumable files, remote downloads, OCR, indexing, and explicitly authorized structured processes.
-- Keep each capability independently switchable and deny-by-default.
-
-Rollback: revoke individual capabilities without disabling inference or local Nexus.
-
-Implementation: bounded/resumable unified API `da4418a`; single-use structured-process approval `69b0767`; route-aware transfer concurrency `d729747`; operational setup follows as the final checkpoint.
-
-## Commit-level rollback
-
-For inspection without changing your working branch:
+To inspect a checkpoint without changing the main branch:
 
 ```bash
 git switch --detach <commit>
 ```
 
-Useful checkpoints:
+Return with:
 
-| Commit | State |
-| --- | --- |
-| `ac8a5c4` | Last pre-Connect app |
-| `585bea2` | Security/protocol types only |
-| `2385798` | Discovery and reconnect lifecycle |
-| `19e7695` | Studio host services |
-| `ba3ede3` | Authenticated multiplexed sessions/router |
-| `2c8188d` | Model UI and app lifecycle integration |
-| `da4418a` | Resumable transfers and unified workload API |
-| `69b0767` | Single-use approval for structured remote tasks |
-| `d729747` | Route-aware bulk-transfer concurrency |
+```bash
+git switch main
+```
 
-Return to the current branch with `git switch main`. Do not delete `UserDefaults` or model directories to roll back; disabling Nexus Connect is sufficient.
+Disabling Nexus Connect is sufficient to retain local-only behavior. Do not delete `UserDefaults`, Keychain items, or model directories as part of rollback.
 
-## Versioning rules
+If deliberately returning to an old single-peer build, it can use its legacy Keychain pairing but cannot display or route the additional v2 nodes. Returning to the current build restores the durable roster.
 
-- The client and host advertise a supported protocol range.
-- Additive fields use Codable defaults and are ignored by older compatible peers.
-- Breaking wire changes require a new protocol major version and a side-by-side migration period.
-- The app never silently downgrades cryptography, pairing requirements, path restrictions, or process policy.
+## Validation gates
 
-## Validation gates for every stage
+Every v2 checkpoint must pass:
 
-1. `git diff --check` passes.
-2. New deterministic unit tests pass.
-3. The complete existing `nexusTests` suite passes.
-4. The app target builds for macOS 14.2 with code signing disabled.
-5. Security-negative tests cover malformed frames, authentication failure, replay, path escape, policy denial, and oversized input as applicable.
-6. The stage is committed and pushed before the next stage begins.
+1. `git diff --check`.
+2. App target build for macOS 14.2.
+3. Complete `nexusTests` regression suite.
+4. Pairing persistence and selective-revocation tests.
+5. Studio+iMac concurrent reconnect and exact endpoint matching tests.
+6. Compatible/incompatible protocol-negotiation tests.
+7. Persistent-host and host-owned remote-download tests.
+8. Per-node inventory, routing, runtime-confirmation, and deletion tests.

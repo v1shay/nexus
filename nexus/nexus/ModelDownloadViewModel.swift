@@ -6,6 +6,7 @@ struct RemoteRuntimeInstallRequest: Identifiable, Equatable {
     let model: LocalModel
     let nodeIDs: [UUID]
     let deviceNames: [String]
+    let targets: Set<NexusDownloadTarget>
 }
 
 @MainActor
@@ -35,6 +36,7 @@ final class ModelDownloadViewModel: ObservableObject {
     private var installedModelRecords: [String: LocalModel] = [:]
     private var placements: [String: Set<NexusDownloadTarget>] = [:]
     private var targetProgress: [String: [NexusDownloadTarget: ModelDownloadProgress]] = [:]
+    private var pendingResolvedTargets: [String: Set<NexusDownloadTarget>] = [:]
     private let installedDefaultsKey = "nexus.installed-model-ids"
     private let installedModelsDefaultsKey = "nexus.installed-model-records"
     private let activeModelDefaultsKey = "nexus.active-model"
@@ -138,6 +140,29 @@ final class ModelDownloadViewModel: ObservableObject {
     func download(_ model: LocalModel) {
         guard downloadTasks[model.id] == nil, !(states[model.id]?.isActive ?? false) else { return }
         let targets = selectedDownloadTargets
+        if targets.contains(.automatic), let connect {
+            states[model.id] = .preparing("Choosing the best available Mac…")
+            let task = Task { [weak self] in
+                guard let self else { return }
+                do {
+                    let resolved = try await connect.automaticDownloadTarget(
+                        for: model,
+                        localHasModel: placements[model.id]?.contains(.thisMac) == true
+                    )
+                    downloadTasks[model.id] = nil
+                    beginDownload(model, targets: [resolved])
+                } catch {
+                    states[model.id] = .failed(error.localizedDescription)
+                    downloadTasks[model.id] = nil
+                }
+            }
+            downloadTasks[model.id] = task
+            return
+        }
+        beginDownload(model, targets: targets)
+    }
+
+    private func beginDownload(_ model: LocalModel, targets: Set<NexusDownloadTarget>) {
         if let connect,
            let offline = targets.compactMap({ target -> NexusPairedNode? in
                guard case .pairedNode(let id) = target else { return nil }
@@ -147,6 +172,7 @@ final class ModelDownloadViewModel: ObservableObject {
             return
         }
         if targets.contains(.thisMac), model.backend == .ollama && ollama.executableURL() == nil {
+            pendingResolvedTargets[model.id] = targets
             pendingOllamaInstall = model
             return
         }
@@ -159,7 +185,8 @@ final class ModelDownloadViewModel: ObservableObject {
             pendingRemoteRuntimeInstall = .init(
                 model: model,
                 nodeIDs: missing,
-                deviceNames: missing.compactMap(nodeName)
+                deviceNames: missing.compactMap(nodeName),
+                targets: targets
             )
             return
         }
@@ -169,13 +196,14 @@ final class ModelDownloadViewModel: ObservableObject {
     func installOllamaAndContinue() {
         guard let model = pendingOllamaInstall else { return }
         pendingOllamaInstall = nil
-        startDownload(model, targets: selectedDownloadTargets, installOllamaFirst: true)
+        let targets = pendingResolvedTargets.removeValue(forKey: model.id) ?? selectedDownloadTargets
+        startDownload(model, targets: targets, installOllamaFirst: true)
     }
 
     func installRemoteRuntimeAndContinue() {
         guard let request = pendingRemoteRuntimeInstall else { return }
         pendingRemoteRuntimeInstall = nil
-        let targets = selectedDownloadTargets
+        let targets = request.targets
         states[request.model.id] = .preparing("Installing Ollama on selected host\(request.nodeIDs.count == 1 ? "" : "s")…")
         let task = Task { [weak self] in
             guard let self, let connect else { return }
@@ -296,6 +324,8 @@ final class ModelDownloadViewModel: ObservableObject {
                         group.addTask { [weak self, ollama, lmStudio, connect] in
                             guard let self else { throw CancellationError() }
                             switch target {
+                            case .automatic:
+                                throw NexusConnectError.requestFailed("Automatic target was not resolved before download")
                             case .thisMac:
                                 switch model.backend {
                                 case .ollama:
@@ -429,6 +459,7 @@ final class ModelDownloadViewModel: ObservableObject {
 
     private func targetName(_ target: NexusDownloadTarget) -> String {
         switch target {
+        case .automatic: "Automatic"
         case .thisMac: "This Mac"
         case .pairedNode(let id): nodeName(id) ?? "Forgotten device"
         }

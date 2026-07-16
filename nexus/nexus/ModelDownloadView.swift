@@ -116,6 +116,8 @@ private struct NexusModelRoutingView: View {
             .frame(maxWidth: 310)
 
             Menu {
+                Toggle("Automatic", isOn: targetBinding(.automatic))
+                Divider()
                 Toggle("This Mac", isOn: targetBinding(.thisMac))
                 Divider()
                 ForEach(controller.pairedNodes) { node in
@@ -144,6 +146,7 @@ private struct NexusModelRoutingView: View {
         if count > 1 { return "Download to \(count) Macs" }
         guard let target = controller.downloadTargets.first else { return "Download target" }
         switch target {
+        case .automatic: return "Download automatically"
         case .thisMac: return "Download to This Mac"
         case .pairedNode(let id):
             let name = controller.pairedNodes.first(where: { $0.id == id })?.displayName ?? "paired Mac"

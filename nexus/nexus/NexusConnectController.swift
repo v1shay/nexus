@@ -26,12 +26,12 @@ enum NexusConnectDisplayState: Equatable, Sendable {
         switch self {
         case .off: "Off — Nexus is using this Mac"
         case .needsPairing: "Pairing code required"
-        case .discovering: "Finding your Mac Studio…"
+        case .discovering: "Finding saved Macs…"
         case .connecting(let name): "Connecting to \(name)…"
         case .ready(let name, let memoryGB, let rtt):
             if let rtt { "Connected to \(name) · \(memoryGB) GB · \(Int(rtt.rounded())) ms" }
             else { "Connected to \(name) · \(memoryGB) GB" }
-        case .hosting: "Studio host is ready on Tailscale"
+        case .hosting: "This Mac's background host is ready on Tailscale"
         case .reconnecting(let detail): "Reconnecting · \(detail)"
         case .failed(let detail): detail
         }
@@ -286,7 +286,10 @@ final class NexusConnectController: ObservableObject {
     }
 
     func setDownloadTarget(_ target: NexusDownloadTarget, selected: Bool) {
-        if selected {
+        if target == .automatic, selected {
+            downloadTargets = [.automatic]
+        } else if selected {
+            downloadTargets.remove(.automatic)
             downloadTargets.insert(target)
         } else {
             downloadTargets.remove(target)
@@ -300,6 +303,32 @@ final class NexusConnectController: ObservableObject {
     func useOnlyDownloadTarget(_ target: NexusDownloadTarget) {
         downloadTargets = [target]
         persistDownloadTargets()
+    }
+
+    func automaticDownloadTarget(
+        for model: LocalModel,
+        localHasModel: Bool
+    ) async throws -> NexusDownloadTarget {
+        if localHasModel { return .thisMac }
+        let descriptor = NexusModelDescriptor(
+            runtime: model.backend == .ollama ? .ollama : .lmStudio,
+            identifier: model.identifier
+        )
+        if let nodeID = await router.automaticNode(
+            for: descriptor,
+            minimumRAMGB: model.minimumRAMGB
+        ) {
+            return .pairedNode(nodeID)
+        }
+        let requiredMemory = UInt64(max(1, model.minimumRAMGB)) * 1_073_741_824
+        let requiredDisk = Int64(max(4, model.minimumRAMGB)) * 1_073_741_824
+        let localMemory = ProcessInfo.processInfo.physicalMemory
+        let fileSystem = try? FileManager.default.attributesOfFileSystem(forPath: NSHomeDirectory())
+        let localDisk = (fileSystem?[.systemFreeSize] as? NSNumber)?.int64Value ?? 0
+        guard localMemory >= requiredMemory, localDisk >= requiredDisk else {
+            throw NexusConnectError.unavailable("No online paired Mac or this Mac has enough reported memory and free disk for \(model.name).")
+        }
+        return .thisMac
     }
 
     func createPairingCode() {

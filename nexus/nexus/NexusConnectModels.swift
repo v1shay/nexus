@@ -561,9 +561,9 @@ enum NexusConnectError: LocalizedError, Equatable {
     var errorDescription: String? {
         switch self {
         case .unavailable(let detail): "Nexus Connect is unavailable: \(detail)"
-        case .unsupportedProtocol: "The Mac Studio is running an incompatible Nexus Connect protocol."
+        case .unsupportedProtocol: "The paired Mac is running an incompatible Nexus Connect protocol."
         case .authenticationFailed: "Nexus Connect could not authenticate the paired device."
-        case .identityMismatch: "The paired Mac Studio identity changed. Re-pair before connecting."
+        case .identityMismatch: "The paired Mac identity changed. Re-pair before connecting."
         case .handshakeExpired: "The Nexus Connect handshake expired."
         case .replayDetected: "Nexus Connect rejected a replayed message."
         case .malformedFrame: "Nexus Connect received a malformed frame."

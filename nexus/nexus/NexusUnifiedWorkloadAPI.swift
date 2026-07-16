@@ -92,7 +92,7 @@ struct NexusStructuredProcessResult: Equatable, Sendable {
 }
 
 /// The application-facing workload boundary. Callers describe work, never a
-/// machine; the injected router decides whether it runs locally or on Studio.
+/// machine; the injected router decides whether it runs locally or on a paired host.
 actor NexusUnifiedWorkloadAPI {
     typealias ProgressHandler = @Sendable (NexusTransferProgress) async -> Void
 
@@ -265,12 +265,12 @@ actor NexusUnifiedWorkloadAPI {
         )
         if remote.exists, remote.isPartialTransfer != true,
            remote.size == finalSize, remote.sha256 == finalDigest {
-            await onProgress(.init(completedBytes: finalSize, totalBytes: finalSize, status: "Already on Mac Studio"))
+            await onProgress(.init(completedBytes: finalSize, totalBytes: finalSize, status: "Already on paired Mac"))
             return
         }
         var offset = remote.isPartialTransfer == true ? remote.size : 0
         guard offset >= 0, offset <= finalSize else {
-            throw NexusConnectError.requestFailed("Studio returned an invalid resume offset")
+            throw NexusConnectError.requestFailed("The paired host returned an invalid resume offset")
         }
         let handle = try FileHandle(forReadingFrom: source)
         defer { try? handle.close() }
@@ -302,7 +302,7 @@ actor NexusUnifiedWorkloadAPI {
             )
             try await drain(request)
             offset += Int64(data.count)
-            await onProgress(.init(completedBytes: offset, totalBytes: finalSize, status: "Sending to Mac Studio"))
+            await onProgress(.init(completedBytes: offset, totalBytes: finalSize, status: "Sending to paired Mac"))
         } while offset < finalSize
     }
 
@@ -332,7 +332,7 @@ actor NexusUnifiedWorkloadAPI {
     ) async throws {
         let remote = try await fileStat(source, includeSHA256: true)
         guard remote.exists, !remote.isDirectory, let finalDigest = remote.sha256 else {
-            throw NexusConnectError.requestFailed("The Studio file is unavailable")
+            throw NexusConnectError.requestFailed("The paired host file is unavailable")
         }
         if FileManager.default.fileExists(atPath: destination.path),
            (try? Self.fileSHA256(destination)) == finalDigest {
@@ -362,15 +362,15 @@ actor NexusUnifiedWorkloadAPI {
             let result = try await readFile(source, offset: offset, maximumLength: chunkBytes)
             guard result.offset == offset, !result.data.isEmpty,
                   result.chunkSHA256 == Data(SHA256.hash(data: result.data)) else {
-                throw NexusConnectError.requestFailed("Studio returned an invalid transfer chunk")
+                throw NexusConnectError.requestFailed("The paired host returned an invalid transfer chunk")
             }
             try handle.write(contentsOf: result.data)
             try handle.synchronize()
             offset += Int64(result.data.count)
-            await onProgress(.init(completedBytes: offset, totalBytes: remote.size, status: "Receiving from Mac Studio"))
+            await onProgress(.init(completedBytes: offset, totalBytes: remote.size, status: "Receiving from paired Mac"))
         }
         guard try Self.fileSHA256(partial) == finalDigest else {
-            throw NexusConnectError.requestFailed("Downloaded file checksum did not match the Studio")
+            throw NexusConnectError.requestFailed("Downloaded file checksum did not match the paired host")
         }
         if FileManager.default.fileExists(atPath: destination.path) {
             try FileManager.default.removeItem(at: destination)
@@ -429,7 +429,7 @@ actor NexusUnifiedWorkloadAPI {
                 result = try event.decodePayload(NexusDownloadResultPayload.self)
             }
         }
-        guard let result else { throw NexusConnectError.requestFailed("Studio download returned no artifact") }
+        guard let result else { throw NexusConnectError.requestFailed("The paired host download returned no artifact") }
         return result
     }
 

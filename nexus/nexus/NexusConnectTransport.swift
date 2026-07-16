@@ -55,7 +55,7 @@ final class NexusNWConnectionTransport: NexusByteTransport, @unchecked Sendable 
                 } else if let data, !data.isEmpty {
                     continuation.resume(returning: data)
                 } else if complete {
-                    continuation.resume(throwing: NexusConnectError.unavailable("Mac Studio closed the connection"))
+                    continuation.resume(throwing: NexusConnectError.unavailable("the paired Mac closed the connection"))
                 } else {
                     continuation.resume(throwing: NexusConnectError.unavailable("empty network read"))
                 }

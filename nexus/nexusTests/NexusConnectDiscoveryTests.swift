@@ -91,6 +91,49 @@ extension NexusGeometryTests {
         coordinator.stop()
     }
 
+    @MainActor
+    func testHostRestartReconnectsWithoutAnotherPairingCode() async throws {
+        let nodeID = UUID()
+        let node = NexusPairedNode(
+            id: nodeID,
+            pinnedPublicIdentityKey: Data(repeating: 9, count: 32),
+            displayName: "Restarting iMac",
+            endpoint: "restarting-imac.ts.net"
+        )
+        let peer = NexusTailscalePeer(
+            id: "restart-imac", nodeKey: "nodekey:restart", hostName: "Restarting iMac",
+            dnsName: "restarting-imac.ts.net.", operatingSystem: "macOS", addresses: [],
+            online: true, active: true, relayRegion: nil, currentEndpoint: nil,
+            receivedBytes: 0, transmittedBytes: 0
+        )
+        let store = NexusPairedNodeStore(secretStore: NexusMemorySecretStore())
+        try store.upsert(node)
+        let session = NexusRestartingManagedSessionStub(
+            health: Self.multiNodeHealth(id: nodeID, name: node.displayName)
+        )
+        let coordinator = NexusPairedNodeCoordinator(
+            discovery: NexusMultiNodeDiscoveryStub(peers: [peer]),
+            roster: store,
+            reconnectPolicy: .init(
+                initialDelaySeconds: 0.01,
+                maximumDelaySeconds: 0.02,
+                multiplier: 2,
+                jitterFraction: 0
+            ),
+            healthIntervalSeconds: 0.05,
+            sessionFactory: { _ in session }
+        )
+
+        coordinator.start(nodes: [node])
+        try await Task.sleep(nanoseconds: 170_000_000)
+
+        let connectionCount = await session.connectionCount()
+        XCTAssertGreaterThanOrEqual(connectionCount, 2)
+        XCTAssertEqual(coordinator.nodes.first?.status, .online)
+        XCTAssertEqual(try store.load().count, 1, "reconnect must retain the original pairing roster")
+        coordinator.stop()
+    }
+
     private static func multiNodeHealth(id: UUID, name: String) -> NexusNodeHealth {
         .init(
             nodeID: id, nodeName: name, hostVersion: "2.1", protocolMinimum: 1, protocolMaximum: 2,
@@ -385,4 +428,46 @@ private actor NexusManagedSessionStub: NexusManagedRemoteSession {
     }
 
     func cancel(requestID: UUID) async {}
+}
+
+private actor NexusRestartingManagedSessionStub: NexusManagedRemoteSession {
+    let currentHealth: NexusNodeHealth
+    private var connections = 0
+    private var hasSimulatedRestart = false
+
+    init(health: NexusNodeHealth) { currentHealth = health }
+
+    func connect(to peer: NexusTailscalePeer) async throws -> NexusNodeHealth {
+        connections += 1
+        return currentHealth
+    }
+
+    func health() async throws -> NexusNodeHealth {
+        if !hasSimulatedRestart {
+            hasSimulatedRestart = true
+            throw NexusConnectError.unavailable("host restarted")
+        }
+        return currentHealth
+    }
+
+    func disconnect() async {}
+
+    func events(for request: NexusWorkloadRequest) async throws -> AsyncThrowingStream<NexusWorkloadEvent, Error> {
+        AsyncThrowingStream { continuation in
+            if request.kind == .modelList,
+               let event = try? NexusWorkloadEvent(
+                requestID: request.id,
+                kind: .result,
+                sequence: 0,
+                isFinal: true,
+                payload: NexusModelInventoryPayload(models: [])
+               ) {
+                continuation.yield(event)
+            }
+            continuation.finish()
+        }
+    }
+
+    func cancel(requestID: UUID) async {}
+    func connectionCount() -> Int { connections }
 }

@@ -280,7 +280,7 @@ struct NexusTailscaleDiscovery: NexusStudioDiscovering, Sendable {
         guard let selected = candidates.max(by: {
             score($0, preferredNodeID: preferredNodeID) < score($1, preferredNodeID: preferredNodeID)
         }) else {
-            throw NexusConnectError.unavailable("no online Mac Studio was found on this tailnet")
+            throw NexusConnectError.unavailable("no online paired Mac was found on this tailnet")
         }
         return selected
     }

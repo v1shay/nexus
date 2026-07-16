@@ -68,7 +68,7 @@ actor NexusRemoteClientSession: NexusRemoteSession, NexusWorkloadExecuting {
     func connect(to peer: NexusTailscalePeer) async throws -> NexusNodeHealth {
         await disconnect()
         guard var pairing = try vault.loadPairing() else {
-            throw NexusConnectError.unavailable("this Mac has not been paired with a Studio")
+            throw NexusConnectError.unavailable("this Mac has not been paired with that host")
         }
         let identity = try vault.loadOrCreateIdentity()
         let transport = transportFactory()
@@ -135,7 +135,7 @@ actor NexusRemoteClientSession: NexusRemoteSession, NexusWorkloadExecuting {
         for try await event in stream {
             if event.kind == .result { result = try event.decodePayload(NexusNodeHealth.self) }
         }
-        guard let result else { throw NexusConnectError.unavailable("Studio did not return health data") }
+        guard let result else { throw NexusConnectError.unavailable("the paired host did not return health data") }
         return result
     }
 
@@ -145,7 +145,7 @@ actor NexusRemoteClientSession: NexusRemoteSession, NexusWorkloadExecuting {
 
     func events(for request: NexusWorkloadRequest) async throws -> AsyncThrowingStream<NexusWorkloadEvent, Error> {
         guard connection != nil, secureChannel != nil, let sessionID else {
-            throw NexusConnectError.unavailable("Mac Studio is not connected")
+            throw NexusConnectError.unavailable("the selected paired Mac is not connected")
         }
         guard continuations[request.id] == nil else {
             throw NexusConnectError.requestFailed("duplicate request ID")
@@ -185,7 +185,7 @@ actor NexusRemoteClientSession: NexusRemoteSession, NexusWorkloadExecuting {
         connectedPeer = nil
         negotiatedProtocol = NexusConnectProtocol.currentVersion
         negotiatedFeatures = []
-        finishAll(throwing: NexusConnectError.unavailable("Mac Studio disconnected"))
+        finishAll(throwing: NexusConnectError.unavailable("the paired Mac disconnected"))
     }
 
     private func send<Payload: Encodable>(
@@ -195,7 +195,7 @@ actor NexusRemoteClientSession: NexusRemoteSession, NexusWorkloadExecuting {
         sessionID: UUID
     ) async throws {
         guard let connection, var channel = secureChannel else {
-            throw NexusConnectError.unavailable("Mac Studio is not connected")
+            throw NexusConnectError.unavailable("the selected paired Mac is not connected")
         }
         let message = try NexusConnectMessage(
             protocolVersion: negotiatedProtocol,

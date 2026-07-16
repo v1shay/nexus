@@ -79,7 +79,7 @@ final class NexusLocalModelService: NexusHostModelServing, @unchecked Sendable {
             let localModel = LocalModel(
                 name: model,
                 identifier: model,
-                family: "Remote Studio",
+                family: "Remote host",
                 backend: .lmStudio,
                 minimumRAMGB: ModelCatalog.estimatedMinimumRAM(for: model),
                 quantization: quantization ?? "Q4_K_M"
@@ -384,7 +384,7 @@ actor NexusHostServiceExecutor {
 
     init(
         nodeID: UUID,
-        nodeName: String = Host.current().localizedName ?? "Mac Studio",
+        nodeName: String = Host.current().localizedName ?? "Paired Mac",
         policy: NexusExecutionPolicy = .defaultStudioPolicy(),
         models: any NexusHostModelServing = NexusHostRuntimeManager(),
         runner: any NexusCommandRunning = NexusFoundationCommandRunner(),
@@ -463,7 +463,7 @@ actor NexusHostServiceExecutor {
             }
             let installed = try await models.installedModels(runtime: payload.runtime)
             guard installed.contains(where: { Self.modelName($0.identifier, matches: payload.model) }) else {
-                throw NexusConnectError.requestFailed("The Studio finished downloading but could not verify \(payload.model).")
+                throw NexusConnectError.requestFailed("The paired host finished downloading but could not verify \(payload.model).")
             }
             inventoryDigest = Data(SHA256.hash(data: try NexusPayloadCoder.encoder.encode(installed)))
             await emitter.emit(kind: .result, payload: NexusModelInventoryPayload(models: installed))
@@ -539,7 +539,7 @@ actor NexusHostServiceExecutor {
         }
         let context = payload.context.map { "\($0.role): \($0.content)" }.joined(separator: "\n\n")
         let prompt = """
-        You are a Nexus agent running on the user's paired Mac Studio.
+        You are Nexus running on the user's selected paired Mac.
         Follow these instructions carefully: \(payload.instructions)
 
         Context:
@@ -697,7 +697,7 @@ actor NexusHostServiceExecutor {
         defer { try? handle.close() }
         let current = try handle.seekToEnd()
         guard current == UInt64(payload.offset) else {
-            throw NexusConnectError.requestFailed("resume offset mismatch; Studio has \(current) bytes")
+            throw NexusConnectError.requestFailed("resume offset mismatch; the paired host has \(current) bytes")
         }
         try handle.write(contentsOf: payload.data)
         try handle.synchronize()
@@ -723,7 +723,7 @@ actor NexusHostServiceExecutor {
         await emitter.emit(kind: .progress, payload: NexusProgressPayload(
             completedBytes: received, totalBytes: payload.finalSize,
             fraction: payload.finalSize.map { Double(received) / Double(max(1, $0)) },
-            status: "Transferred to Mac Studio"
+            status: "Transferred to paired Mac"
         ))
     }
 
@@ -755,7 +755,7 @@ actor NexusHostServiceExecutor {
 
     private func download(_ payload: NexusDownloadPayload, emitter: NexusWorkloadEmitter) async throws {
         guard payload.sourceURL.scheme == "https" else {
-            throw NexusConnectError.policyDenied("Studio downloads require HTTPS")
+            throw NexusConnectError.policyDenied("Paired-host downloads require HTTPS")
         }
         let destination = try policy.resolve(payload.destination)
         let partial = destination.deletingLastPathComponent().appendingPathComponent(".\(destination.lastPathComponent).\(payload.transferID).nexus-download")
@@ -789,7 +789,7 @@ actor NexusHostServiceExecutor {
                 await emitter.emit(kind: .progress, payload: NexusProgressPayload(
                     completedBytes: completed, totalBytes: expectedTotal,
                     fraction: expectedTotal.map { Double(completed) / Double(max(1, $0)) },
-                    status: resumed ? "Resuming on Mac Studio" : "Downloading on Mac Studio"
+                    status: resumed ? "Resuming on paired Mac" : "Downloading on paired Mac"
                 ))
             }
         }

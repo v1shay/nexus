@@ -166,6 +166,78 @@ extension NexusGeometryTests {
         }
     }
 
+    func testModelInventoryAndRoutingRemainCorrectPerNode() async throws {
+        let studioID = UUID()
+        let imacID = UUID()
+        let studioModel = NexusModelDescriptor(runtime: .ollama, identifier: "studio-only:70b")
+        let imacModel = NexusModelDescriptor(runtime: .ollama, identifier: "imac-only:32b")
+        let studio = NexusPairedNode(
+            id: studioID,
+            pinnedPublicIdentityKey: Data(repeating: 1, count: 32),
+            displayName: "Studio",
+            endpoint: "studio.ts.net",
+            modelInventory: [studioModel],
+            status: .online,
+            availableMemoryBytes: 96 * 1_073_741_824,
+            availableDiskBytes: 1_000 * 1_073_741_824
+        )
+        let imac = NexusPairedNode(
+            id: imacID,
+            pinnedPublicIdentityKey: Data(repeating: 2, count: 32),
+            displayName: "iMac",
+            endpoint: "imac.ts.net",
+            modelInventory: [imacModel],
+            status: .online,
+            availableMemoryBytes: 48 * 1_073_741_824,
+            availableDiskBytes: 500 * 1_073_741_824
+        )
+        let local = NexusRoutingExecutorStub(answer: "local")
+        let studioExecutor = NexusRoutingExecutorStub(answer: "studio")
+        let imacExecutor = NexusRoutingExecutorStub(answer: "imac")
+        let router = NexusMultiNodeWorkloadRouter(local: local)
+        await router.synchronize(
+            nodes: [studio, imac],
+            executors: [studioID: studioExecutor, imacID: imacExecutor]
+        )
+
+        let studioOwner = await router.automaticNode(for: studioModel, minimumRAMGB: 64)
+        let imacOwner = await router.automaticNode(for: imacModel, minimumRAMGB: 24)
+        let newModelOwner = await router.automaticNode(
+            for: .init(runtime: .ollama, identifier: "new:40b"),
+            minimumRAMGB: 40
+        )
+        XCTAssertEqual(studioOwner, studioID)
+        XCTAssertEqual(imacOwner, imacID)
+        XCTAssertEqual(
+            newModelOwner,
+            studioID,
+            "a new model should choose the capable node with the most free resources"
+        )
+
+        await router.setRoute(.pairedNode(imacID))
+        let request = try NexusWorkloadRequest(
+            kind: .inference,
+            retrySafety: .idempotent,
+            payload: NexusInferencePayload(
+                runtime: .ollama,
+                model: imacModel.identifier,
+                messages: [.init(role: "user", content: "route")],
+                temperature: nil,
+                maximumTokens: nil
+            )
+        )
+        let stream = try await router.events(for: request)
+        var routedAnswer: String?
+        for try await event in stream where event.kind == .result {
+            routedAnswer = try event.decodePayload(NexusTextDeltaPayload.self).accumulated
+        }
+        XCTAssertEqual(routedAnswer, "imac")
+        let studioCalls = await studioExecutor.callCount()
+        let imacCalls = await imacExecutor.callCount()
+        XCTAssertEqual(studioCalls, 0)
+        XCTAssertEqual(imacCalls, 1)
+    }
+
     @MainActor
     func testNX2PairingSurvivesControllerRestartWithoutAnotherCode() throws {
         let defaultsName = "NexusConnectNX2Restart.\(UUID().uuidString)"
@@ -302,4 +374,31 @@ private final class NexusPersistentHostManagerSpy: NexusPersistentHostManaging, 
             updatedAt: Date()
         )
     }
+}
+
+private actor NexusRoutingExecutorStub: NexusWorkloadExecuting {
+    private let answer: String
+    private var calls = 0
+
+    init(answer: String) { self.answer = answer }
+
+    func events(for request: NexusWorkloadRequest) async throws -> AsyncThrowingStream<NexusWorkloadEvent, Error> {
+        calls += 1
+        let answer = answer
+        return AsyncThrowingStream { continuation in
+            if let result = try? NexusWorkloadEvent(
+                requestID: request.id,
+                kind: .result,
+                sequence: 0,
+                isFinal: true,
+                payload: NexusTextDeltaPayload(delta: answer, accumulated: answer)
+            ) {
+                continuation.yield(result)
+            }
+            continuation.finish()
+        }
+    }
+
+    func cancel(requestID: UUID) async {}
+    func callCount() -> Int { calls }
 }
