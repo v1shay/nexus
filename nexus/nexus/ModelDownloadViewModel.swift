@@ -17,19 +17,42 @@ final class ModelDownloadViewModel: ObservableObject {
     private let lmStudio: LMStudioManager
     private let catalogService: ModelCatalogService
     private var downloadTasks: [String: Task<Void, Never>] = [:]
+    private var installedModelRecords: [String: LocalModel] = [:]
     private let installedDefaultsKey = "nexus.installed-model-ids"
+    private let installedModelsDefaultsKey = "nexus.installed-model-records"
     private let activeModelDefaultsKey = "nexus.active-model"
 
     init(ollama: OllamaManager = .init(), lmStudio: LMStudioManager = .init(), catalogService: ModelCatalogService = .init()) {
         self.ollama = ollama
         self.lmStudio = lmStudio
         self.catalogService = catalogService
-        let persisted = UserDefaults.standard.stringArray(forKey: installedDefaultsKey) ?? []
-        persisted.forEach { states[$0] = .installed }
+        if let data = UserDefaults.standard.data(forKey: installedModelsDefaultsKey),
+           let models = try? JSONDecoder().decode([LocalModel].self, from: data) {
+            models.forEach {
+                installedModelRecords[$0.id] = $0
+                states[$0.id] = .installed
+            }
+        }
+        let legacyIDs = UserDefaults.standard.stringArray(forKey: installedDefaultsKey) ?? []
+        legacyIDs.forEach { id in
+            states[id] = .installed
+            if installedModelRecords[id] == nil, let model = LocalModel.restoring(legacyID: id) {
+                installedModelRecords[id] = model
+            }
+        }
         if let data = UserDefaults.standard.data(forKey: activeModelDefaultsKey) {
             activeModel = try? JSONDecoder().decode(LocalModel.self, from: data)
         }
-        Task { await refreshCatalog() }
+        if let activeModel {
+            installedModelRecords[activeModel.id] = activeModel
+            states[activeModel.id] = .installed
+        } else if let fallback = installedModelRecords.values.sorted(by: { $0.id < $1.id }).first {
+            use(fallback)
+        }
+        Task {
+            await discoverInstalledRuntimeModels()
+            await refreshCatalog()
+        }
     }
 
     var recommended: [LocalModel] {
@@ -48,7 +71,7 @@ final class ModelDownloadViewModel: ObservableObject {
     }
 
     var installedModels: [LocalModel] {
-        let all = ModelCatalog.starterModels + catalog
+        let all = ModelCatalog.starterModels + catalog + Array(installedModelRecords.values)
         return Array(Set(all)).filter { states[$0.id] == .installed }
     }
 
@@ -104,13 +127,18 @@ final class ModelDownloadViewModel: ObservableObject {
         }
     }
 
-    func response(to prompt: String) async throws -> String {
+    func response(
+        to prompt: String,
+        onDelta: @escaping @Sendable (_ delta: String, _ accumulated: String) async -> Void
+    ) async throws -> String {
         guard let activeModel else {
             throw LocalModelError.invalidResponse("Choose an installed model in the model window first")
         }
         switch activeModel.backend {
-        case .ollama: return try await ollama.chat(model: activeModel.identifier, prompt: prompt)
-        case .lmStudio: return try await lmStudio.chat(model: activeModel.identifier, prompt: prompt)
+        case .ollama:
+            return try await ollama.streamChat(model: activeModel.identifier, prompt: prompt, onDelta: onDelta)
+        case .lmStudio:
+            return try await lmStudio.streamChat(model: activeModel.identifier, prompt: prompt, onDelta: onDelta)
         }
     }
 
@@ -119,6 +147,29 @@ final class ModelDownloadViewModel: ObservableObject {
         downloadTasks.removeAll()
         lmStudio.stopManagedProcesses()
         ollama.stopManagedServer()
+    }
+
+    /// Reconciles preferences with the runtimes themselves. This makes models
+    /// downloaded by an older Nexus build (or directly by Ollama/LM Studio)
+    /// immediately usable even when that older build never saved model data.
+    private func discoverInstalledRuntimeModels() async {
+        var discovered: [LocalModel] = []
+        if ollama.executableURL() != nil, let names = try? await ollama.installedModelNames() {
+            discovered += names.map { LocalModel(customIdentifier: $0, backend: .ollama) }
+        }
+        if lmStudio.executableURL() != nil, let names = try? await lmStudio.installedModelNames() {
+            discovered += names
+                .filter { !$0.localizedCaseInsensitiveContains("embed") }
+                .map { LocalModel(customIdentifier: $0, backend: .lmStudio) }
+        }
+        discovered.forEach {
+            installedModelRecords[$0.id] = $0
+            states[$0.id] = .installed
+        }
+        if activeModel == nil, let first = discovered.first {
+            use(first)
+        }
+        if !discovered.isEmpty { persistInstalledModels() }
     }
 
     private func startDownload(_ model: LocalModel, installOllamaFirst: Bool) {
@@ -141,7 +192,8 @@ final class ModelDownloadViewModel: ObservableObject {
                     }
                 }
                 states[model.id] = .installed
-                persistInstalledModelIDs()
+                installedModelRecords[model.id] = model
+                persistInstalledModels()
                 use(model)
             } catch {
                 states[model.id] = (error as? LocalModelError) == .cancelled ? .idle : .failed(error.localizedDescription)
@@ -155,7 +207,11 @@ final class ModelDownloadViewModel: ObservableObject {
         states[model.id] = .downloading(progress: update.fraction, completedBytes: update.completedBytes, totalBytes: update.totalBytes, status: update.status)
     }
 
-    private func persistInstalledModelIDs() {
-        UserDefaults.standard.set(states.compactMap { $0.value == .installed ? $0.key : nil }, forKey: installedDefaultsKey)
+    private func persistInstalledModels() {
+        let models = installedModelRecords.values.sorted(by: { $0.id < $1.id })
+        UserDefaults.standard.set(models.map(\.id), forKey: installedDefaultsKey)
+        if let data = try? JSONEncoder().encode(models) {
+            UserDefaults.standard.set(data, forKey: installedModelsDefaultsKey)
+        }
     }
 }

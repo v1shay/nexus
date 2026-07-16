@@ -75,6 +75,7 @@ final class NotchController: ObservableObject {
     private var automaticRevealIsWaitingForNotchVisit = false
     private let responseSpeaker = ResponseSpeaker()
     private var responseTask: Task<Void, Never>?
+    private var responseGeneration = UUID()
     private var hoverSession = NotchHoverSession()
 
     static let preview: NotchController = {
@@ -152,6 +153,7 @@ final class NotchController: ObservableObject {
     private func startGlobalDictation() {
         closeTask?.cancel()
         responseTask?.cancel()
+        responseGeneration = UUID()
         responseSpeaker.stop()
         interaction.beginDictation()
         if let screen {
@@ -176,26 +178,41 @@ final class NotchController: ObservableObject {
         let prompt = transcript.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !prompt.isEmpty, modelDownloadViewModel.activeModel != nil else { return }
         responseTask?.cancel()
+        let generation = UUID()
+        responseGeneration = generation
         responseTask = Task { [weak self] in
             guard let self else { return }
             try? await Task.sleep(for: .milliseconds(650))
-            guard !Task.isCancelled else { return }
+            guard !Task.isCancelled, responseGeneration == generation else { return }
             interaction.beginThinking()
             if let screen { resize(to: listeningSize(for: screen), animated: true) }
+            responseSpeaker.beginStreaming()
             do {
-                let answer = try await modelDownloadViewModel.response(to: prompt)
-                guard !Task.isCancelled else { return }
+                let answer = try await modelDownloadViewModel.response(to: prompt) { [weak self] delta, accumulated in
+                    guard let self else { return }
+                    await self.receiveResponseDelta(delta, accumulated: accumulated, generation: generation)
+                }
+                guard !Task.isCancelled, responseGeneration == generation else { return }
                 interaction.receiveAnswer(answer)
                 automaticRevealIsWaitingForNotchVisit = true
                 if let screen { resize(to: expandedSize(for: screen), animated: true) }
-                responseSpeaker.speak(answer)
+                responseSpeaker.finishStreaming()
             } catch {
-                guard !Task.isCancelled else { return }
+                guard !Task.isCancelled, responseGeneration == generation else { return }
+                responseSpeaker.stop()
                 interaction.failResponse("Nexus couldn’t get a response. \(error.localizedDescription)")
                 automaticRevealIsWaitingForNotchVisit = true
                 if let screen { resize(to: expandedSize(for: screen), animated: true) }
             }
         }
+    }
+
+    private func receiveResponseDelta(_ delta: String, accumulated: String, generation: UUID) {
+        guard !Task.isCancelled, responseGeneration == generation else { return }
+        interaction.receivePartialAnswer(accumulated)
+        automaticRevealIsWaitingForNotchVisit = true
+        if let screen { resize(to: expandedSize(for: screen), animated: true) }
+        responseSpeaker.append(delta)
     }
 
     func openModelAggregator() {
@@ -262,13 +279,18 @@ final class NotchController: ObservableObject {
 
     private func resize(to size: CGSize, animated: Bool) {
         guard let panel, let screen else { return }
+        let requestedSizeChanged = abs(currentSize.width - size.width) > 0.5
+            || abs(currentSize.height - size.height) > 0.5
         let targetFrame = frame(for: size, on: screen)
         let frameChanged = abs(panel.frame.minX - targetFrame.minX) > 0.5
             || abs(panel.frame.minY - targetFrame.minY) > 0.5
             || abs(panel.frame.width - targetFrame.width) > 0.5
             || abs(panel.frame.height - targetFrame.height) > 0.5
         currentSize = size
-        guard frameChanged else { return }
+        // Streaming tokens can arrive faster than the expansion animation.
+        // Once the target size is requested, do not restart that animation for
+        // every token just because the presentation layer is mid-flight.
+        guard animated ? requestedSizeChanged : frameChanged else { return }
         if animated {
             NSAnimationContext.runAnimationGroup { context in
                 context.duration = 0.30

@@ -104,20 +104,34 @@ final class OllamaManager: @unchecked Sendable {
         return try JSONDecoder().decode(OllamaTagsResponse.self, from: data).models.map(\.name)
     }
 
-    func chat(model: String, prompt: String) async throws -> String {
+    func streamChat(
+        model: String,
+        prompt: String,
+        onDelta: @escaping @Sendable (_ delta: String, _ accumulated: String) async -> Void
+    ) async throws -> String {
         try await ensureServerRunning()
         var request = URLRequest(url: Self.serverURL.appendingPathComponent("api/chat"))
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.httpBody = try JSONEncoder().encode(
-            OllamaChatRequest(model: model, messages: [.init(role: "user", content: prompt)], stream: false)
+            OllamaChatRequest(model: model, messages: [.init(role: "user", content: prompt)], stream: true)
         )
-        let (data, response) = try await session.data(for: request)
+        let (bytes, response) = try await session.bytes(for: request)
         try Self.requireSuccess(response)
-        let content = try JSONDecoder().decode(OllamaChatResponse.self, from: data).message.content
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !content.isEmpty else { throw LocalModelError.invalidResponse("Ollama returned an empty answer") }
-        return content
+        var accumulated = ""
+        for try await line in bytes.lines {
+            try Task.checkCancellation()
+            guard let data = line.data(using: .utf8), !data.isEmpty else { continue }
+            let event = try JSONDecoder().decode(OllamaChatStreamEvent.self, from: data)
+            if let error = event.error { throw LocalModelError.invalidResponse(error) }
+            if let delta = event.message?.content, !delta.isEmpty {
+                accumulated += delta
+                await onDelta(delta, accumulated)
+            }
+        }
+        let answer = accumulated.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !answer.isEmpty else { throw LocalModelError.invalidResponse("Ollama returned an empty answer") }
+        return answer
     }
 
     func stopManagedServer() {
@@ -181,9 +195,10 @@ private struct OllamaChatRequest: Encodable {
     let messages: [Message]
     let stream: Bool
 }
-private struct OllamaChatResponse: Decodable {
+private struct OllamaChatStreamEvent: Decodable {
     struct Message: Decodable { let content: String }
-    let message: Message
+    let message: Message?
+    let error: String?
 }
 
 final class LMStudioManager: @unchecked Sendable {
@@ -259,23 +274,45 @@ final class LMStudioManager: @unchecked Sendable {
         if process?.isRunning == true { process?.terminate() }
     }
 
-    func chat(model: String, prompt: String) async throws -> String {
+    func installedModelNames() async throws -> [String] {
+        try await ensureServerRunning()
+        let (data, response) = try await session.data(from: Self.serverURL.appendingPathComponent("v1/models"))
+        try Self.requireSuccess(response)
+        return try JSONDecoder().decode(OpenAIModelsResponse.self, from: data).data.map(\.id)
+    }
+
+    func streamChat(
+        model: String,
+        prompt: String,
+        onDelta: @escaping @Sendable (_ delta: String, _ accumulated: String) async -> Void
+    ) async throws -> String {
         try await ensureServerRunning()
         let resolvedModel = await resolvedModelIdentifier(preferred: model)
-        if let response = try? await nativeChat(model: resolvedModel, prompt: prompt) { return response }
-
         var request = URLRequest(url: Self.serverURL.appendingPathComponent("v1/chat/completions"))
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.httpBody = try JSONEncoder().encode(
-            OpenAIChatRequest(model: resolvedModel, messages: [.init(role: "user", content: prompt)], stream: false)
+            OpenAIChatRequest(model: resolvedModel, messages: [.init(role: "user", content: prompt)], stream: true)
         )
-        let (data, response) = try await session.data(for: request)
+        let (bytes, response) = try await session.bytes(for: request)
         try Self.requireSuccess(response)
-        let content = try JSONDecoder().decode(OpenAIChatResponse.self, from: data).choices.first?.message.content
-            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        guard !content.isEmpty else { throw LocalModelError.invalidResponse("LM Studio returned an empty answer") }
-        return content
+        var accumulated = ""
+        for try await line in bytes.lines {
+            try Task.checkCancellation()
+            guard line.hasPrefix("data:") else { continue }
+            let payload = line.dropFirst(5).trimmingCharacters(in: .whitespaces)
+            if payload == "[DONE]" { break }
+            guard let data = payload.data(using: .utf8), !data.isEmpty else { continue }
+            let event = try JSONDecoder().decode(OpenAIChatStreamResponse.self, from: data)
+            if let message = event.error?.message { throw LocalModelError.invalidResponse(message) }
+            if let delta = event.choices?.first?.delta.content, !delta.isEmpty {
+                accumulated += delta
+                await onDelta(delta, accumulated)
+            }
+        }
+        let answer = accumulated.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !answer.isEmpty else { throw LocalModelError.invalidResponse("LM Studio returned an empty answer") }
+        return answer
     }
 
     func ensureServerRunning() async throws {
@@ -305,20 +342,6 @@ final class LMStudioManager: @unchecked Sendable {
         serverStartProcess = nil
         processLock.unlock()
         processes.filter(\.isRunning).forEach { $0.terminate() }
-    }
-
-    private func nativeChat(model: String, prompt: String) async throws -> String {
-        var request = URLRequest(url: Self.serverURL.appendingPathComponent("api/v1/chat"))
-        request.httpMethod = "POST"
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.httpBody = try JSONEncoder().encode(LMStudioChatRequest(model: model, input: prompt, store: false))
-        let (data, response) = try await session.data(for: request)
-        try Self.requireSuccess(response)
-        let content = try JSONDecoder().decode(LMStudioChatResponse.self, from: data).output
-            .filter { $0.type == "message" }.compactMap(\.content).joined(separator: "\n")
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !content.isEmpty else { throw LocalModelError.invalidResponse("LM Studio returned an empty answer") }
-        return content
     }
 
     private func serverResponds() async -> Bool {
@@ -386,23 +409,21 @@ final class LMStudioManager: @unchecked Sendable {
     }
 }
 
-private struct LMStudioChatRequest: Encodable { let model: String; let input: String; let store: Bool }
-private struct LMStudioChatResponse: Decodable {
-    struct Output: Decodable { let type: String; let content: String? }
-    let output: [Output]
-}
 private struct OpenAIChatRequest: Encodable {
     struct Message: Encodable { let role: String; let content: String }
     let model: String
     let messages: [Message]
     let stream: Bool
 }
-private struct OpenAIChatResponse: Decodable {
+private struct OpenAIChatStreamResponse: Decodable {
     struct Choice: Decodable {
-        struct Message: Decodable { let content: String }
-        let message: Message
+        struct Delta: Decodable { let content: String? }
+        let delta: Delta
     }
-    let choices: [Choice]
+    let choices: [Choice]?
+    let error: APIError?
+
+    struct APIError: Decodable { let message: String }
 }
 private struct LMStudioModelsResponse: Decodable {
     struct Model: Decodable { let key: String }

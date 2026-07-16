@@ -37,6 +37,19 @@ struct LocalModel: Identifiable, Hashable, Codable, Sendable {
             quantization: backend == .lmStudio ? "Q4_K_M" : nil
         )
     }
+
+    /// Restores models saved by releases that persisted only the computed ID.
+    static func restoring(legacyID: String) -> LocalModel? {
+        if legacyID.hasPrefix("ollama:"), legacyID.hasSuffix(":default") {
+            let identifier = String(legacyID.dropFirst("ollama:".count).dropLast(":default".count))
+            return identifier.isEmpty ? nil : LocalModel(customIdentifier: identifier, backend: .ollama)
+        }
+        if legacyID.hasPrefix("lmStudio:"), legacyID.hasSuffix(":Q4_K_M") {
+            let identifier = String(legacyID.dropFirst("lmStudio:".count).dropLast(":Q4_K_M".count))
+            return identifier.isEmpty ? nil : LocalModel(customIdentifier: identifier, backend: .lmStudio)
+        }
+        return nil
+    }
 }
 
 enum ModelDownloadState: Equatable {

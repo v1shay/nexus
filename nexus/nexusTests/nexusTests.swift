@@ -75,6 +75,10 @@ final class NexusGeometryTests: XCTestCase {
         state.beginThinking()
         XCTAssertEqual(state.presentation, .thinking)
 
+        state.receivePartialAnswer("A model running")
+        XCTAssertEqual(state.presentation, .overlay)
+        XCTAssertEqual(state.answer, "A model running")
+
         state.receiveAnswer("A model running on your own computer.")
         XCTAssertEqual(state.presentation, .overlay)
         XCTAssertEqual(state.transcript, "What is a local model?")
@@ -91,4 +95,22 @@ final class NexusGeometryTests: XCTestCase {
         XCTAssertNil(session.update(isInside: false))
         XCTAssertEqual(session.update(isInside: true), true, "A new visit may launch after a complete exit")
     }
+
+    func testStreamedSpeechWaitsForNaturalSentenceBoundaries() {
+        var chunker = SpeechSentenceChunker()
+
+        XCTAssertEqual(chunker.append("Hello from Nex"), [])
+        XCTAssertEqual(chunker.append("us. How can I help"), ["Hello from Nexus."])
+        XCTAssertEqual(chunker.append("?"), ["How can I help?"])
+        XCTAssertNil(chunker.finish())
+    }
+
+    func testLegacyDownloadedOllamaModelBecomesRestorableDefault() {
+        let model = LocalModel.restoring(legacyID: "ollama:gemma3:4b:default")
+
+        XCTAssertEqual(model?.backend, .ollama)
+        XCTAssertEqual(model?.identifier, "gemma3:4b")
+        XCTAssertEqual(model?.id, "ollama:gemma3:4b:default")
+    }
+
 }

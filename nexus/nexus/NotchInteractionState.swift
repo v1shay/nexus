@@ -34,6 +34,11 @@ struct NotchInteractionState: Equatable {
         presentation = .overlay
     }
 
+    mutating func receivePartialAnswer(_ text: String) {
+        answer = text
+        presentation = .overlay
+    }
+
     mutating func failResponse(_ message: String) {
         answer = message
         presentation = .overlay

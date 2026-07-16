@@ -4,7 +4,17 @@ Nexus speaks answers with the matching macOS system voice by default. No extra s
 
 ## Replace it with an open-source Piper voice
 
-Nexus automatically switches to Piper when these exact three files exist:
+Nexus now automatically detects the installed Piper executable at common
+Homebrew, pip, Anaconda, and app-support paths. On this Mac it uses:
+
+```text
+/opt/anaconda3/bin/piper
+~/Downloads/jarvis-medium.onnx
+~/Downloads/jarvis-medium.onnx.json
+```
+
+That means the Jarvis files already in Downloads work without being moved.
+For a portable app-controlled setup, these exact three files take precedence:
 
 ```text
 ~/Library/Application Support/Nexus/Voice/piper
@@ -27,4 +37,8 @@ cp /path/to/chosen-voice.onnx.json "$HOME/Library/Application Support/Nexus/Voic
 chmod +x "$HOME/Library/Application Support/Nexus/Voice/piper"
 ```
 
-Restart Nexus. It passes answer text to Piper over standard input and invokes the binary directly with `Foundation.Process`; it never builds a shell command. If any required file is missing or Piper fails, Nexus falls back to the macOS voice automatically.
+Restart Nexus. Answers are split at sentence boundaries while model tokens are
+still streaming, so Piper can begin speaking before the full answer is done.
+Nexus passes each chunk over standard input and invokes the binary directly
+with `Foundation.Process`; it never builds a shell command. If Piper or the
+matching voice files disappear, Nexus falls back to the macOS voice.
