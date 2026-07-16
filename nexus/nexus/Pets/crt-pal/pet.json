@@ -1,0 +1,6 @@
+{
+  "id": "crt-pal",
+  "displayName": "CRT Pal",
+  "description": "A small pixel-art monitor-headed companion with a black chibi body and green CRT face.",
+  "spritesheetPath": "spritesheet.webp"
+}

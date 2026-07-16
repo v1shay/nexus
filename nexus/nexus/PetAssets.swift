@@ -1,0 +1,153 @@
+import AppKit
+import SwiftUI
+
+struct NexusPet: Identifiable, Equatable, Sendable {
+    let id: String
+    let displayName: String
+    let description: String
+}
+
+enum NexusPetActivity: Sendable {
+    case idle
+    case dictating
+    case thinking
+    case overlay
+    case tool
+
+    var atlasRow: Int {
+        switch self {
+        case .idle: 0
+        case .dictating: 6   // waiting / attentive listening
+        case .thinking: 7    // active task work
+        case .overlay: 8     // reviewing the completed response
+        case .tool: 7
+        }
+    }
+
+    var frameCount: Int { 6 }
+
+    var frameDuration: TimeInterval {
+        switch self {
+        case .idle: 0.24
+        case .dictating: 0.13
+        case .thinking, .tool: 0.14
+        case .overlay: 0.20
+        }
+    }
+}
+
+enum NexusPetCatalog {
+    static let all: [NexusPet] = [
+        NexusPet(
+            id: "tiko",
+            displayName: "Tiko",
+            description: "A tiny yellow utility robot with curious camera eyes and friendly clamp arms."
+        ),
+        NexusPet(
+            id: "kabi",
+            displayName: "Kabi",
+            description: "A sleepy teal companion who is happiest with an apple."
+        ),
+        NexusPet(
+            id: "macintosh",
+            displayName: "Macintosh",
+            description: "A tiny retro Macintosh-inspired Finder face companion."
+        ),
+        NexusPet(
+            id: "lil-finder",
+            displayName: "Lil Finder",
+            description: "A rounded blue-and-white digital companion."
+        ),
+        NexusPet(
+            id: "crt-pal",
+            displayName: "CRT Pal",
+            description: "A monitor-headed companion with a glowing green CRT face."
+        ),
+        NexusPet(
+            id: "pan-chan-laptop",
+            displayName: "Pan-chan",
+            description: "A fluffy panda helper who works from a tiny laptop."
+        )
+    ]
+
+    static func pet(withID id: String?) -> NexusPet {
+        all.first { $0.id == id } ?? all[0]
+    }
+}
+
+@MainActor
+private enum NexusPetAtlasCache {
+    private static var images: [String: NSImage] = [:]
+
+    static func image(for pet: NexusPet) -> NSImage? {
+        if let image = images[pet.id] { return image }
+        guard
+            let url = Bundle.main.url(
+                forResource: "spritesheet",
+                withExtension: "webp",
+                subdirectory: "Pets/\(pet.id)"
+            ),
+            let image = NSImage(contentsOf: url)
+        else { return nil }
+        images[pet.id] = image
+        return image
+    }
+}
+
+struct NexusPetView: View {
+    let pet: NexusPet
+    let activity: NexusPetActivity
+    let height: CGFloat
+
+    private let atlasColumns: CGFloat = 8
+    private let atlasRows: CGFloat = 9
+    private let cellAspectRatio: CGFloat = 192 / 208
+
+    var body: some View {
+        TimelineView(.animation(minimumInterval: activity.frameDuration)) { timeline in
+            let frame = Int(
+                timeline.date.timeIntervalSinceReferenceDate / activity.frameDuration
+            ) % activity.frameCount
+
+            Group {
+                if let atlas = NexusPetAtlasCache.image(for: pet) {
+                    GeometryReader { proxy in
+                        Image(nsImage: atlas)
+                            .resizable()
+                            .interpolation(.high)
+                            .frame(
+                                width: proxy.size.width * atlasColumns,
+                                height: proxy.size.height * atlasRows
+                            )
+                            .offset(
+                                x: -CGFloat(frame) * proxy.size.width,
+                                y: -CGFloat(activity.atlasRow) * proxy.size.height
+                            )
+                    }
+                } else {
+                    Image(systemName: "pawprint.fill")
+                        .resizable()
+                        .scaledToFit()
+                        .foregroundStyle(.cyan)
+                        .padding(height * 0.18)
+                }
+            }
+            .frame(width: height * cellAspectRatio, height: height)
+            .clipped()
+        }
+        .frame(width: height * cellAspectRatio, height: height)
+        .accessibilityLabel("\(pet.displayName), \(activity.accessibilityDescription)")
+    }
+}
+
+private extension NexusPetActivity {
+    var accessibilityDescription: String {
+        switch self {
+        case .idle: "idle"
+        case .dictating: "listening"
+        case .thinking: "thinking"
+        case .overlay: "reviewing the response"
+        case .tool: "using a tool"
+        }
+    }
+}

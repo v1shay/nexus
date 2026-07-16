@@ -1,6 +1,5 @@
 import SwiftUI
 import AppKit
-import Carbon.HIToolbox
 import Darwin
 
 @main
@@ -88,6 +87,9 @@ final class NotchController: ObservableObject {
     @Published private var interaction = NotchInteractionState()
     @Published private(set) var currentSize = CGSize(width: 190, height: 32)
     @Published private(set) var isVoiceMuted = false
+    @Published private(set) var selectedPet = NexusPetCatalog.pet(
+        withID: UserDefaults.standard.string(forKey: "nexus.selectedPetID")
+    )
 
     var presentation: NotchPresentation { interaction.presentation }
     var isExpanded: Bool { interaction.presentation == .overlay }
@@ -101,7 +103,7 @@ final class NotchController: ObservableObject {
     private var panel: NexusNotchPanel?
     private var screen: NSScreen?
     private var closeTask: Task<Void, Never>?
-    private var globalHotKey: NexusGlobalHotKey?
+    private var commandHoldMonitor: NexusCommandHoldMonitor?
     private var pointerMonitor: PointerProximityMonitor?
     private var modelPanel: NSPanel?
     private let speechTranscriber = SpeechTranscriber()
@@ -138,7 +140,7 @@ final class NotchController: ObservableObject {
         hostingView.autoresizingMask = [.width, .height]
         panel.contentView = hostingView
         self.panel = panel
-        installHotKeyMonitor()
+        installCommandHoldMonitor()
         installPointerMonitor()
         panel.orderFrontRegardless()
         NSLog("Nexus installed its panel, pointer monitor, and global hotkey")
@@ -172,10 +174,10 @@ final class NotchController: ObservableObject {
         updateHover(didEnter)
     }
 
-    /// Carbon hotkeys are delivered by macOS rather than by Nexus's focused
-    /// window, which is what makes this work above every other application.
-    private func installHotKeyMonitor() {
-        let hotKey = NexusGlobalHotKey(
+    /// Polling the combined session modifier state keeps a modifier-only
+    /// gesture global without requiring a focused window or a Carbon key chord.
+    private func installCommandHoldMonitor() {
+        let monitor = NexusCommandHoldMonitor(
             onPress: { [weak self] in
                 Task { @MainActor in self?.startGlobalDictation() }
             },
@@ -183,16 +185,8 @@ final class NotchController: ObservableObject {
                 Task { @MainActor in self?.finishGlobalDictation() }
             }
         )
-        globalHotKey = hotKey
-        guard !hotKey.install() else { return }
-
-        // Xcode can briefly overlap a terminating debug process with its
-        // replacement. Retry once after Carbon has released the old binding.
-        Task { [weak self, weak hotKey] in
-            try? await Task.sleep(for: .milliseconds(350))
-            guard let self, let hotKey, self.globalHotKey === hotKey else { return }
-            _ = hotKey.install()
-        }
+        commandHoldMonitor = monitor
+        monitor.install()
     }
 
     private func startGlobalDictation() {
@@ -270,6 +264,14 @@ final class NotchController: ObservableObject {
         responseSpeaker.setMuted(isVoiceMuted)
     }
 
+    func cyclePet() {
+        commandHoldMonitor?.cancelCurrentHold()
+        let currentIndex = NexusPetCatalog.all.firstIndex(of: selectedPet) ?? 0
+        selectedPet = NexusPetCatalog.all[(currentIndex + 1) % NexusPetCatalog.all.count]
+        UserDefaults.standard.set(selectedPet.id, forKey: "nexus.selectedPetID")
+        NSSound(named: "Tink")?.play()
+    }
+
     func dismissOverlay() {
         responseTask?.cancel()
         responseGeneration = UUID()
@@ -319,6 +321,7 @@ final class NotchController: ObservableObject {
         speechTranscriber.stop()
         responseTask?.cancel()
         responseSpeaker.stop()
+        commandHoldMonitor = nil
         modelDownloadViewModel.shutdown()
     }
 
@@ -423,77 +426,146 @@ final class NotchController: ObservableObject {
     }
 }
 
-private final class NexusGlobalHotKey {
+enum CommandHoldTransition: Equatable {
+    case began
+    case ended
+}
+
+struct CommandHoldGestureState {
+    private enum Phase: Equatable {
+        case idle
+        case tracking(startedAt: TimeInterval)
+        case active
+        case cancelledUntilRelease
+    }
+
+    let holdDuration: TimeInterval
+    private var phase: Phase = .idle
+
+    init(holdDuration: TimeInterval = 0.18) {
+        self.holdDuration = holdDuration
+    }
+
+    mutating func update(
+        commandIsDown: Bool,
+        hasDisqualifyingInput: Bool,
+        now: TimeInterval
+    ) -> CommandHoldTransition? {
+        switch phase {
+        case .idle:
+            guard commandIsDown else { return nil }
+            phase = hasDisqualifyingInput ? .cancelledUntilRelease : .tracking(startedAt: now)
+            return nil
+
+        case .tracking(let startedAt):
+            guard commandIsDown else {
+                phase = .idle
+                return nil
+            }
+            guard !hasDisqualifyingInput else {
+                phase = .cancelledUntilRelease
+                return nil
+            }
+            guard now - startedAt >= holdDuration - 0.000_001 else { return nil }
+            phase = .active
+            return .began
+
+        case .active:
+            if !commandIsDown {
+                phase = .idle
+                return .ended
+            }
+            if hasDisqualifyingInput {
+                phase = .cancelledUntilRelease
+                return .ended
+            }
+            return nil
+
+        case .cancelledUntilRelease:
+            if !commandIsDown { phase = .idle }
+            return nil
+        }
+    }
+}
+
+private final class NexusCommandHoldMonitor {
     private let onPress: () -> Void
     private let onRelease: () -> Void
-    private var hotKey: EventHotKeyRef?
-    private var eventHandler: EventHandlerRef?
+    private var gesture = CommandHoldGestureState()
+    private var timer: DispatchSourceTimer?
+    private var globalInputMonitor: Any?
+    private var localInputMonitor: Any?
+    private var disqualifiedByInput = false
+
+    private static let modifierKeyCodes: Set<CGKeyCode> = [
+        54, 55, // right and left Command
+        56, 60, // Shift
+        57,     // Caps Lock
+        58, 61, // Option
+        59, 62, // Control
+        63      // Function
+    ]
 
     init(onPress: @escaping () -> Void, onRelease: @escaping () -> Void) {
         self.onPress = onPress
         self.onRelease = onRelease
     }
 
-    @discardableResult
-    func install() -> Bool {
-        if hotKey != nil { return true }
-        let target = GetApplicationEventTarget()
-        var eventTypes = [
-            EventTypeSpec(eventClass: OSType(kEventClassKeyboard), eventKind: UInt32(kEventHotKeyPressed)),
-            EventTypeSpec(eventClass: OSType(kEventClassKeyboard), eventKind: UInt32(kEventHotKeyReleased))
+    func install() {
+        guard timer == nil else { return }
+        let cancellationEvents: NSEvent.EventTypeMask = [
+            .keyDown, .leftMouseDown, .rightMouseDown, .otherMouseDown, .scrollWheel
         ]
-        let handlerStatus = InstallEventHandler(
-            target,
-            nexusGlobalHotKeyHandler,
-            eventTypes.count,
-            &eventTypes,
-            Unmanaged.passUnretained(self).toOpaque(),
-            &eventHandler
-        )
-        guard handlerStatus == noErr else {
-            NSLog("Nexus could not install its global hotkey handler: %d", handlerStatus)
-            eventHandler = nil
-            return false
+        globalInputMonitor = NSEvent.addGlobalMonitorForEvents(matching: cancellationEvents) { [weak self] _ in
+            self?.disqualifiedByInput = true
         }
-        let identifier = EventHotKeyID(signature: 0x4E585553, id: 1) // "NXUS"
-        let registrationStatus = RegisterEventHotKey(
-            UInt32(kVK_Space),
-            UInt32(cmdKey | shiftKey),
-            identifier,
-            target,
-            0,
-            &hotKey
-        )
-        guard registrationStatus == noErr else {
-            NSLog("Nexus could not register Command-Shift-Space: %d", registrationStatus)
-            if let eventHandler { RemoveEventHandler(eventHandler) }
-            eventHandler = nil
-            hotKey = nil
-            return false
+        localInputMonitor = NSEvent.addLocalMonitorForEvents(matching: cancellationEvents) { [weak self] event in
+            self?.disqualifiedByInput = true
+            return event
         }
-        NSLog("Nexus registered Command-Shift-Space")
-        return true
+
+        let timer = DispatchSource.makeTimerSource(queue: .main)
+        timer.schedule(deadline: .now(), repeating: .milliseconds(20), leeway: .milliseconds(3))
+        timer.setEventHandler { [weak self] in self?.poll() }
+        self.timer = timer
+        timer.resume()
+        NSLog("Nexus registered hold-Command dictation with a 180 ms threshold")
     }
 
-    fileprivate func handle(_ event: EventRef?) {
-        switch GetEventKind(event) {
-        case UInt32(kEventHotKeyPressed): onPress()
-        case UInt32(kEventHotKeyReleased): onRelease()
-        default: break
+    func cancelCurrentHold() {
+        disqualifiedByInput = true
+        poll()
+    }
+
+    private func poll() {
+        let flags = CGEventSource.flagsState(.combinedSessionState)
+        let commandIsDown = flags.contains(.maskCommand)
+        let otherModifiersAreDown = flags.contains(.maskShift)
+            || flags.contains(.maskControl)
+            || flags.contains(.maskAlternate)
+        let otherKeyIsDown = (CGKeyCode(0)..<CGKeyCode(128)).contains { keyCode in
+            !Self.modifierKeyCodes.contains(keyCode)
+                && CGEventSource.keyState(.combinedSessionState, key: keyCode)
+        }
+        let transition = gesture.update(
+            commandIsDown: commandIsDown,
+            hasDisqualifyingInput: disqualifiedByInput || otherModifiersAreDown || otherKeyIsDown,
+            now: ProcessInfo.processInfo.systemUptime
+        )
+        if !commandIsDown { disqualifiedByInput = false }
+        switch transition {
+        case .began: onPress()
+        case .ended: onRelease()
+        case nil: break
         }
     }
 
     deinit {
-        if let hotKey { UnregisterEventHotKey(hotKey) }
-        if let eventHandler { RemoveEventHandler(eventHandler) }
+        timer?.setEventHandler {}
+        timer?.cancel()
+        if let globalInputMonitor { NSEvent.removeMonitor(globalInputMonitor) }
+        if let localInputMonitor { NSEvent.removeMonitor(localInputMonitor) }
     }
-}
-
-private let nexusGlobalHotKeyHandler: EventHandlerUPP = { _, event, userData in
-    guard let userData else { return noErr }
-    let manager = Unmanaged<NexusGlobalHotKey>.fromOpaque(userData).takeUnretainedValue()
-    manager.handle(event)
-    return noErr
 }
 
 private final class PointerProximityMonitor {

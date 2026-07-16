@@ -35,13 +35,15 @@ struct ContentView: View {
 }
 
 private struct ToolActivityNotch: View {
+    @EnvironmentObject private var notch: NotchController
     let activity: ToolActivity
 
     var body: some View {
         ZStack(alignment: .top) {
             NotchSurface(cornerRadius: 18).fill(.black)
             HStack(spacing: 0) {
-                AgentOrb(size: 27).frame(width: NotchGeometry.wingWidth)
+                NexusPetView(pet: notch.selectedPet, activity: .tool, height: 31)
+                    .frame(width: NotchGeometry.wingWidth)
                 Color.clear.frame(maxWidth: .infinity)
                 ToolIconView(source: activity.icon)
                     .frame(width: NotchGeometry.wingWidth)
@@ -154,6 +156,7 @@ private struct LegacyNotchGlass: View {
 }
 
 private struct ListeningWings: View {
+    @EnvironmentObject private var notch: NotchController
     let isThinking: Bool
     private let wingWidth = NotchGeometry.wingWidth
 
@@ -163,7 +166,11 @@ private struct ListeningWings: View {
                 .fill(.black)
 
             HStack(spacing: 0) {
-                AgentOrb(size: 27)
+                NexusPetView(
+                    pet: notch.selectedPet,
+                    activity: isThinking ? .thinking : .dictating,
+                    height: 31
+                )
                     .frame(width: wingWidth)
 
                 Color.clear
@@ -187,10 +194,12 @@ private struct TranscriptContents: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             HStack(alignment: .top) {
-                InteractiveAgentOrb(
-                    size: 34,
+                InteractiveNexusPet(
+                    pet: notch.selectedPet,
+                    height: 44,
                     isMuted: notch.isVoiceMuted,
                     mute: notch.toggleVoiceMute,
+                    cycle: notch.cyclePet,
                     close: notch.dismissOverlay
                 )
                 Spacer()
@@ -231,37 +240,50 @@ private struct TranscriptContents: View {
     }
 }
 
-private struct InteractiveAgentOrb: View {
-    let size: CGFloat
+private struct InteractiveNexusPet: View {
+    let pet: NexusPet
+    let height: CGFloat
     let isMuted: Bool
     let mute: () -> Void
+    let cycle: () -> Void
     let close: () -> Void
 
     var body: some View {
         ZStack {
-            AgentOrb(size: size)
+            NexusPetView(pet: pet, activity: .overlay, height: height)
                 .opacity(isMuted ? 0.55 : 1)
             if isMuted {
-                Circle().fill(.black.opacity(0.48))
+                Circle()
+                    .fill(.black.opacity(0.66))
+                    .frame(width: height * 0.54, height: height * 0.54)
                 Image(systemName: "speaker.slash.fill")
-                    .font(.system(size: size * 0.34, weight: .semibold))
+                    .font(.system(size: height * 0.23, weight: .semibold))
                     .foregroundStyle(.white)
             }
         }
-        .frame(width: size, height: size)
-        .contentShape(Circle())
+        .frame(width: height * 192 / 208, height: height)
+        .contentShape(Rectangle())
         .gesture(
             TapGesture(count: 2)
                 .exclusively(before: TapGesture(count: 1))
                 .onEnded { result in
                     switch result {
                     case .first: close()
-                    case .second: mute()
+                    case .second:
+                        if CGEventSource.flagsState(.combinedSessionState).contains(.maskCommand) {
+                            cycle()
+                        } else {
+                            mute()
+                        }
                     }
                 }
         )
-        .help(isMuted ? "Click to unmute · Double-click to close" : "Click to mute · Double-click to close")
-        .accessibilityLabel(isMuted ? "Nexus voice muted" : "Nexus voice active")
+        .help(
+            isMuted
+                ? "Click to unmute · Command-click to change pet · Double-click to close"
+                : "Click to mute · Command-click to change pet · Double-click to close"
+        )
+        .accessibilityLabel("\(pet.displayName). \(isMuted ? "Nexus voice muted" : "Nexus voice active")")
     }
 }
 
@@ -296,27 +318,6 @@ private struct DictationBars: View {
                 }
             }
             .frame(height: 26)
-        }
-    }
-}
-
-private struct AgentOrb: View {
-    let size: CGFloat
-    @State private var rotates = false
-
-    var body: some View {
-        ZStack {
-            Circle()
-                .fill(AngularGradient(colors: [.cyan, .blue, .white, .indigo, .cyan], center: .center))
-                .rotationEffect(.degrees(rotates ? 360 : 0))
-            Circle()
-                .fill(RadialGradient(colors: [.white.opacity(0.92), .clear], center: .init(x: 0.31, y: 0.25), startRadius: 0, endRadius: size * 0.58))
-            Circle().stroke(.white.opacity(0.45), lineWidth: 0.6)
-        }
-        .frame(width: size, height: size)
-        .shadow(color: .cyan.opacity(0.42), radius: 8)
-        .onAppear {
-            withAnimation(.linear(duration: 3.5).repeatForever(autoreverses: false)) { rotates = true }
         }
     }
 }
