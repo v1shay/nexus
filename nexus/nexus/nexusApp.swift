@@ -27,12 +27,13 @@ final class NexusAppDelegate: NSObject, NSApplicationDelegate {
 
 @MainActor
 final class NotchController: ObservableObject {
-    @Published private(set) var isExpanded = false
-    @Published private(set) var isListening = false
-    @Published private(set) var isHoverPreview = false
-    @Published private(set) var hasTranscript = false
-    @Published private(set) var transcript = ""
+    @Published private var interaction = NotchInteractionState()
     @Published private(set) var currentSize = CGSize(width: 190, height: 32)
+
+    var presentation: NotchPresentation { interaction.presentation }
+    var isExpanded: Bool { interaction.presentation == .overlay }
+    var isListening: Bool { interaction.presentation == .dictating }
+    var transcript: String { interaction.transcript }
 
     private var panel: NexusNotchPanel?
     private var screen: NSScreen?
@@ -44,7 +45,7 @@ final class NotchController: ObservableObject {
 
     static let preview: NotchController = {
         let controller = NotchController()
-        controller.isListening = true
+        controller.interaction.beginDictation()
         return controller
     }()
 
@@ -107,47 +108,20 @@ final class NotchController: ObservableObject {
 
     private func startGlobalDictation() {
         closeTask?.cancel()
-        isListening = true
-        isHoverPreview = false
-        hasTranscript = false
-        transcript = ""
+        interaction.beginDictation()
         if let screen {
-            isExpanded = false
             resize(to: listeningSize(for: screen), animated: true)
         }
         speechTranscriber.start { [weak self] text in
-            Task { @MainActor in self?.transcript = text }
+            Task { @MainActor in self?.interaction.updateTranscript(text) }
         }
     }
 
     private func finishGlobalDictation() {
         speechTranscriber.stop()
-        isListening = false
-        isHoverPreview = false
-        hasTranscript = true
+        interaction.finishDictation()
         if let screen {
-            isExpanded = false
             resize(to: closedSize(for: screen), animated: true)
-        }
-    }
-
-    func toggleListening() {
-        closeTask?.cancel()
-        isListening.toggle()
-        if isListening {
-            isHoverPreview = false
-            hasTranscript = false
-            transcript = ""
-            if let screen {
-                isExpanded = false
-                resize(to: listeningSize(for: screen), animated: true)
-            }
-        } else {
-            hasTranscript = true
-            if let screen {
-                isExpanded = false
-                resize(to: closedSize(for: screen), animated: true)
-            }
         }
     }
 
@@ -177,7 +151,6 @@ final class NotchController: ObservableObject {
         closeTask?.cancel()
         if hovering {
             guard !isListening else { return }
-            isHoverPreview = false
             expand()
         } else {
             guard !isListening else { return }
@@ -195,14 +168,13 @@ final class NotchController: ObservableObject {
 
     private func expand(to size: (NSScreen) -> CGSize) {
         guard let screen else { return }
-        isExpanded = true
+        interaction.showOverlay()
         resize(to: size(screen), animated: true)
     }
 
     private func collapse() {
         guard isExpanded, let screen else { return }
-        isExpanded = false
-        isHoverPreview = false
+        interaction.hideOverlay()
         resize(to: closedSize(for: screen), animated: true)
     }
 
@@ -254,9 +226,11 @@ final class NotchController: ObservableObject {
     @objc private func displayConfigurationChanged() {
         guard let screen = NSScreen.main ?? NSScreen.screens.first else { return }
         self.screen = screen
-        let size = isListening
-            ? listeningSize(for: screen)
-            : (isExpanded ? expandedSize(for: screen) : closedSize(for: screen))
+        let size: CGSize = switch interaction.presentation {
+        case .idle: closedSize(for: screen)
+        case .dictating: listeningSize(for: screen)
+        case .overlay: expandedSize(for: screen)
+        }
         resize(to: size, animated: false)
     }
 }

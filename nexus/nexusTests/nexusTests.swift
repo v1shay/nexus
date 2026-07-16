@@ -15,4 +15,18 @@ final class NexusGeometryTests: XCTestCase {
         XCTAssertEqual(regions.notchGap.maxX, regions.rightWing.minX)
         XCTAssertEqual(regions.rightWing.maxX, listening.width)
     }
+
+    func testDictationReleaseSavesTextWithoutOpeningOverlay() {
+        var state = NotchInteractionState()
+        state.beginDictation()
+        state.updateTranscript("Send the project update")
+        state.finishDictation()
+
+        XCTAssertEqual(state.presentation, .idle)
+        XCTAssertEqual(state.transcript, "Send the project update")
+
+        state.showOverlay()
+        XCTAssertEqual(state.presentation, .overlay)
+        XCTAssertEqual(state.transcript, "Send the project update")
+    }
 }

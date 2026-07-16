@@ -30,7 +30,7 @@ struct ContentView: View {
         .onHover { notch.updateHover($0) }
         .animation(.interpolatingSpring(stiffness: 340, damping: 31), value: notch.currentSize)
         .animation(.easeInOut(duration: 0.18), value: notch.isListening)
-        .animation(.easeInOut(duration: 0.22), value: notch.hasTranscript)
+        .animation(.easeInOut(duration: 0.22), value: notch.presentation)
     }
 }
 
