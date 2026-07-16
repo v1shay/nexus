@@ -269,7 +269,7 @@ private final class NexusGlobalHotKey {
             Unmanaged.passUnretained(self).toOpaque(),
             &eventHandler
         )
-        var identifier = EventHotKeyID(signature: 0x4E585553, id: 1) // "NXUS"
+        let identifier = EventHotKeyID(signature: 0x4E585553, id: 1) // "NXUS"
         RegisterEventHotKey(
             UInt32(kVK_Space),
             UInt32(cmdKey | shiftKey),
