@@ -236,4 +236,73 @@ final class NexusGeometryTests: XCTestCase {
         XCTAssertTrue(didRender, "The bundled KaTeX script should replace raw LaTeX with rendered math")
     }
 
+    func testAllSixBundledPetsHaveValidAnimationAtlases() throws {
+        XCTAssertEqual(NexusPetCatalog.all.map(\.id), [
+            "tiko", "kabi", "macintosh", "lil-finder", "crt-pal", "pan-chan-laptop"
+        ])
+
+        for pet in NexusPetCatalog.all {
+            let url = try XCTUnwrap(
+                Bundle.main.url(
+                    forResource: "spritesheet",
+                    withExtension: "webp",
+                    subdirectory: "Pets/\(pet.id)"
+                ),
+                "Missing bundled atlas for \(pet.id)"
+            )
+            let image = try XCTUnwrap(NSImage(contentsOf: url))
+            XCTAssertEqual(image.size, CGSize(width: 1_536, height: 1_872), pet.id)
+        }
+    }
+
+    func testPetActivitiesUseTheSuppliedTaskSpecificRows() {
+        XCTAssertEqual(NexusPetActivity.idle.atlasRow, 0)
+        XCTAssertEqual(NexusPetActivity.dictating.atlasRow, 6)
+        XCTAssertEqual(NexusPetActivity.thinking.atlasRow, 7)
+        XCTAssertEqual(NexusPetActivity.tool.atlasRow, 7)
+        XCTAssertEqual(NexusPetActivity.overlay.atlasRow, 8)
+    }
+
+    func testHoldingCommandAloneStartsAndReleaseEndsDictation() {
+        var gesture = CommandHoldGestureState(holdDuration: 0.18)
+
+        XCTAssertNil(gesture.update(commandIsDown: true, hasDisqualifyingInput: false, now: 10))
+        XCTAssertNil(gesture.update(commandIsDown: true, hasDisqualifyingInput: false, now: 10.17))
+        XCTAssertEqual(
+            gesture.update(commandIsDown: true, hasDisqualifyingInput: false, now: 10.18),
+            .began
+        )
+        XCTAssertEqual(
+            gesture.update(commandIsDown: false, hasDisqualifyingInput: false, now: 10.30),
+            .ended
+        )
+    }
+
+    func testQuickCommandTapAndCommandShortcutDoNotStartDictation() {
+        var quickTap = CommandHoldGestureState(holdDuration: 0.18)
+        XCTAssertNil(quickTap.update(commandIsDown: true, hasDisqualifyingInput: false, now: 20))
+        XCTAssertNil(quickTap.update(commandIsDown: false, hasDisqualifyingInput: false, now: 20.10))
+
+        var shortcut = CommandHoldGestureState(holdDuration: 0.18)
+        XCTAssertNil(shortcut.update(commandIsDown: true, hasDisqualifyingInput: false, now: 30))
+        XCTAssertNil(shortcut.update(commandIsDown: true, hasDisqualifyingInput: true, now: 30.05))
+        XCTAssertNil(shortcut.update(commandIsDown: true, hasDisqualifyingInput: false, now: 30.40))
+        XCTAssertNil(shortcut.update(commandIsDown: false, hasDisqualifyingInput: false, now: 30.50))
+    }
+
+    func testCommandClickCancellationEndsAnActiveHoldWithoutRestartingIt() {
+        var gesture = CommandHoldGestureState(holdDuration: 0.18)
+        XCTAssertNil(gesture.update(commandIsDown: true, hasDisqualifyingInput: false, now: 40))
+        XCTAssertEqual(
+            gesture.update(commandIsDown: true, hasDisqualifyingInput: false, now: 40.18),
+            .began
+        )
+        XCTAssertEqual(
+            gesture.update(commandIsDown: true, hasDisqualifyingInput: true, now: 40.20),
+            .ended
+        )
+        XCTAssertNil(gesture.update(commandIsDown: true, hasDisqualifyingInput: false, now: 40.50))
+        XCTAssertNil(gesture.update(commandIsDown: false, hasDisqualifyingInput: false, now: 40.60))
+    }
+
 }
