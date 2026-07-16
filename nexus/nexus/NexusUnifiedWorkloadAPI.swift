@@ -1,6 +1,80 @@
 import CryptoKit
 import Foundation
 
+actor NexusAdaptiveTransferLimiter {
+    private struct Waiter {
+        let id: UUID
+        let continuation: CheckedContinuation<UUID, Error>
+    }
+
+    private var limit: Int
+    private var activeIDs: Set<UUID> = []
+    private var waiters: [Waiter] = []
+
+    init(limit: Int) { self.limit = max(1, limit) }
+
+    func setLimit(_ limit: Int) {
+        self.limit = max(1, limit)
+        drain()
+    }
+
+    func withPermit<Result: Sendable>(
+        _ operation: @escaping @Sendable () async throws -> Result
+    ) async throws -> Result {
+        let permit = try await acquire()
+        do {
+            try Task.checkCancellation()
+            let result = try await operation()
+            release(permit)
+            return result
+        } catch {
+            release(permit)
+            throw error
+        }
+    }
+
+    func snapshot() -> (active: Int, queued: Int, limit: Int) {
+        (activeIDs.count, waiters.count, limit)
+    }
+
+    private func acquire() async throws -> UUID {
+        let id = UUID()
+        if activeIDs.count < limit {
+            activeIDs.insert(id)
+            return id
+        }
+        return try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { continuation in
+                if Task.isCancelled {
+                    continuation.resume(throwing: CancellationError())
+                } else {
+                    waiters.append(.init(id: id, continuation: continuation))
+                }
+            }
+        } onCancel: {
+            Task { await self.cancelWaiting(id) }
+        }
+    }
+
+    private func release(_ id: UUID) {
+        guard activeIDs.remove(id) != nil else { return }
+        drain()
+    }
+
+    private func cancelWaiting(_ id: UUID) {
+        guard let index = waiters.firstIndex(where: { $0.id == id }) else { return }
+        waiters.remove(at: index).continuation.resume(throwing: CancellationError())
+    }
+
+    private func drain() {
+        while activeIDs.count < limit, !waiters.isEmpty {
+            let waiter = waiters.removeFirst()
+            activeIDs.insert(waiter.id)
+            waiter.continuation.resume(returning: waiter.id)
+        }
+    }
+}
+
 struct NexusTransferProgress: Equatable, Sendable {
     let completedBytes: Int64
     let totalBytes: Int64?
@@ -24,6 +98,7 @@ actor NexusUnifiedWorkloadAPI {
 
     private let executor: any NexusWorkloadExecuting
     private var bandwidthPolicy: NexusBandwidthPolicy
+    private let transferLimiter: NexusAdaptiveTransferLimiter
 
     init(
         executor: any NexusWorkloadExecuting,
@@ -37,10 +112,13 @@ actor NexusUnifiedWorkloadAPI {
     ) {
         self.executor = executor
         self.bandwidthPolicy = bandwidthPolicy
+        transferLimiter = NexusAdaptiveTransferLimiter(limit: bandwidthPolicy.transferConcurrency)
     }
 
-    func setConnectionQuality(_ quality: NexusConnectionQuality) {
-        bandwidthPolicy = .policy(for: quality)
+    func setConnectionQuality(_ quality: NexusConnectionQuality) async {
+        let policy = NexusBandwidthPolicy.policy(for: quality)
+        bandwidthPolicy = policy
+        await transferLimiter.setLimit(policy.transferConcurrency)
     }
 
     func events(for request: NexusWorkloadRequest) async throws -> AsyncThrowingStream<NexusWorkloadEvent, Error> {
@@ -158,6 +236,22 @@ actor NexusUnifiedWorkloadAPI {
         transferID: UUID = UUID(),
         onProgress: @escaping ProgressHandler = { _ in }
     ) async throws {
+        try await transferLimiter.withPermit { [self] in
+            try await performUploadFile(
+                from: source,
+                to: destination,
+                transferID: transferID,
+                onProgress: onProgress
+            )
+        }
+    }
+
+    private func performUploadFile(
+        from source: URL,
+        to destination: NexusFileReference,
+        transferID: UUID,
+        onProgress: @escaping ProgressHandler
+    ) async throws {
         let attributes = try FileManager.default.attributesOfItem(atPath: source.path)
         guard let number = attributes[.size] as? NSNumber else {
             throw NexusConnectError.requestFailed("Could not determine the upload size")
@@ -220,6 +314,22 @@ actor NexusUnifiedWorkloadAPI {
         transferID: UUID = UUID(),
         onProgress: @escaping ProgressHandler = { _ in }
     ) async throws {
+        try await transferLimiter.withPermit { [self] in
+            try await performDownloadFile(
+                from: source,
+                to: destination,
+                transferID: transferID,
+                onProgress: onProgress
+            )
+        }
+    }
+
+    private func performDownloadFile(
+        from source: NexusFileReference,
+        to destination: URL,
+        transferID: UUID,
+        onProgress: @escaping ProgressHandler
+    ) async throws {
         let remote = try await fileStat(source, includeSHA256: true)
         guard remote.exists, !remote.isDirectory, let finalDigest = remote.sha256 else {
             throw NexusConnectError.requestFailed("The Studio file is unavailable")
@@ -274,6 +384,24 @@ actor NexusUnifiedWorkloadAPI {
         expectedSHA256: Data? = nil,
         transferID: UUID = UUID(),
         onProgress: @escaping ProgressHandler = { _ in }
+    ) async throws -> NexusDownloadResultPayload {
+        try await transferLimiter.withPermit { [self] in
+            try await performDownloadOnStudio(
+                sourceURL: sourceURL,
+                destination: destination,
+                expectedSHA256: expectedSHA256,
+                transferID: transferID,
+                onProgress: onProgress
+            )
+        }
+    }
+
+    private func performDownloadOnStudio(
+        sourceURL: URL,
+        destination: NexusFileReference,
+        expectedSHA256: Data?,
+        transferID: UUID,
+        onProgress: @escaping ProgressHandler
     ) async throws -> NexusDownloadResultPayload {
         let request = try NexusWorkloadRequest(
             kind: .download,

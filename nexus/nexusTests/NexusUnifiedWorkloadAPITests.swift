@@ -158,6 +158,52 @@ extension NexusGeometryTests {
             XCTFail("Shell interpreters must never receive approval tokens")
         } catch {}
     }
+
+    func testAdaptiveTransferLimiterAppliesBandwidthConcurrencyAndCancelsWaiters() async throws {
+        let limiter = NexusAdaptiveTransferLimiter(limit: 1)
+        let blocker = NexusTransferBlocker()
+        let first = Task {
+            try await limiter.withPermit {
+                await blocker.wait()
+                return 1
+            }
+        }
+        try await Task.sleep(nanoseconds: 20_000_000)
+        let second = Task {
+            try await limiter.withPermit {
+                await blocker.wait()
+                return 2
+            }
+        }
+        try await Task.sleep(nanoseconds: 20_000_000)
+        let constrained = await limiter.snapshot()
+        XCTAssertEqual(constrained.active, 1)
+        XCTAssertEqual(constrained.queued, 1)
+
+        await limiter.setLimit(2)
+        try await Task.sleep(nanoseconds: 20_000_000)
+        let expanded = await limiter.snapshot()
+        XCTAssertEqual(expanded.active, 2)
+        XCTAssertEqual(expanded.queued, 0)
+
+        let cancelled = Task {
+            try await limiter.withPermit { 3 }
+        }
+        try await Task.sleep(nanoseconds: 20_000_000)
+        cancelled.cancel()
+        do {
+            _ = try await cancelled.value
+            XCTFail("A cancelled queued transfer must never start")
+        } catch {}
+        let afterCancellation = await limiter.snapshot()
+        XCTAssertEqual(afterCancellation.queued, 0)
+
+        await blocker.releaseAll()
+        let firstValue = try await first.value
+        let secondValue = try await second.value
+        XCTAssertEqual(firstValue, 1)
+        XCTAssertEqual(secondValue, 2)
+    }
 }
 
 private actor NexusTransferProgressCollector {
@@ -170,4 +216,14 @@ private actor NexusUnifiedEventCollector {
     private var values: [NexusWorkloadEvent] = []
     func append(_ event: NexusWorkloadEvent) { values.append(event) }
     func first(kind: NexusWorkloadEventKind) -> NexusWorkloadEvent? { values.first { $0.kind == kind } }
+}
+
+private actor NexusTransferBlocker {
+    private var waiters: [CheckedContinuation<Void, Never>] = []
+    func wait() async { await withCheckedContinuation { waiters.append($0) } }
+    func releaseAll() {
+        let saved = waiters
+        waiters.removeAll()
+        saved.forEach { $0.resume() }
+    }
 }
