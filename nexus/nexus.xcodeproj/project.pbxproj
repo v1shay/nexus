@@ -22,6 +22,11 @@
 		E100000130075C29006660E4 /* KaTeX in Resources */ = {isa = PBXBuildFile; fileRef = E100000230075C29006660E4 /* KaTeX */; };
 		F100000130075C29006660E4 /* PetAssets.swift in Sources */ = {isa = PBXBuildFile; fileRef = F100000230075C29006660E4 /* PetAssets.swift */; };
 		F100000330075C29006660E4 /* Pets in Resources */ = {isa = PBXBuildFile; fileRef = F100000430075C29006660E4 /* Pets */; };
+		G100000130075C29006660E4 /* NexusConnectModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = G100000230075C29006660E4 /* NexusConnectModels.swift */; };
+		G100000330075C29006660E4 /* NexusConnectFraming.swift in Sources */ = {isa = PBXBuildFile; fileRef = G100000430075C29006660E4 /* NexusConnectFraming.swift */; };
+		G100000530075C29006660E4 /* NexusConnectSecurity.swift in Sources */ = {isa = PBXBuildFile; fileRef = G100000630075C29006660E4 /* NexusConnectSecurity.swift */; };
+		G100000730075C29006660E4 /* NexusConnectPolicy.swift in Sources */ = {isa = PBXBuildFile; fileRef = G100000830075C29006660E4 /* NexusConnectPolicy.swift */; };
+		G100000930075C29006660E4 /* NexusConnectFoundationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = G100000A30075C29006660E4 /* NexusConnectFoundationTests.swift */; };
 		156AB6C030075C2A006660E4 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 156AB6BF30075C2A006660E4 /* Assets.xcassets */; };
 		156AB6C430075C2A006660E4 /* Preview Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 156AB6C330075C2A006660E4 /* Preview Assets.xcassets */; };
 		156AB6CE30075C2A006660E4 /* nexusTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 156AB6CD30075C2A006660E4 /* nexusTests.swift */; };
@@ -63,6 +68,11 @@
 		E100000230075C29006660E4 /* KaTeX */ = {isa = PBXFileReference; explicitFileType = folder; path = KaTeX; sourceTree = "<group>"; };
 		F100000230075C29006660E4 /* PetAssets.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PetAssets.swift; sourceTree = "<group>"; };
 		F100000430075C29006660E4 /* Pets */ = {isa = PBXFileReference; explicitFileType = folder; path = Pets; sourceTree = "<group>"; };
+		G100000230075C29006660E4 /* NexusConnectModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NexusConnectModels.swift; sourceTree = "<group>"; };
+		G100000430075C29006660E4 /* NexusConnectFraming.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NexusConnectFraming.swift; sourceTree = "<group>"; };
+		G100000630075C29006660E4 /* NexusConnectSecurity.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NexusConnectSecurity.swift; sourceTree = "<group>"; };
+		G100000830075C29006660E4 /* NexusConnectPolicy.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NexusConnectPolicy.swift; sourceTree = "<group>"; };
+		G100000A30075C29006660E4 /* NexusConnectFoundationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NexusConnectFoundationTests.swift; sourceTree = "<group>"; };
 		156AB6BF30075C2A006660E4 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		156AB6C130075C2A006660E4 /* nexus.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = nexus.entitlements; sourceTree = "<group>"; };
 		156AB6C330075C2A006660E4 /* Preview Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = "Preview Assets.xcassets"; sourceTree = "<group>"; };
@@ -123,6 +133,10 @@
 			children = (
 				156AB6BB30075C29006660E4 /* nexusApp.swift */,
 				156AB6BD30075C29006660E4 /* ContentView.swift */,
+				G100000230075C29006660E4 /* NexusConnectModels.swift */,
+				G100000430075C29006660E4 /* NexusConnectFraming.swift */,
+				G100000630075C29006660E4 /* NexusConnectSecurity.swift */,
+				G100000830075C29006660E4 /* NexusConnectPolicy.swift */,
 				A100000230075C29006660E4 /* ModelAggregatorView.swift */,
 				A100000430075C29006660E4 /* SpeechTranscriber.swift */,
 				A100000630075C29006660E4 /* NotchGeometry.swift */,
@@ -155,6 +169,7 @@
 			isa = PBXGroup;
 			children = (
 				156AB6CD30075C2A006660E4 /* nexusTests.swift */,
+				G100000A30075C29006660E4 /* NexusConnectFoundationTests.swift */,
 			);
 			path = nexusTests;
 			sourceTree = "<group>";
@@ -302,6 +317,10 @@
 			files = (
 				156AB6BE30075C29006660E4 /* ContentView.swift in Sources */,
 				156AB6BC30075C29006660E4 /* nexusApp.swift in Sources */,
+				G100000130075C29006660E4 /* NexusConnectModels.swift in Sources */,
+				G100000330075C29006660E4 /* NexusConnectFraming.swift in Sources */,
+				G100000530075C29006660E4 /* NexusConnectSecurity.swift in Sources */,
+				G100000730075C29006660E4 /* NexusConnectPolicy.swift in Sources */,
 				A100000130075C29006660E4 /* ModelAggregatorView.swift in Sources */,
 				A100000330075C29006660E4 /* SpeechTranscriber.swift in Sources */,
 				A100000530075C29006660E4 /* NotchGeometry.swift in Sources */,
@@ -321,6 +340,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				156AB6CE30075C2A006660E4 /* nexusTests.swift in Sources */,
+				G100000930075C29006660E4 /* NexusConnectFoundationTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
