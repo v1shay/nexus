@@ -1,4 +1,5 @@
 import Foundation
+import Combine
 
 @MainActor
 final class ModelDownloadViewModel: ObservableObject {
@@ -11,21 +12,36 @@ final class ModelDownloadViewModel: ObservableObject {
     @Published var pendingOllamaInstall: LocalModel?
     @Published private(set) var activeModel: LocalModel?
 
-    let memoryGB = max(1, Int(ProcessInfo.processInfo.physicalMemory / 1_073_741_824))
+    var memoryGB: Int {
+        connect?.remoteMemoryGB ?? max(1, Int(ProcessInfo.processInfo.physicalMemory / 1_073_741_824))
+    }
+
+    var connectController: NexusConnectController? { connect }
 
     private let ollama: OllamaManager
     private let lmStudio: LMStudioManager
     private let catalogService: ModelCatalogService
+    private let connect: NexusConnectController?
     private var downloadTasks: [String: Task<Void, Never>] = [:]
+    private var cancellables: Set<AnyCancellable> = []
     private var installedModelRecords: [String: LocalModel] = [:]
+    private var studioModelIDs: Set<String>
     private let installedDefaultsKey = "nexus.installed-model-ids"
     private let installedModelsDefaultsKey = "nexus.installed-model-records"
     private let activeModelDefaultsKey = "nexus.active-model"
+    private let studioModelsDefaultsKey = "nexus.connect.studio-model-ids"
 
-    init(ollama: OllamaManager = .init(), lmStudio: LMStudioManager = .init(), catalogService: ModelCatalogService = .init()) {
+    init(
+        ollama: OllamaManager = .init(),
+        lmStudio: LMStudioManager = .init(),
+        catalogService: ModelCatalogService = .init(),
+        connect: NexusConnectController? = nil
+    ) {
         self.ollama = ollama
         self.lmStudio = lmStudio
         self.catalogService = catalogService
+        self.connect = connect
+        studioModelIDs = Set(UserDefaults.standard.stringArray(forKey: studioModelsDefaultsKey) ?? [])
         if let data = UserDefaults.standard.data(forKey: installedModelsDefaultsKey),
            let models = try? JSONDecoder().decode([LocalModel].self, from: data) {
             models.forEach {
@@ -49,8 +65,19 @@ final class ModelDownloadViewModel: ObservableObject {
         } else if let fallback = installedModelRecords.values.sorted(by: { $0.id < $1.id }).first {
             use(fallback)
         }
+        connect?.$state
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] state in
+                guard let self else { return }
+                objectWillChange.send()
+                if case .ready = state {
+                    Task { await self.discoverInstalledStudioModels() }
+                }
+            }
+            .store(in: &cancellables)
         Task {
             await discoverInstalledRuntimeModels()
+            await discoverInstalledStudioModels()
             await refreshCatalog()
         }
     }
@@ -95,7 +122,7 @@ final class ModelDownloadViewModel: ObservableObject {
 
     func download(_ model: LocalModel) {
         guard downloadTasks[model.id] == nil, !(states[model.id]?.isActive ?? false) else { return }
-        if model.backend == .ollama && ollama.executableURL() == nil {
+        if connect?.shouldUseStudio != true, model.backend == .ollama && ollama.executableURL() == nil {
             pendingOllamaInstall = model
             return
         }
@@ -133,6 +160,9 @@ final class ModelDownloadViewModel: ObservableObject {
     ) async throws -> String {
         guard let activeModel else {
             throw LocalModelError.invalidResponse("Choose an installed model in the model window first")
+        }
+        if connect?.shouldUseStudio == true, let connect {
+            return try await connect.response(model: activeModel, prompt: prompt, onDelta: onDelta)
         }
         switch activeModel.backend {
         case .ollama:
@@ -172,23 +202,50 @@ final class ModelDownloadViewModel: ObservableObject {
         if !discovered.isEmpty { persistInstalledModels() }
     }
 
+    private func discoverInstalledStudioModels() async {
+        guard let connect, connect.shouldUseStudio,
+              let remote = try? await connect.installedStudioModels() else { return }
+        let discovered = remote.map {
+            LocalModel(
+                customIdentifier: $0.identifier,
+                backend: $0.runtime == .ollama ? .ollama : .lmStudio
+            )
+        }
+        discovered.forEach {
+            installedModelRecords[$0.id] = $0
+            studioModelIDs.insert($0.id)
+            states[$0.id] = .installed
+        }
+        if activeModel == nil, let first = discovered.first { use(first) }
+        if !discovered.isEmpty { persistInstalledModels() }
+    }
+
     private func startDownload(_ model: LocalModel, installOllamaFirst: Bool) {
         states[model.id] = .preparing("Preparing \(model.backend.title)…")
         let task = Task { [weak self] in
             guard let self else { return }
             do {
-                if installOllamaFirst {
+                let useStudio = connect?.shouldUseStudio == true
+                if installOllamaFirst, !useStudio {
                     states[model.id] = .preparing("Installing the official Ollama app…")
                     try await ollama.installOfficialMacApp()
                 }
-                switch model.backend {
-                case .ollama:
-                    try await ollama.pull(model: model.identifier) { [weak self] update in
-                        Task { @MainActor in self?.apply(update, to: model) }
+                if useStudio, let connect {
+                    states[model.id] = .preparing("Sending download to Mac Studio…")
+                    try await connect.pullModel(model) { update in
+                        await self.apply(update, to: model)
                     }
-                case .lmStudio:
-                    try await lmStudio.download(model) { [weak self] update in
-                        Task { @MainActor in self?.apply(update, to: model) }
+                    studioModelIDs.insert(model.id)
+                } else {
+                    switch model.backend {
+                    case .ollama:
+                        try await ollama.pull(model: model.identifier) { [weak self] update in
+                            Task { @MainActor in self?.apply(update, to: model) }
+                        }
+                    case .lmStudio:
+                        try await lmStudio.download(model) { [weak self] update in
+                            Task { @MainActor in self?.apply(update, to: model) }
+                        }
                     }
                 }
                 states[model.id] = .installed
@@ -213,5 +270,6 @@ final class ModelDownloadViewModel: ObservableObject {
         if let data = try? JSONEncoder().encode(models) {
             UserDefaults.standard.set(data, forKey: installedModelsDefaultsKey)
         }
+        UserDefaults.standard.set(studioModelIDs.sorted(), forKey: studioModelsDefaultsKey)
     }
 }

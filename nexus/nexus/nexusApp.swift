@@ -107,13 +107,19 @@ final class NotchController: ObservableObject {
     private var pointerMonitor: PointerProximityMonitor?
     private var modelPanel: NSPanel?
     private let speechTranscriber = SpeechTranscriber()
-    private let modelDownloadViewModel = ModelDownloadViewModel()
+    private let connectController: NexusConnectController
+    private let modelDownloadViewModel: ModelDownloadViewModel
     private var automaticRevealIsWaitingForNotchVisit = false
     private let responseSpeaker = ResponseSpeaker()
     private var responseTask: Task<Void, Never>?
     private var responseGeneration = UUID()
     private var hoverSession = NotchHoverSession()
     private var suppressAutomaticResponseReveal = false
+
+    init(connectController: NexusConnectController = .shared) {
+        self.connectController = connectController
+        modelDownloadViewModel = ModelDownloadViewModel(connect: connectController)
+    }
 
     static let preview: NotchController = {
         let controller = NotchController()
@@ -123,6 +129,7 @@ final class NotchController: ObservableObject {
 
     func install() {
         guard panel == nil else { return }
+        connectController.start()
         let screen = NSScreen.main ?? NSScreen.screens[0]
         self.screen = screen
         currentSize = closedSize(for: screen)
@@ -353,6 +360,7 @@ final class NotchController: ObservableObject {
         responseSpeaker.stop()
         commandHoldMonitor = nil
         modelDownloadViewModel.shutdown()
+        connectController.shutdown()
     }
 
     private func updateHover(_ hovering: Bool) {

@@ -8,7 +8,10 @@ struct ModelDownloadView: View {
             HStack {
                 Text("Models").font(.headline)
                 Spacer()
-                Text("\(viewModel.memoryGB) GB memory").font(.caption).foregroundStyle(.secondary)
+                Text("\(viewModel.memoryGB) GB available memory").font(.caption).foregroundStyle(.secondary)
+            }
+            if let connect = viewModel.connectController {
+                NexusConnectSetupView(controller: connect)
             }
             HStack {
                 TextField("Search the registry or paste an exact model identifier", text: $viewModel.query)
@@ -78,6 +81,83 @@ struct ModelDownloadView: View {
             }
         case .idle:
             Button("Download") { viewModel.download(model) }.keyboardShortcut(.defaultAction)
+        }
+    }
+}
+
+private struct NexusConnectSetupView: View {
+    @ObservedObject var controller: NexusConnectController
+    @State private var expanded = false
+
+    var body: some View {
+        DisclosureGroup(isExpanded: $expanded) {
+            VStack(alignment: .leading, spacing: 8) {
+                HStack {
+                    Picker("Role", selection: Binding(
+                        get: { controller.role },
+                        set: { controller.setRole($0) }
+                    )) {
+                        ForEach(NexusConnectRole.allCases) { role in
+                            Text(role.title).tag(role)
+                        }
+                    }
+                    .frame(maxWidth: 260)
+                    Toggle("Enable automatically", isOn: Binding(
+                        get: { controller.enabled },
+                        set: { controller.setEnabled($0) }
+                    ))
+                    Spacer()
+                }
+
+                HStack {
+                    TextField("NX1 pairing code", text: $controller.pairingCode)
+                        .textFieldStyle(.roundedBorder)
+                    Button("Pair", action: controller.applyPairingCode)
+                    Button("Generate", action: controller.createPairingCode)
+                    Button("Copy", action: controller.copyPairingCode)
+                        .disabled(controller.pairingCode.isEmpty)
+                    if controller.isPaired {
+                        Button("Unpair", role: .destructive, action: controller.unpair)
+                    }
+                }
+                Text(controller.setupMessage.isEmpty
+                     ? "Generate on one Mac, paste the same one-time code on the other, then enable both."
+                     : controller.setupMessage)
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(2)
+            }
+            .padding(.top, 6)
+        } label: {
+            HStack(spacing: 7) {
+                Image(systemName: connectIcon)
+                    .foregroundStyle(connectColor)
+                Text("Nexus Connect")
+                    .font(.subheadline.weight(.medium))
+                Text(controller.state.statusText)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                Spacer()
+            }
+        }
+    }
+
+    private var connectIcon: String {
+        switch controller.state {
+        case .ready, .hosting: "network.badge.shield.half.filled"
+        case .discovering, .connecting, .reconnecting: "network"
+        case .failed: "exclamationmark.triangle"
+        case .off, .needsPairing: "network.slash"
+        }
+    }
+
+    private var connectColor: Color {
+        switch controller.state {
+        case .ready, .hosting: .green
+        case .discovering, .connecting, .reconnecting: .orange
+        case .failed: .red
+        case .off, .needsPairing: .secondary
         }
     }
 }
