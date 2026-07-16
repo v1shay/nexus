@@ -115,13 +115,125 @@ actor NexusApprovalStore {
     }
 }
 
-actor NexusHostJobAccounting {
-    private(set) var activeJobs = 0
-    private(set) var queuedJobs = 0
+actor NexusHostWorkloadScheduler {
+    struct Ticket: Sendable {
+        fileprivate let id: UUID
+        fileprivate let isBulk: Bool
+    }
 
-    func begin() { activeJobs += 1 }
-    func end() { activeJobs = max(0, activeJobs - 1) }
-    func snapshot() -> (active: Int, queued: Int) { (activeJobs, queuedJobs) }
+    private struct Waiter {
+        let id: UUID
+        let priority: NexusWorkloadPriority
+        let isBulk: Bool
+        let order: UInt64
+        let continuation: CheckedContinuation<Ticket, Error>
+    }
+
+    private let maximumActive: Int
+    private let maximumBulk: Int
+    private var active = 0
+    private var activeBulk = 0
+    private var activeIDs: Set<UUID> = []
+    private var waiters: [Waiter] = []
+    private var cancelledBeforeEnqueue: Set<UUID> = []
+    private var nextOrder: UInt64 = 0
+
+    init(
+        maximumActive: Int = max(4, min(12, ProcessInfo.processInfo.activeProcessorCount)),
+        maximumBulk: Int = 2
+    ) {
+        self.maximumActive = max(2, maximumActive)
+        self.maximumBulk = max(1, min(maximumBulk, self.maximumActive - 1))
+    }
+
+    func acquire(kind: NexusWorkloadKind, priority: NexusWorkloadPriority) async throws -> Ticket {
+        let id = UUID()
+        let isBulk = Self.isBulk(kind)
+        if canStart(isBulk: isBulk) {
+            return start(id: id, isBulk: isBulk)
+        }
+        return try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { continuation in
+                if Task.isCancelled || cancelledBeforeEnqueue.remove(id) != nil {
+                    continuation.resume(throwing: CancellationError())
+                    return
+                }
+                waiters.append(.init(
+                    id: id,
+                    priority: priority,
+                    isBulk: isBulk,
+                    order: nextOrder,
+                    continuation: continuation
+                ))
+                nextOrder &+= 1
+            }
+        } onCancel: {
+            Task { await self.cancelWaiting(id) }
+        }
+    }
+
+    func release(_ ticket: Ticket) {
+        guard activeIDs.remove(ticket.id) != nil else { return }
+        active = max(0, active - 1)
+        if ticket.isBulk { activeBulk = max(0, activeBulk - 1) }
+        drain()
+    }
+
+    func snapshot() -> (active: Int, queued: Int) { (active, waiters.count) }
+
+    private func cancelWaiting(_ id: UUID) {
+        if let index = waiters.firstIndex(where: { $0.id == id }) {
+            let waiter = waiters.remove(at: index)
+            waiter.continuation.resume(throwing: CancellationError())
+        } else if !activeIDs.contains(id) {
+            cancelledBeforeEnqueue.insert(id)
+        }
+    }
+
+    private func drain() {
+        waiters.sort {
+            if $0.priority != $1.priority { return $0.priority > $1.priority }
+            return $0.order < $1.order
+        }
+        var madeProgress = true
+        while madeProgress {
+            madeProgress = false
+            guard let index = waiters.firstIndex(where: { canStart(isBulk: $0.isBulk) }) else { break }
+            let waiter = waiters.remove(at: index)
+            waiter.continuation.resume(returning: start(id: waiter.id, isBulk: waiter.isBulk))
+            madeProgress = true
+        }
+    }
+
+    private func canStart(isBulk: Bool) -> Bool {
+        guard active < maximumActive else { return false }
+        if isBulk {
+            // Always preserve at least one slot for health, tokens, and other
+            // interactive control traffic.
+            return activeBulk < maximumBulk && active < maximumActive - 1
+        }
+        return true
+    }
+
+    private func start(id: UUID, isBulk: Bool) -> Ticket {
+        activeIDs.insert(id)
+        active += 1
+        if isBulk { activeBulk += 1 }
+        return Ticket(id: id, isBulk: isBulk)
+    }
+
+    private static func isBulk(_ kind: NexusWorkloadKind) -> Bool {
+        [.modelPull, .index, .fileWrite, .download].contains(kind)
+    }
+}
+
+private struct NexusFileTransferManifest: Codable, Equatable {
+    let transferID: UUID
+    let file: NexusFileReference
+    let receivedBytes: Int64
+    let finalSize: Int64?
+    let finalSHA256: Data?
+    let updatedAtMilliseconds: Int64
 }
 
 actor NexusHostServiceExecutor {
@@ -135,7 +247,7 @@ actor NexusHostServiceExecutor {
     private let approvals: NexusApprovalStore
     private let index: NexusTextIndex
     private let session: URLSession
-    private let jobs = NexusHostJobAccounting()
+    private let scheduler: NexusHostWorkloadScheduler
     private var inventoryDigest = Data()
 
     init(
@@ -146,7 +258,8 @@ actor NexusHostServiceExecutor {
         runner: any NexusCommandRunning = NexusFoundationCommandRunner(),
         approvals: NexusApprovalStore = NexusApprovalStore(),
         index: NexusTextIndex = NexusTextIndex(),
-        session: URLSession = .shared
+        session: URLSession = .shared,
+        scheduler: NexusHostWorkloadScheduler = NexusHostWorkloadScheduler()
     ) {
         self.nodeID = nodeID
         self.nodeName = nodeName
@@ -156,14 +269,21 @@ actor NexusHostServiceExecutor {
         self.approvals = approvals
         self.index = index
         self.session = session
+        self.scheduler = scheduler
     }
 
     func execute(_ request: NexusWorkloadRequest, sink: @escaping EventSink) async {
         let emitter = NexusWorkloadEmitter(requestID: request.id, sink: sink)
-        await jobs.begin()
         await emitter.emit(kind: .accepted, payload: NexusProgressPayload(
-            completedBytes: nil, totalBytes: nil, fraction: nil, status: "Accepted by \(nodeName)"
+            completedBytes: nil, totalBytes: nil, fraction: nil, status: "Queued on \(nodeName)"
         ))
+        let ticket: NexusHostWorkloadScheduler.Ticket
+        do {
+            ticket = try await scheduler.acquire(kind: request.kind, priority: request.priority)
+        } catch {
+            await emitter.emit(kind: .cancelled, isFinal: true, payload: NexusEmptyPayload())
+            return
+        }
         do {
             try Task.checkCancellation()
             try policy.require(request.kind.capability)
@@ -178,7 +298,7 @@ actor NexusHostServiceExecutor {
                 retryable: Self.isRetryable(error)
             ))
         }
-        await jobs.end()
+        await scheduler.release(ticket)
     }
 
     func issueProcessApproval(validFor seconds: TimeInterval = 60) async -> String {
@@ -210,7 +330,7 @@ actor NexusHostServiceExecutor {
                 ))
             }
             let installed = try await models.installedModels(runtime: payload.runtime)
-            guard installed.contains(where: { $0.identifier == payload.model || $0.identifier == "\(payload.model):latest" }) else {
+            guard installed.contains(where: { Self.modelName($0.identifier, matches: payload.model) }) else {
                 throw NexusConnectError.requestFailed("The Studio finished downloading but could not verify \(payload.model).")
             }
             inventoryDigest = Data(SHA256.hash(data: try NexusPayloadCoder.encoder.encode(installed)))
@@ -319,22 +439,53 @@ actor NexusHostServiceExecutor {
     }
 
     private func fileStat(_ payload: NexusFileStatPayload, emitter: NexusWorkloadEmitter) async throws {
-        let url = try policy.resolve(payload.file)
+        let destination = try policy.resolve(payload.file)
+        let paths = payload.transferID.map { Self.transferPaths(destination: destination, transferID: $0) }
+        let partial = paths?.partial
+        let url: URL
+        let isPartial: Bool
+        if !FileManager.default.fileExists(atPath: destination.path),
+           let paths, let partial,
+           FileManager.default.fileExists(atPath: partial.path) {
+            try Self.requireSafeInternalFile(partial)
+            guard let manifest = try Self.loadTransferManifest(
+                at: paths.manifest,
+                transferID: payload.transferID,
+                file: payload.file
+            ) else {
+                throw NexusConnectError.requestFailed("resume data is missing its transfer manifest")
+            }
+            let partialSize = (try FileManager.default.attributesOfItem(atPath: partial.path)[.size] as? NSNumber)?.int64Value ?? -1
+            guard manifest.receivedBytes == partialSize else {
+                throw NexusConnectError.requestFailed("resume data does not match its transfer manifest")
+            }
+            url = partial
+            isPartial = true
+        } else {
+            url = destination
+            isPartial = false
+        }
         var isDirectory: ObjCBool = false
         let exists = FileManager.default.fileExists(atPath: url.path, isDirectory: &isDirectory)
         let attributes = exists ? try FileManager.default.attributesOfItem(atPath: url.path) : [:]
         let modified = (attributes[.modificationDate] as? Date).map { Int64($0.timeIntervalSince1970 * 1_000) }
+        let digest = exists && !isPartial && !isDirectory.boolValue && payload.includeSHA256 == true
+            ? try Self.fileSHA256(url)
+            : nil
         await emitter.emit(kind: .result, payload: NexusFileStatResultPayload(
             file: payload.file,
             exists: exists,
             isDirectory: isDirectory.boolValue,
             size: (attributes[.size] as? NSNumber)?.int64Value ?? 0,
-            modifiedAtMilliseconds: modified
+            modifiedAtMilliseconds: modified,
+            sha256: digest,
+            isPartialTransfer: isPartial
         ))
     }
 
     private func fileRead(_ payload: NexusFileReadPayload, emitter: NexusWorkloadEmitter) async throws {
-        guard payload.offset >= 0, (1...NexusConnectProtocol.maximumDataFrameBytes).contains(payload.maximumLength) else {
+        guard payload.offset >= 0,
+              (1...NexusConnectProtocol.maximumDataFrameBytes / 2).contains(payload.maximumLength) else {
             throw NexusConnectError.policyDenied("invalid file read range")
         }
         let url = try policy.resolve(payload.file)
@@ -345,18 +496,39 @@ actor NexusHostServiceExecutor {
         let size = (try FileManager.default.attributesOfItem(atPath: url.path)[.size] as? NSNumber)?.int64Value ?? 0
         await emitter.emit(kind: .result, payload: NexusFileDataPayload(
             file: payload.file, offset: payload.offset, data: data,
-            endOfFile: payload.offset + Int64(data.count) >= size
+            endOfFile: payload.offset + Int64(data.count) >= size,
+            chunkSHA256: Data(SHA256.hash(data: data))
         ))
     }
 
     private func fileWrite(_ payload: NexusFileWritePayload, emitter: NexusWorkloadEmitter) async throws {
-        guard payload.offset >= 0, payload.data.count <= NexusConnectProtocol.defaultChunkBytes,
+        guard payload.offset >= 0, payload.data.count <= NexusConnectProtocol.maximumDataFrameBytes / 2,
               Data(SHA256.hash(data: payload.data)) == payload.chunkSHA256 else {
             throw NexusConnectError.requestFailed("invalid transfer chunk")
         }
         let destination = try policy.resolve(payload.file)
-        let partial = destination.deletingLastPathComponent().appendingPathComponent(".\(destination.lastPathComponent).\(payload.transferID).nexus-part")
+        let paths = Self.transferPaths(destination: destination, transferID: payload.transferID)
+        let partial = paths.partial
+        let manifestURL = paths.manifest
         try FileManager.default.createDirectory(at: destination.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Self.requireSafeInternalFile(partial)
+        try Self.requireSafeInternalFile(manifestURL)
+        if FileManager.default.fileExists(atPath: partial.path),
+           !FileManager.default.fileExists(atPath: manifestURL.path) {
+            guard payload.offset == 0 else {
+                throw NexusConnectError.requestFailed("resume data is missing its transfer manifest")
+            }
+            try FileManager.default.removeItem(at: partial)
+        }
+        if let saved = try Self.loadTransferManifest(
+            at: manifestURL,
+            transferID: payload.transferID,
+            file: payload.file
+        ),
+            (saved.finalSize != nil && payload.finalSize != nil && saved.finalSize != payload.finalSize) ||
+            (saved.finalSHA256 != nil && payload.finalSHA256 != nil && saved.finalSHA256 != payload.finalSHA256) {
+            throw NexusConnectError.requestFailed("resume manifest does not match this transfer")
+        }
         if !FileManager.default.fileExists(atPath: partial.path) {
             FileManager.default.createFile(atPath: partial.path, contents: nil)
         }
@@ -367,18 +539,29 @@ actor NexusHostServiceExecutor {
             throw NexusConnectError.requestFailed("resume offset mismatch; Studio has \(current) bytes")
         }
         try handle.write(contentsOf: payload.data)
-        if let finalSize = payload.finalSize, payload.offset + Int64(payload.data.count) == finalSize {
-            try handle.synchronize()
+        try handle.synchronize()
+        let received = payload.offset + Int64(payload.data.count)
+        let manifest = NexusFileTransferManifest(
+            transferID: payload.transferID,
+            file: payload.file,
+            receivedBytes: received,
+            finalSize: payload.finalSize,
+            finalSHA256: payload.finalSHA256,
+            updatedAtMilliseconds: NexusClock.nowMilliseconds()
+        )
+        try NexusPayloadCoder.encoder.encode(manifest).write(to: manifestURL, options: .atomic)
+        if let finalSize = payload.finalSize, received == finalSize {
             if let finalSHA256 = payload.finalSHA256,
                try Self.fileSHA256(partial) != finalSHA256 {
                 throw NexusConnectError.requestFailed("final transfer checksum mismatch")
             }
             if FileManager.default.fileExists(atPath: destination.path) { try FileManager.default.removeItem(at: destination) }
             try FileManager.default.moveItem(at: partial, to: destination)
+            try? FileManager.default.removeItem(at: manifestURL)
         }
         await emitter.emit(kind: .progress, payload: NexusProgressPayload(
-            completedBytes: payload.offset + Int64(payload.data.count), totalBytes: payload.finalSize,
-            fraction: payload.finalSize.map { Double(payload.offset + Int64(payload.data.count)) / Double(max(1, $0)) },
+            completedBytes: received, totalBytes: payload.finalSize,
+            fraction: payload.finalSize.map { Double(received) / Double(max(1, $0)) },
             status: "Transferred to Mac Studio"
         ))
     }
@@ -416,6 +599,7 @@ actor NexusHostServiceExecutor {
         let destination = try policy.resolve(payload.destination)
         let partial = destination.deletingLastPathComponent().appendingPathComponent(".\(destination.lastPathComponent).\(payload.transferID).nexus-download")
         try FileManager.default.createDirectory(at: destination.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Self.requireSafeInternalFile(partial)
         let existing = ((try? FileManager.default.attributesOfItem(atPath: partial.path)[.size]) as? NSNumber)?.int64Value ?? 0
         var request = URLRequest(url: payload.sourceURL)
         request.timeoutInterval = 60
@@ -462,7 +646,7 @@ actor NexusHostServiceExecutor {
     }
 
     private func health() async -> NexusNodeHealth {
-        let accounting = await jobs.snapshot()
+        let accounting = await scheduler.snapshot()
         let memory = Self.memorySnapshot()
         let disk = (try? FileManager.default.attributesOfFileSystem(forPath: FileManager.default.homeDirectoryForCurrentUser.path)[.systemFreeSize] as? NSNumber)?.int64Value ?? 0
         var load = [Double](repeating: 0, count: 3)
@@ -512,6 +696,55 @@ actor NexusHostServiceExecutor {
         var hasher = SHA256()
         while let data = try handle.read(upToCount: 1_024 * 1_024), !data.isEmpty { hasher.update(data: data) }
         return Data(hasher.finalize())
+    }
+
+    private static func transferPaths(destination: URL, transferID: UUID) -> (partial: URL, manifest: URL) {
+        let directory = destination.deletingLastPathComponent()
+        let prefix = ".\(destination.lastPathComponent).\(transferID.uuidString.lowercased())"
+        return (
+            directory.appendingPathComponent("\(prefix).nexus-part"),
+            directory.appendingPathComponent("\(prefix).nexus-transfer.json")
+        )
+    }
+
+    private static func requireSafeInternalFile(_ url: URL) throws {
+        guard FileManager.default.fileExists(atPath: url.path) else { return }
+        let values = try url.resourceValues(forKeys: [.isSymbolicLinkKey])
+        guard values.isSymbolicLink != true else { throw NexusConnectError.pathOutsideAllowedRoots }
+    }
+
+    private static func loadTransferManifest(
+        at url: URL,
+        transferID: UUID?,
+        file: NexusFileReference
+    ) throws -> NexusFileTransferManifest? {
+        guard FileManager.default.fileExists(atPath: url.path) else { return nil }
+        try requireSafeInternalFile(url)
+        let manifest: NexusFileTransferManifest
+        do {
+            manifest = try NexusPayloadCoder.decoder.decode(
+                NexusFileTransferManifest.self,
+                from: Data(contentsOf: url)
+            )
+        } catch {
+            throw NexusConnectError.requestFailed("resume transfer manifest is damaged")
+        }
+        guard transferID == nil || manifest.transferID == transferID, manifest.file == file else {
+            throw NexusConnectError.requestFailed("resume manifest does not match this transfer")
+        }
+        return manifest
+    }
+
+    private static func modelName(_ installed: String, matches requested: String) -> Bool {
+        let normalize: (String) -> String = {
+            $0.lowercased()
+                .replacingOccurrences(of: ":latest", with: "")
+                .trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        }
+        let installedName = normalize(installed)
+        let requestedName = normalize(requested)
+        if installedName == requestedName { return true }
+        return installedName.hasSuffix("/\(requestedName)") || requestedName.hasSuffix("/\(installedName)")
     }
 
     private static func errorCode(_ error: Error) -> String {

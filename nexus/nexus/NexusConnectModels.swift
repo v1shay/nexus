@@ -316,6 +316,20 @@ struct NexusFileReadPayload: Codable, Equatable, Sendable {
 
 struct NexusFileStatPayload: Codable, Equatable, Sendable {
     let file: NexusFileReference
+    /// When present, asks for the resumable temporary file associated with this
+    /// transfer if the final destination does not exist yet.
+    let transferID: UUID?
+    let includeSHA256: Bool?
+
+    init(
+        file: NexusFileReference,
+        transferID: UUID? = nil,
+        includeSHA256: Bool = false
+    ) {
+        self.file = file
+        self.transferID = transferID
+        self.includeSHA256 = includeSHA256
+    }
 }
 
 struct NexusFileStatResultPayload: Codable, Equatable, Sendable {
@@ -324,6 +338,26 @@ struct NexusFileStatResultPayload: Codable, Equatable, Sendable {
     let isDirectory: Bool
     let size: Int64
     let modifiedAtMilliseconds: Int64?
+    let sha256: Data?
+    let isPartialTransfer: Bool?
+
+    init(
+        file: NexusFileReference,
+        exists: Bool,
+        isDirectory: Bool,
+        size: Int64,
+        modifiedAtMilliseconds: Int64?,
+        sha256: Data? = nil,
+        isPartialTransfer: Bool? = nil
+    ) {
+        self.file = file
+        self.exists = exists
+        self.isDirectory = isDirectory
+        self.size = size
+        self.modifiedAtMilliseconds = modifiedAtMilliseconds
+        self.sha256 = sha256
+        self.isPartialTransfer = isPartialTransfer
+    }
 }
 
 struct NexusFileListPayload: Codable, Equatable, Sendable {
@@ -347,6 +381,21 @@ struct NexusFileDataPayload: Codable, Equatable, Sendable {
     let offset: Int64
     let data: Data
     let endOfFile: Bool
+    let chunkSHA256: Data?
+
+    init(
+        file: NexusFileReference,
+        offset: Int64,
+        data: Data,
+        endOfFile: Bool,
+        chunkSHA256: Data? = nil
+    ) {
+        self.file = file
+        self.offset = offset
+        self.data = data
+        self.endOfFile = endOfFile
+        self.chunkSHA256 = chunkSHA256
+    }
 }
 
 struct NexusFileWritePayload: Codable, Equatable, Sendable {

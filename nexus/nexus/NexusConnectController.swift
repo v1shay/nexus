@@ -90,6 +90,9 @@ final class NexusConnectController: ObservableObject {
     @Published var setupMessage = ""
 
     var shouldUseStudio: Bool { enabled && role == .client && isPaired }
+    /// The single routed API for inference, OCR, indexing, structured process
+    /// execution, files, and downloads. Its callers never choose a machine.
+    let workloads: NexusUnifiedWorkloadAPI
     var remoteMemoryGB: Int? {
         guard case .ready(_, let memoryGB, _) = state else { return nil }
         return memoryGB
@@ -131,7 +134,9 @@ final class NexusConnectController: ObservableObject {
         }
         let localServices = NexusHostServiceExecutor(nodeID: nodeID, nodeName: Host.current().localizedName ?? "This Mac")
         let local = NexusLocalWorkloadExecutor(services: localServices)
-        router = NexusWorkloadRouter(local: local, remote: remoteClient, preference: .automatic)
+        let workloadRouter = NexusWorkloadRouter(local: local, remote: remoteClient, preference: .localOnly)
+        router = workloadRouter
+        workloads = NexusUnifiedWorkloadAPI(executor: workloadRouter)
         coordinator = NexusConnectCoordinator(
             discovery: NexusTailscaleDiscovery(),
             sessionFactory: { [remoteClient] in remoteClient },
@@ -222,7 +227,7 @@ final class NexusConnectController: ObservableObject {
                 maximumTokens: nil
             )
         )
-        let stream = try await router.events(for: request)
+        let stream = try await workloads.events(for: request)
         var answer = ""
         for try await event in stream {
             if event.kind == .token {
@@ -296,16 +301,26 @@ final class NexusConnectController: ObservableObject {
         coordinator.stop()
         isPaired = Self.hasPairing(role: role, clientVault: clientVault, hostVault: hostVault)
 
-        guard enabled else { state = .off; return }
-        guard isPaired else { state = .needsPairing; return }
+        guard enabled else {
+            Task { await router.setPreference(.localOnly) }
+            state = .off
+            return
+        }
+        guard isPaired else {
+            Task { await router.setPreference(.localOnly) }
+            state = .needsPairing
+            return
+        }
         switch role {
         case .client:
+            Task { await router.setPreference(.automatic) }
             state = .discovering
             coordinator.start(
                 enabled: true,
                 preferredNodeID: defaults.string(forKey: preferredNodeKey)
             )
         case .studioHost:
+            Task { await router.setPreference(.localOnly) }
             startHosting()
         }
     }
@@ -339,6 +354,7 @@ final class NexusConnectController: ObservableObject {
         case .connecting(let peer), .authenticating(let peer): state = .connecting(peer.hostName)
         case .ready(let peer, let health, let quality):
             defaults.set(peer.id, forKey: preferredNodeKey)
+            Task { await workloads.setConnectionQuality(quality) }
             state = .ready(
                 name: health.nodeName,
                 memoryGB: max(1, Int(health.totalMemoryBytes / 1_073_741_824)),

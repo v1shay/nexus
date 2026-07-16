@@ -119,7 +119,10 @@ actor NexusWorkloadRouter: NexusWorkloadExecuting {
 
     static func canFallback(_ request: NexusWorkloadRequest) -> Bool {
         guard request.retrySafety == .idempotent else { return false }
-        return [.health, .inference, .agent, .modelList, .ocr].contains(request.kind)
+        return [
+            .health, .inference, .agent, .modelList, .ocr,
+            .index, .searchIndex, .fileStat, .fileRead, .fileList
+        ].contains(request.kind)
     }
 
     private static func isSubstantive(_ event: NexusWorkloadEvent) -> Bool {
