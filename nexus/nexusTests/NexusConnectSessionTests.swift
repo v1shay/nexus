@@ -4,6 +4,29 @@ import XCTest
 @testable import nexus
 
 extension NexusGeometryTests {
+    func testRemoteModelDownloadIsOwnedByHostAfterClientUIDisconnects() async throws {
+        XCTAssertTrue(NexusConnectHostSession.survivesClientDisconnect(.modelPull))
+        XCTAssertTrue(NexusConnectHostSession.survivesClientDisconnect(.download))
+        XCTAssertFalse(NexusConnectHostSession.survivesClientDisconnect(.inference))
+
+        let registry = NexusHostBackgroundJobRegistry()
+        let requestID = UUID()
+        let completion = expectation(description: "host-owned download completes")
+        try await registry.start(requestID: requestID) {
+            try? await Task.sleep(nanoseconds: 30_000_000)
+            completion.fulfill()
+        }
+
+        // A host session's close path intentionally has no cancellation call
+        // for this registry. The work therefore outlives its UI/client stream.
+        let isRunning = await registry.contains(requestID: requestID)
+        XCTAssertTrue(isRunning)
+        await fulfillment(of: [completion], timeout: 1)
+        try await Task.sleep(nanoseconds: 10_000_000)
+        let isFinished = await registry.contains(requestID: requestID)
+        XCTAssertFalse(isFinished)
+    }
+
     func testEncryptedClientHostSessionStreamsConcurrentWorkloadEndToEnd() async throws {
         let secret = try NexusPairingMaterial(secret: Data(repeating: 42, count: 32))
         let store = NexusMemorySecretStore()

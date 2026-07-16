@@ -2,6 +2,7 @@
 DerivedData/
 build/
 .build/
+.build-*/
 *.xcuserstate
 xcuserdata/
 nexus/.git.nexus-original/

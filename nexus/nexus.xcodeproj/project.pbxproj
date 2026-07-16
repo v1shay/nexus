@@ -24,6 +24,7 @@
 		F100000330075C29006660E4 /* Pets in Resources */ = {isa = PBXBuildFile; fileRef = F100000430075C29006660E4 /* Pets */; };
 		G100000130075C29006660E4 /* NexusConnectModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = G100000230075C29006660E4 /* NexusConnectModels.swift */; };
 		M100000130075C29006660E4 /* NexusPairedNode.swift in Sources */ = {isa = PBXBuildFile; fileRef = M100000230075C29006660E4 /* NexusPairedNode.swift */; };
+		N100000130075C29006660E4 /* NexusConnectHostManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = N100000230075C29006660E4 /* NexusConnectHostManager.swift */; };
 		G100000330075C29006660E4 /* NexusConnectFraming.swift in Sources */ = {isa = PBXBuildFile; fileRef = G100000430075C29006660E4 /* NexusConnectFraming.swift */; };
 		G100000530075C29006660E4 /* NexusConnectSecurity.swift in Sources */ = {isa = PBXBuildFile; fileRef = G100000630075C29006660E4 /* NexusConnectSecurity.swift */; };
 		G100000730075C29006660E4 /* NexusConnectPolicy.swift in Sources */ = {isa = PBXBuildFile; fileRef = G100000830075C29006660E4 /* NexusConnectPolicy.swift */; };
@@ -84,6 +85,7 @@
 		F100000430075C29006660E4 /* Pets */ = {isa = PBXFileReference; explicitFileType = folder; path = Pets; sourceTree = "<group>"; };
 		G100000230075C29006660E4 /* NexusConnectModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NexusConnectModels.swift; sourceTree = "<group>"; };
 		M100000230075C29006660E4 /* NexusPairedNode.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NexusPairedNode.swift; sourceTree = "<group>"; };
+		N100000230075C29006660E4 /* NexusConnectHostManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NexusConnectHostManager.swift; sourceTree = "<group>"; };
 		G100000430075C29006660E4 /* NexusConnectFraming.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NexusConnectFraming.swift; sourceTree = "<group>"; };
 		G100000630075C29006660E4 /* NexusConnectSecurity.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NexusConnectSecurity.swift; sourceTree = "<group>"; };
 		G100000830075C29006660E4 /* NexusConnectPolicy.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NexusConnectPolicy.swift; sourceTree = "<group>"; };
@@ -163,6 +165,7 @@
 				156AB6BD30075C29006660E4 /* ContentView.swift */,
 				G100000230075C29006660E4 /* NexusConnectModels.swift */,
 				M100000230075C29006660E4 /* NexusPairedNode.swift */,
+				N100000230075C29006660E4 /* NexusConnectHostManager.swift */,
 				G100000430075C29006660E4 /* NexusConnectFraming.swift */,
 				G100000630075C29006660E4 /* NexusConnectSecurity.swift */,
 				G100000830075C29006660E4 /* NexusConnectPolicy.swift */,
@@ -361,6 +364,7 @@
 				156AB6BC30075C29006660E4 /* nexusApp.swift in Sources */,
 				G100000130075C29006660E4 /* NexusConnectModels.swift in Sources */,
 				M100000130075C29006660E4 /* NexusPairedNode.swift in Sources */,
+				N100000130075C29006660E4 /* NexusConnectHostManager.swift in Sources */,
 				G100000330075C29006660E4 /* NexusConnectFraming.swift in Sources */,
 				G100000530075C29006660E4 /* NexusConnectSecurity.swift in Sources */,
 				G100000730075C29006660E4 /* NexusConnectPolicy.swift in Sources */,

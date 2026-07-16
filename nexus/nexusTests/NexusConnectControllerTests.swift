@@ -125,6 +125,49 @@ extension NexusGeometryTests {
         restarted.shutdown()
     }
 
+    func testLaunchAgentConfigurationRunsAHeadlessPersistentHost() throws {
+        let manager = NexusConnectHostManager(
+            homeDirectory: URL(fileURLWithPath: "/tmp/nexus-host-test-home"),
+            executableURL: URL(fileURLWithPath: "/Applications/Nexus.app/Contents/MacOS/nexus"),
+            processRunner: { _, _ in }
+        )
+        let decoded = try XCTUnwrap(
+            PropertyListSerialization.propertyList(
+                from: manager.launchAgentPropertyList(),
+                options: [],
+                format: nil
+            ) as? [String: Any]
+        )
+
+        XCTAssertEqual(decoded["Label"] as? String, NexusConnectHostManager.label)
+        XCTAssertEqual(decoded["KeepAlive"] as? Bool, true)
+        XCTAssertEqual(decoded["RunAtLoad"] as? Bool, true)
+        XCTAssertEqual(
+            decoded["ProgramArguments"] as? [String],
+            ["/Applications/Nexus.app/Contents/MacOS/nexus", NexusConnectHostProcess.argument]
+        )
+    }
+
+    @MainActor
+    func testClosingHostUIDoesNotStopPersistentConnectHost() throws {
+        let suiteName = "NexusPersistentHostLifecycle.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let manager = NexusPersistentHostManagerSpy()
+        let controller = NexusConnectController(
+            defaults: defaults,
+            secretStore: NexusMemorySecretStore(),
+            persistentHost: manager
+        )
+        controller.setRole(.studioHost)
+        controller.createPairingCode()
+        controller.setEnabled(true)
+
+        XCTAssertEqual(manager.installCount, 1)
+        controller.shutdown()
+        XCTAssertEqual(manager.installCount, 1, "UI shutdown must not own or terminate the host process")
+    }
+
     func testPairingCodeRoundTripsAndDetectsDamage() throws {
         let generated = try NexusPairingCode.generate()
         let decoded = try NexusPairingCode.decode(generated.code)
@@ -165,5 +208,23 @@ extension NexusGeometryTests {
         XCTAssertEqual(client.state, .off)
         client.shutdown()
         host.shutdown()
+    }
+}
+
+private final class NexusPersistentHostManagerSpy: NexusPersistentHostManaging, @unchecked Sendable {
+    private(set) var installCount = 0
+
+    func installAndStart() throws { installCount += 1 }
+
+    func currentStatus() -> NexusConnectHostStatus? {
+        .init(
+            processID: ProcessInfo.processInfo.processIdentifier,
+            nodeID: UUID(),
+            state: "ready",
+            detail: nil,
+            appVersion: "test",
+            protocolRange: .local,
+            updatedAt: Date()
+        )
     }
 }

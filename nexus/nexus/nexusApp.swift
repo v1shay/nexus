@@ -17,32 +17,53 @@ struct NexusApp: App {
 
 @MainActor
 final class NexusAppDelegate: NSObject, NSApplicationDelegate {
-    private let notch = NotchController()
+    private var notch: NotchController?
+    private var connectHost: NexusConnectHostDaemon?
     private var launchTask: Task<Void, Never>?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
+        // Unit tests inject XCTest into the app process. They construct every
+        // controller explicitly and must not initialize the real Keychain,
+        // global hotkey, notch panel, or LaunchAgent as a side effect.
+        if NSClassFromString("XCTestCase") != nil { return }
+        if NexusConnectHostProcess.isCurrentProcess {
+            let host = NexusConnectHostDaemon()
+            connectHost = host
+            launchTask = Task { @MainActor in await host.start() }
+            return
+        }
         launchTask = Task { @MainActor [weak self] in
             await Self.retireOlderInstances()
             guard !Task.isCancelled else { return }
-            self?.notch.install()
+            let notch = NotchController()
+            self?.notch = notch
+            notch.install()
         }
     }
 
     func applicationWillTerminate(_ notification: Notification) {
         launchTask?.cancel()
-        notch.shutdown()
+        notch?.shutdown()
+        connectHost?.stop()
     }
 
     /// Xcode can launch a new debug build while the previous accessory app is
     /// still alive. Retire the older process before creating any panel so two
     /// independent notch windows can never be visible together.
     private static func retireOlderInstances() async {
+        // XCTest injects into the app executable. Killing another injected test
+        // host here can terminate a parallel test run before XCTest boots.
+        guard NSClassFromString("XCTestCase") == nil,
+              !CommandLine.arguments.contains(where: { $0.localizedCaseInsensitiveContains("xctest") }) else {
+            return
+        }
         guard let identifier = Bundle.main.bundleIdentifier else { return }
         let currentPID = ProcessInfo.processInfo.processIdentifier
+        let hostPID = NexusConnectHostManager().currentStatus()?.processID
         let olderInstances = NSRunningApplication
             .runningApplications(withBundleIdentifier: identifier)
-            .filter { $0.processIdentifier != currentPID }
+            .filter { $0.processIdentifier != currentPID && $0.processIdentifier != hostPID }
 
         guard !olderInstances.isEmpty else { return }
         NSLog(

@@ -267,10 +267,38 @@ actor NexusRemoteClientSession: NexusRemoteSession, NexusWorkloadExecuting {
     }
 }
 
+actor NexusHostBackgroundJobRegistry {
+    private var jobs: [UUID: Task<Void, Never>] = [:]
+
+    func start(
+        requestID: UUID,
+        operation: @escaping @Sendable () async -> Void
+    ) throws {
+        guard jobs[requestID] == nil else {
+            throw NexusConnectError.requestFailed("duplicate background request ID")
+        }
+        jobs[requestID] = Task { [weak self] in
+            await operation()
+            await self?.finished(requestID)
+        }
+    }
+
+    func cancel(requestID: UUID) {
+        jobs.removeValue(forKey: requestID)?.cancel()
+    }
+
+    func contains(requestID: UUID) -> Bool { jobs[requestID] != nil }
+
+    private func finished(_ requestID: UUID) {
+        jobs.removeValue(forKey: requestID)
+    }
+}
+
 actor NexusConnectHostSession {
     private let transport: any NexusByteTransport
     private let vault: any NexusSessionCredentialProviding
     private let executor: NexusHostServiceExecutor
+    private let backgroundJobs: NexusHostBackgroundJobRegistry
     private var connection: NexusFramedConnection?
     private var secureChannel: NexusSecureChannel?
     private var sessionID: UUID?
@@ -280,11 +308,13 @@ actor NexusConnectHostSession {
     init(
         transport: any NexusByteTransport,
         vault: any NexusSessionCredentialProviding = NexusIdentityVault(role: .studioHost),
-        executor: NexusHostServiceExecutor
+        executor: NexusHostServiceExecutor,
+        backgroundJobs: NexusHostBackgroundJobRegistry = NexusHostBackgroundJobRegistry()
     ) {
         self.transport = transport
         self.vault = vault
         self.executor = executor
+        self.backgroundJobs = backgroundJobs
     }
 
     func run() async throws {
@@ -373,16 +403,27 @@ actor NexusConnectHostSession {
             guard message.requestID == request.id, jobs[request.id] == nil else {
                 throw NexusConnectError.malformedFrame
             }
-            jobs[request.id] = Task { [weak self] in
-                guard let self else { return }
-                await self.executor.execute(request) { event in
-                    try? await self.sendEvent(event)
+            if Self.survivesClientDisconnect(request.kind) {
+                let executor = executor
+                let send: @Sendable (NexusWorkloadEvent) async -> Void = { [weak self] event in
+                    try? await self?.sendEvent(event)
                 }
-                await self.removeJob(request.id)
+                try await backgroundJobs.start(requestID: request.id) {
+                    await executor.execute(request, sink: send)
+                }
+            } else {
+                jobs[request.id] = Task { [weak self] in
+                    guard let self else { return }
+                    await self.executor.execute(request) { event in
+                        try? await self.sendEvent(event)
+                    }
+                    await self.removeJob(request.id)
+                }
             }
         case .cancel:
             guard let requestID = message.requestID else { throw NexusConnectError.malformedFrame }
             jobs.removeValue(forKey: requestID)?.cancel()
+            await backgroundJobs.cancel(requestID: requestID)
         case .ping:
             guard let sessionID else { return }
             let ping = try message.decodePayload(NexusPingPayload.self)
@@ -419,6 +460,10 @@ actor NexusConnectHostSession {
     }
 
     private func removeJob(_ id: UUID) { jobs.removeValue(forKey: id) }
+
+    static func survivesClientDisconnect(_ kind: NexusWorkloadKind) -> Bool {
+        kind == .modelPull || kind == .download
+    }
 }
 
 final class NexusConnectHostListener: @unchecked Sendable {
@@ -426,6 +471,7 @@ final class NexusConnectHostListener: @unchecked Sendable {
     private let lock = NSLock()
     private let vault: any NexusSessionCredentialProviding
     private let executor: NexusHostServiceExecutor
+    private let backgroundJobs = NexusHostBackgroundJobRegistry()
     private var listener: NWListener?
     private var sessions: [UUID: Task<Void, Never>] = [:]
 
@@ -481,7 +527,12 @@ final class NexusConnectHostListener: @unchecked Sendable {
             do {
                 try await transport.startAcceptedConnection()
                 guard let self else { return }
-                let session = NexusConnectHostSession(transport: transport, vault: self.vault, executor: self.executor)
+                let session = NexusConnectHostSession(
+                    transport: transport,
+                    vault: self.vault,
+                    executor: self.executor,
+                    backgroundJobs: self.backgroundJobs
+                )
                 try await session.run()
             } catch {
                 await transport.cancel()

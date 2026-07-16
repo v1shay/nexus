@@ -175,7 +175,7 @@ final class NexusConnectController: ObservableObject {
     private let roster: NexusPairedNodeStore
     private let router: NexusMultiNodeWorkloadRouter
     private let coordinator: NexusPairedNodeCoordinator
-    private var hostListener: NexusConnectHostListener?
+    private let persistentHost: any NexusPersistentHostManaging
     private var hostStartTask: Task<Void, Never>?
     private var cancellables: Set<AnyCancellable> = []
 
@@ -188,7 +188,8 @@ final class NexusConnectController: ObservableObject {
     init(
         defaults: UserDefaults = .standard,
         secretStore: NexusSecretStore = NexusKeychainSecretStore(),
-        discovery: any NexusNodeDiscovering = NexusTailscaleDiscovery()
+        discovery: any NexusNodeDiscovering = NexusTailscaleDiscovery(),
+        persistentHost: any NexusPersistentHostManaging = NexusConnectHostManager()
     ) {
         self.defaults = defaults
         role = defaults.string(forKey: roleKey).flatMap(NexusConnectRole.init(rawValue:)) ?? Self.suggestedRole()
@@ -201,6 +202,7 @@ final class NexusConnectController: ObservableObject {
         self.clientVault = clientVault
         self.hostVault = hostVault
         self.roster = roster
+        self.persistentHost = persistentHost
 
         if let migrated = try? roster.migrateLegacyPairing(
             try? clientVault.loadPairing(),
@@ -525,15 +527,12 @@ final class NexusConnectController: ObservableObject {
 
     func shutdown() {
         hostStartTask?.cancel()
-        hostListener?.stop()
         coordinator.stop()
     }
 
     private func restart() {
         hostStartTask?.cancel()
         hostStartTask = nil
-        hostListener?.stop()
-        hostListener = nil
         coordinator.stop()
         isPaired = role == .client ? !pairedNodes.isEmpty : (try? hostVault.loadPairing()) != nil
 
@@ -564,22 +563,25 @@ final class NexusConnectController: ObservableObject {
 
     private func startHosting() {
         do {
-            let identity = try hostVault.loadOrCreateIdentity()
-            let executor = NexusHostServiceExecutor(nodeID: identity.deviceID)
-            let listener = NexusConnectHostListener(vault: hostVault, executor: executor)
-            hostListener = listener
+            try persistentHost.installAndStart()
             state = .connecting("Tailscale")
             hostStartTask = Task { [weak self] in
-                do {
-                    try await listener.start()
-                    guard !Task.isCancelled else { listener.stop(); return }
-                    self?.state = .hosting
-                } catch {
-                    self?.state = .failed("Studio host could not start: \(error.localizedDescription)")
+                for _ in 0..<30 {
+                    guard !Task.isCancelled else { return }
+                    if let status = self?.persistentHost.currentStatus() {
+                        if status.state == "ready" {
+                            self?.state = .hosting
+                        } else if status.state == "failed" {
+                            self?.state = .failed(status.detail ?? "Nexus Connect host failed")
+                        }
+                        return
+                    }
+                    try? await Task.sleep(for: .milliseconds(100))
                 }
+                self?.state = .failed("Background Nexus Connect host did not become ready")
             }
         } catch {
-            state = .failed(error.localizedDescription)
+            state = .failed("Background Nexus Connect host could not start: \(error.localizedDescription)")
         }
     }
 
