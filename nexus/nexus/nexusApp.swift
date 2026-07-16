@@ -239,8 +239,7 @@ final class NotchController: ObservableObject {
     }
 
     private func listeningSize(for screen: NSScreen) -> CGSize {
-        let notch = closedSize(for: screen)
-        return CGSize(width: notch.width + 124, height: notch.height + 10)
+        NotchGeometry.listeningSize(for: closedSize(for: screen))
     }
 
     private func frame(for size: CGSize, on screen: NSScreen) -> NSRect {

@@ -1,35 +1,18 @@
-//
-//  nexusTests.swift
-//  nexusTests
-//
-//  Created by vishay on 7/14/26.
-//
-
 import XCTest
+@testable import nexus
 
-final class nexusTests: XCTestCase {
+final class NexusGeometryTests: XCTestCase {
+    func testDictationWingsPreserveThePhysicalNotchGap() {
+        let physicalNotch = CGSize(width: 190, height: 32)
+        let listening = NotchGeometry.listeningSize(for: physicalNotch)
+        let regions = NotchGeometry.horizontalRegions(in: listening)
 
-    override func setUpWithError() throws {
-        // Put setup code here. This method is called before the invocation of each test method in the class.
+        XCTAssertEqual(listening.width, 314)
+        XCTAssertEqual(regions.leftWing.width, 62)
+        XCTAssertEqual(regions.notchGap.width, physicalNotch.width)
+        XCTAssertEqual(regions.rightWing.width, 62)
+        XCTAssertEqual(regions.leftWing.maxX, regions.notchGap.minX)
+        XCTAssertEqual(regions.notchGap.maxX, regions.rightWing.minX)
+        XCTAssertEqual(regions.rightWing.maxX, listening.width)
     }
-
-    override func tearDownWithError() throws {
-        // Put teardown code here. This method is called after the invocation of each test method in the class.
-    }
-
-    func testExample() throws {
-        // This is an example of a functional test case.
-        // Use XCTAssert and related functions to verify your tests produce the correct results.
-        // Any test you write for XCTest can be annotated as throws and async.
-        // Mark your test throws to produce an unexpected failure when your test encounters an uncaught error.
-        // Mark your test async to allow awaiting for asynchronous code to complete. Check the results with assertions afterwards.
-    }
-
-    func testPerformanceExample() throws {
-        // This is an example of a performance test case.
-        measure {
-            // Put the code you want to measure the time of here.
-        }
-    }
-
 }

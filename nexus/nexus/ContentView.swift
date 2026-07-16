@@ -35,7 +35,7 @@ struct ContentView: View {
 }
 
 private struct ListeningWings: View {
-    private let wingWidth: CGFloat = 62
+    private let wingWidth = NotchGeometry.wingWidth
 
     var body: some View {
         ZStack {
