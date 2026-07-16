@@ -38,30 +38,88 @@ enum NexusConnectDisplayState: Equatable, Sendable {
     }
 }
 
+struct NexusPairingInvitation: Codable, Equatable, Sendable {
+    let invitationID: UUID
+    let hostNodeID: UUID
+    let hostSigningPublicKey: Data
+    let secret: Data
+    let displayName: String
+    let endpoint: String
+    let protocolRange: NexusProtocolVersionRange
+}
+
 enum NexusPairingCode {
-    private static let prefix = "NX1"
+    private static let legacyPrefix = "NX1"
+    private static let invitationPrefix = "NX2"
 
     static func generate() throws -> (material: NexusPairingMaterial, code: String) {
         let material = try NexusPairingMaterial.fresh()
         return (material, encode(material))
     }
 
+    static func generateInvitation(
+        identity: NexusDeviceIdentity,
+        displayName: String,
+        endpoint: String
+    ) throws -> (material: NexusPairingMaterial, invitation: NexusPairingInvitation, code: String) {
+        let material = try NexusPairingMaterial.fresh()
+        let invitation = NexusPairingInvitation(
+            invitationID: UUID(),
+            hostNodeID: identity.deviceID,
+            hostSigningPublicKey: identity.signingPublicKey,
+            secret: material.secret,
+            displayName: displayName,
+            endpoint: endpoint,
+            protocolRange: .local
+        )
+        let payload = try NexusPayloadCoder.encoder.encode(invitation)
+        let encoded = base64URL(payload)
+        return (material, invitation, "\(invitationPrefix).\(encoded).\(checksum(prefix: invitationPrefix, payload: encoded))")
+    }
+
     static func encode(_ material: NexusPairingMaterial) -> String {
         let secret = base64URL(material.secret)
-        let checksum = base64URL(Data(SHA256.hash(data: Data("\(prefix).\(secret)".utf8))).prefix(6))
-        return "\(prefix).\(secret).\(checksum)"
+        return "\(legacyPrefix).\(secret).\(checksum(prefix: legacyPrefix, payload: secret))"
     }
 
     static func decode(_ code: String) throws -> NexusPairingMaterial {
-        let normalized = code.trimmingCharacters(in: .whitespacesAndNewlines)
-        let parts = normalized.split(separator: ".", omittingEmptySubsequences: false).map(String.init)
-        guard parts.count == 3, parts[0] == prefix,
+        let parts = components(code)
+        guard parts.count == 3, parts[0] == legacyPrefix,
+              parts[2] == checksum(prefix: legacyPrefix, payload: parts[1]),
               let secret = dataFromBase64URL(parts[1]), secret.count == 32 else {
             throw NexusConnectError.authenticationFailed
         }
-        let expected = base64URL(Data(SHA256.hash(data: Data("\(prefix).\(parts[1])".utf8))).prefix(6))
-        guard parts[2] == expected else { throw NexusConnectError.authenticationFailed }
         return try NexusPairingMaterial(secret: secret)
+    }
+
+    static func decodeInvitation(_ code: String) throws -> NexusPairingInvitation {
+        let parts = components(code)
+        guard parts.count == 3, parts[0] == invitationPrefix,
+              parts[2] == checksum(prefix: invitationPrefix, payload: parts[1]),
+              let payload = dataFromBase64URL(parts[1]) else {
+            throw NexusConnectError.authenticationFailed
+        }
+        let invitation = try NexusPayloadCoder.decoder.decode(NexusPairingInvitation.self, from: payload)
+        guard invitation.secret.count == 32,
+              invitation.hostSigningPublicKey.count == 32,
+              invitation.protocolRange.isValid else {
+            throw NexusConnectError.authenticationFailed
+        }
+        return invitation
+    }
+
+    static func isInvitation(_ code: String) -> Bool {
+        components(code).first == invitationPrefix
+    }
+
+    private static func components(_ code: String) -> [String] {
+        code.trimmingCharacters(in: .whitespacesAndNewlines)
+            .split(separator: ".", omittingEmptySubsequences: false)
+            .map(String.init)
+    }
+
+    private static func checksum(prefix: String, payload: String) -> String {
+        base64URL(Data(SHA256.hash(data: Data("\(prefix).\(payload)".utf8))).prefix(6))
     }
 
     private static func base64URL(_ data: Data) -> String {
@@ -86,24 +144,37 @@ final class NexusConnectController: ObservableObject {
     @Published private(set) var role: NexusConnectRole
     @Published private(set) var enabled: Bool
     @Published private(set) var isPaired = false
+    @Published private(set) var pairedNodes: [NexusPairedNode] = []
+    @Published private(set) var modelRoute: NexusModelRoute
+    @Published var downloadTargets: Set<NexusDownloadTarget> = [.thisMac]
     @Published var pairingCode = ""
     @Published var setupMessage = ""
 
-    var shouldUseStudio: Bool { enabled && role == .client && isPaired }
-    /// The single routed API for inference, OCR, indexing, structured process
-    /// execution, files, and downloads. Its callers never choose a machine.
+    /// Kept for source compatibility while callers migrate to `modelRoute`.
+    var shouldUseStudio: Bool {
+        enabled && role == .client && modelRoute != .thisMac && !pairedNodes.isEmpty
+    }
+
     let workloads: NexusUnifiedWorkloadAPI
+
     var remoteMemoryGB: Int? {
-        guard case .ready(_, let memoryGB, _) = state else { return nil }
-        return memoryGB
+        let online = pairedNodes.filter { $0.status == .online }
+        switch modelRoute {
+        case .pairedNode(let id):
+            return online.first(where: { $0.id == id })?.totalMemoryBytes.map(Self.gigabytes)
+        case .automatic:
+            return online.compactMap(\.totalMemoryBytes).max().map(Self.gigabytes)
+        case .thisMac:
+            return nil
+        }
     }
 
     private let defaults: UserDefaults
     private let clientVault: NexusIdentityVault
     private let hostVault: NexusIdentityVault
-    private let remoteClient: NexusRemoteClientSession
-    private let router: NexusWorkloadRouter
-    private let coordinator: NexusConnectCoordinator
+    private let roster: NexusPairedNodeStore
+    private let router: NexusMultiNodeWorkloadRouter
+    private let coordinator: NexusPairedNodeCoordinator
     private var hostListener: NexusConnectHostListener?
     private var hostStartTask: Task<Void, Never>?
     private var cancellables: Set<AnyCancellable> = []
@@ -112,47 +183,69 @@ final class NexusConnectController: ObservableObject {
     private let roleKey = "nexus.connect.role"
     private let preferredNodeKey = "nexus.connect.preferred-node"
     private let localNodeIDKey = "nexus.connect.local-node-id"
+    private let modelRouteKey = "nexus.connect.model-route.v2"
 
     init(
         defaults: UserDefaults = .standard,
-        secretStore: NexusSecretStore = NexusKeychainSecretStore()
+        secretStore: NexusSecretStore = NexusKeychainSecretStore(),
+        discovery: any NexusNodeDiscovering = NexusTailscaleDiscovery()
     ) {
         self.defaults = defaults
-        let suggestedRole = Self.suggestedRole()
-        role = defaults.string(forKey: roleKey).flatMap(NexusConnectRole.init(rawValue:)) ?? suggestedRole
+        role = defaults.string(forKey: roleKey).flatMap(NexusConnectRole.init(rawValue:)) ?? Self.suggestedRole()
         enabled = defaults.bool(forKey: enabledKey)
-        clientVault = NexusIdentityVault(store: secretStore, role: .client)
-        hostVault = NexusIdentityVault(store: secretStore, role: .studioHost)
-        remoteClient = NexusRemoteClientSession(vault: clientVault)
+        modelRoute = Self.restoreRoute(from: defaults.data(forKey: modelRouteKey))
 
-        let nodeID: UUID
-        if let saved = defaults.string(forKey: localNodeIDKey).flatMap(UUID.init(uuidString:)) {
-            nodeID = saved
-        } else {
-            nodeID = UUID()
-            defaults.set(nodeID.uuidString, forKey: localNodeIDKey)
+        let clientVault = NexusIdentityVault(store: secretStore, role: .client)
+        let hostVault = NexusIdentityVault(store: secretStore, role: .studioHost)
+        let roster = NexusPairedNodeStore(secretStore: secretStore, scope: .client)
+        self.clientVault = clientVault
+        self.hostVault = hostVault
+        self.roster = roster
+
+        if let migrated = try? roster.migrateLegacyPairing(
+            try? clientVault.loadPairing(),
+            displayName: "Paired Mac"
+        ), let tailscaleID = defaults.string(forKey: preferredNodeKey) {
+            try? roster.update(nodeID: migrated.id) { $0.tailscaleNodeID = tailscaleID }
         }
-        let localServices = NexusHostServiceExecutor(nodeID: nodeID, nodeName: Host.current().localizedName ?? "This Mac")
-        let local = NexusLocalWorkloadExecutor(services: localServices)
-        let workloadRouter = NexusWorkloadRouter(local: local, remote: remoteClient, preference: .localOnly)
-        router = workloadRouter
-        workloads = NexusUnifiedWorkloadAPI(executor: workloadRouter)
-        coordinator = NexusConnectCoordinator(
-            discovery: NexusTailscaleDiscovery(),
-            sessionFactory: { [remoteClient] in remoteClient },
-            pairingIsAvailable: { [clientVault] in (try? clientVault.loadPairing()) != nil }
+        pairedNodes = (try? roster.prepareForLaunch()) ?? []
+
+        let localNodeID: UUID
+        if let saved = defaults.string(forKey: localNodeIDKey).flatMap(UUID.init(uuidString:)) {
+            localNodeID = saved
+        } else {
+            localNodeID = UUID()
+            defaults.set(localNodeID.uuidString, forKey: localNodeIDKey)
+        }
+        let localServices = NexusHostServiceExecutor(
+            nodeID: localNodeID,
+            nodeName: Host.current().localizedName ?? "This Mac"
         )
-        isPaired = Self.hasPairing(role: role, clientVault: clientVault, hostVault: hostVault)
+        let local = NexusLocalWorkloadExecutor(services: localServices)
+        let router = NexusMultiNodeWorkloadRouter(local: local)
+        self.router = router
+        workloads = NexusUnifiedWorkloadAPI(executor: router)
+        coordinator = NexusPairedNodeCoordinator(
+            discovery: discovery,
+            roster: roster,
+            sessionFactory: { node in
+                NexusRemoteClientSession(vault: NexusPairedNodeCredentials(
+                    identityVault: clientVault,
+                    roster: roster,
+                    nodeID: node.id
+                ))
+            }
+        )
+        isPaired = role == .client ? !pairedNodes.isEmpty || (try? clientVault.loadPairing()) != nil : (try? hostVault.loadPairing()) != nil
 
-        coordinator.$state
+        coordinator.$nodes
             .receive(on: DispatchQueue.main)
-            .sink { [weak self] in self?.apply($0) }
+            .sink { [weak self] in self?.apply(nodes: $0) }
             .store(in: &cancellables)
+        Task { await router.setRoute(modelRoute) }
     }
 
-    func start() {
-        restart()
-    }
+    func start() { restart() }
 
     func setEnabled(_ enabled: Bool) {
         self.enabled = enabled
@@ -164,19 +257,40 @@ final class NexusConnectController: ObservableObject {
         guard self.role != role else { return }
         self.role = role
         defaults.set(role.rawValue, forKey: roleKey)
-        isPaired = Self.hasPairing(role: role, clientVault: clientVault, hostVault: hostVault)
+        isPaired = role == .client ? !pairedNodes.isEmpty : (try? hostVault.loadPairing()) != nil
         pairingCode = ""
         setupMessage = ""
         restart()
     }
 
+    func setModelRoute(_ route: NexusModelRoute) {
+        modelRoute = route
+        if let data = try? NexusPayloadCoder.encoder.encode(route) {
+            defaults.set(data, forKey: modelRouteKey)
+        }
+        Task { await router.setRoute(route) }
+    }
+
     func createPairingCode() {
         do {
-            let generated = try NexusPairingCode.generate()
-            try vault(for: role).savePairing(generated.material)
-            pairingCode = generated.code
+            if role == .studioHost {
+                let identity = try hostVault.loadOrCreateIdentity()
+                let name = Host.current().localizedName ?? "Nexus Mac"
+                let generated = try NexusPairingCode.generateInvitation(
+                    identity: identity,
+                    displayName: name,
+                    endpoint: name
+                )
+                try hostVault.savePairing(generated.material)
+                pairingCode = generated.code
+                setupMessage = "Pair this device once. Nexus will pin \(name)'s identity and reconnect automatically."
+            } else {
+                let generated = try NexusPairingCode.generate()
+                try clientVault.savePairing(generated.material)
+                pairingCode = generated.code
+                setupMessage = "Legacy NX1 code created. Generate the preferred NX2 code on the host Mac."
+            }
             isPaired = true
-            setupMessage = "Copy this code once to Nexus on the other Mac. It is the app-level secret."
             restart()
         } catch {
             setupMessage = error.localizedDescription
@@ -185,11 +299,35 @@ final class NexusConnectController: ObservableObject {
 
     func applyPairingCode() {
         do {
-            let material = try NexusPairingCode.decode(pairingCode)
-            try vault(for: role).savePairing(material)
+            if NexusPairingCode.isInvitation(pairingCode) {
+                let invitation = try NexusPairingCode.decodeInvitation(pairingCode)
+                guard invitation.protocolRange.highestCommonVersion(with: .local) != nil else {
+                    throw NexusConnectError.unsupportedProtocol
+                }
+                let pairing = try NexusPairingMaterial(
+                    secret: invitation.secret,
+                    peerDeviceID: invitation.hostNodeID,
+                    peerSigningPublicKey: invitation.hostSigningPublicKey
+                )
+                let node = NexusPairedNode(
+                    id: invitation.hostNodeID,
+                    pinnedPublicIdentityKey: invitation.hostSigningPublicKey,
+                    displayName: invitation.displayName,
+                    endpoint: invitation.endpoint,
+                    protocolRange: invitation.protocolRange
+                )
+                try roster.upsert(node, pairing: pairing)
+                pairedNodes = try roster.prepareForLaunch()
+                setupMessage = "\(node.displayName) is paired permanently and will reconnect automatically."
+            } else {
+                let material = try NexusPairingCode.decode(pairingCode)
+                try vault(for: role).savePairing(material)
+                setupMessage = "Legacy pairing saved securely in Keychain."
+            }
             isPaired = true
-            setupMessage = "Pairing saved securely in Keychain."
             restart()
+        } catch NexusConnectError.unsupportedProtocol {
+            setupMessage = "This device uses an incompatible Nexus Connect protocol. Pairing was not changed."
         } catch {
             setupMessage = "That pairing code is invalid or damaged."
         }
@@ -202,8 +340,42 @@ final class NexusConnectController: ObservableObject {
         setupMessage = "Pairing code copied."
     }
 
+    func rename(nodeID: UUID, to name: String) {
+        do {
+            try roster.rename(nodeID: nodeID, to: name)
+            pairedNodes = try roster.load()
+            setupMessage = "Device renamed."
+        } catch {
+            setupMessage = error.localizedDescription
+        }
+    }
+
+    func reconnect(nodeID: UUID) { coordinator.reconnect(nodeID: nodeID) }
+
+    func forget(nodeID: UUID) {
+        do {
+            try roster.forget(nodeID: nodeID)
+            coordinator.forget(nodeID: nodeID)
+            pairedNodes = try roster.load()
+            if case .pairedNode(nodeID) = modelRoute { setModelRoute(.automatic) }
+            isPaired = !pairedNodes.isEmpty
+            setupMessage = "Device forgotten and its credentials revoked."
+            synchronizeRouter()
+        } catch {
+            setupMessage = error.localizedDescription
+        }
+    }
+
+    /// Legacy whole-role removal. New UI uses per-node `forget(nodeID:)`.
     func unpair() {
-        try? vault(for: role).removePairing()
+        if role == .client {
+            for node in pairedNodes { try? roster.forget(nodeID: node.id) }
+            try? clientVault.removePairing()
+            pairedNodes = []
+            coordinator.stop()
+        } else {
+            try? hostVault.removePairing()
+        }
         isPaired = false
         pairingCode = ""
         setupMessage = "Pairing removed."
@@ -246,9 +418,28 @@ final class NexusConnectController: ObservableObject {
 
     func pullModel(
         _ model: LocalModel,
+        on nodeID: UUID? = nil,
         onProgress: @escaping @Sendable (ModelDownloadProgress) async -> Void
     ) async throws {
-        guard shouldUseStudio else { throw NexusConnectError.unavailable("Nexus Connect is not enabled") }
+        let targetID: UUID
+        if let nodeID {
+            targetID = nodeID
+        } else if case .pairedNode(let selected) = modelRoute {
+            targetID = selected
+        } else {
+            let descriptor = NexusModelDescriptor(
+                runtime: model.backend == .ollama ? .ollama : .lmStudio,
+                identifier: model.identifier
+            )
+            guard let automatic = await router.automaticNode(for: descriptor, minimumRAMGB: model.minimumRAMGB) else {
+                throw NexusConnectError.unavailable("no connected paired device has enough free memory and disk")
+            }
+            targetID = automatic
+        }
+        guard let remote = coordinator.executor(for: targetID) else {
+            let name = pairedNodes.first(where: { $0.id == targetID })?.displayName ?? "Selected device"
+            throw NexusConnectError.unavailable("\(name) is not connected; the download was not moved to this Mac")
+        }
         let request = try NexusWorkloadRequest(
             kind: .modelPull,
             priority: .utility,
@@ -261,7 +452,7 @@ final class NexusConnectController: ObservableObject {
         )
         // Model placement is intentionally remote-only. Falling back here could
         // unexpectedly put a 120B+ model on the MacBook Air.
-        let stream = try await remoteClient.events(for: request)
+        let stream = try await remote.events(for: request)
         for try await event in stream where event.kind == .progress {
             let progress = try event.decodePayload(NexusProgressPayload.self)
             await onProgress(.init(
@@ -270,16 +461,28 @@ final class NexusConnectController: ObservableObject {
                 status: progress.status
             ))
         }
+        try await refreshInventory(nodeID: targetID)
     }
 
     func installedStudioModels(runtime: NexusRuntimeKind? = nil) async throws -> [NexusModelDescriptor] {
-        guard shouldUseStudio else { return [] }
+        let onlineIDs = pairedNodes.filter { $0.status == .online }.map(\.id)
+        var result: Set<NexusModelDescriptor> = []
+        for nodeID in onlineIDs {
+            result.formUnion(try await installedModels(on: nodeID, runtime: runtime))
+        }
+        return result.sorted { $0.identifier < $1.identifier }
+    }
+
+    func installedModels(on nodeID: UUID, runtime: NexusRuntimeKind? = nil) async throws -> [NexusModelDescriptor] {
+        guard let remote = coordinator.executor(for: nodeID) else {
+            throw NexusConnectError.unavailable("the selected remote host is offline")
+        }
         let request = try NexusWorkloadRequest(
             kind: .modelList,
             retrySafety: .idempotent,
             payload: NexusModelListPayload(runtime: runtime)
         )
-        let stream = try await remoteClient.events(for: request)
+        let stream = try await remote.events(for: request)
         for try await event in stream where event.kind == .result {
             return try event.decodePayload(NexusModelInventoryPayload.self).models
         }
@@ -296,7 +499,7 @@ final class NexusConnectController: ObservableObject {
         maximumOutputBytes: Int = 8 * 1_024 * 1_024
     ) async throws -> NexusStructuredProcessResult {
         let alert = NSAlert()
-        alert.messageText = "Allow \(executableID) on \(shouldUseStudio ? "Mac Studio" : "this Mac")?"
+        alert.messageText = "Allow \(executableID) on \(routeDisplayName)?"
         alert.informativeText = arguments.isEmpty
             ? "Nexus will run the executable once without a shell."
             : "Arguments:\n\(arguments.joined(separator: " "))\n\nNexus will not use zsh -c or execute model-generated shell text."
@@ -324,7 +527,6 @@ final class NexusConnectController: ObservableObject {
         hostStartTask?.cancel()
         hostListener?.stop()
         coordinator.stop()
-        Task { await remoteClient.disconnect() }
     }
 
     private func restart() {
@@ -333,28 +535,29 @@ final class NexusConnectController: ObservableObject {
         hostListener?.stop()
         hostListener = nil
         coordinator.stop()
-        isPaired = Self.hasPairing(role: role, clientVault: clientVault, hostVault: hostVault)
+        isPaired = role == .client ? !pairedNodes.isEmpty : (try? hostVault.loadPairing()) != nil
 
         guard enabled else {
-            Task { await router.setPreference(.localOnly) }
+            Task { await router.setRoute(.thisMac) }
             state = .off
             return
         }
         guard isPaired else {
-            Task { await router.setPreference(.localOnly) }
+            Task { await router.setRoute(.thisMac) }
             state = .needsPairing
             return
         }
         switch role {
         case .client:
-            Task { await router.setPreference(.automatic) }
+            guard !pairedNodes.isEmpty else {
+                state = .needsPairing
+                return
+            }
+            Task { await router.setRoute(modelRoute) }
             state = .discovering
-            coordinator.start(
-                enabled: true,
-                preferredNodeID: defaults.string(forKey: preferredNodeKey)
-            )
+            coordinator.start(nodes: pairedNodes)
         case .studioHost:
-            Task { await router.setPreference(.localOnly) }
+            Task { await router.setRoute(.thisMac) }
             startHosting()
         }
     }
@@ -380,22 +583,55 @@ final class NexusConnectController: ObservableObject {
         }
     }
 
-    private func apply(_ lifecycle: NexusConnectLifecycleState) {
+    private func apply(nodes: [NexusPairedNode]) {
+        pairedNodes = nodes
+        isPaired = !nodes.isEmpty
+        synchronizeRouter()
         guard enabled, role == .client else { return }
-        switch lifecycle {
-        case .disabled: state = .off
-        case .discovering: state = .discovering
-        case .connecting(let peer), .authenticating(let peer): state = .connecting(peer.hostName)
-        case .ready(let peer, let health, let quality):
-            defaults.set(peer.id, forKey: preferredNodeKey)
-            Task { await workloads.setConnectionQuality(quality) }
+        let online = nodes.filter { $0.status == .online }
+        if online.count == 1, let node = online.first {
+            let rtt = node.statusDetail.flatMap { Double($0.replacingOccurrences(of: " ms", with: "")) }
             state = .ready(
-                name: health.nodeName,
-                memoryGB: max(1, Int(health.totalMemoryBytes / 1_073_741_824)),
-                roundTripMilliseconds: quality.roundTripMilliseconds
+                name: node.displayName,
+                memoryGB: node.totalMemoryBytes.map(Self.gigabytes) ?? 0,
+                roundTripMilliseconds: rtt
             )
-        case .reconnecting(let message, _): state = .reconnecting(message)
-        case .offline(let message): state = .failed(message)
+        } else if online.count > 1 {
+            state = .ready(
+                name: "\(online.count) paired Macs",
+                memoryGB: online.compactMap(\.totalMemoryBytes).map(Self.gigabytes).reduce(0, +),
+                roundTripMilliseconds: nil
+            )
+        } else if let incompatible = nodes.first(where: { $0.status == .incompatible }) {
+            state = .failed(incompatible.statusDetail ?? "\(incompatible.displayName) is incompatible")
+        } else if nodes.contains(where: { $0.status == .reconnecting }) {
+            state = .discovering
+        } else {
+            state = .failed("All paired Macs are offline; local Nexus remains available.")
+        }
+    }
+
+    private func synchronizeRouter() {
+        var executors: [UUID: any NexusWorkloadExecuting] = [:]
+        for node in pairedNodes where node.status == .online {
+            executors[node.id] = coordinator.executor(for: node.id)
+        }
+        let nodes = pairedNodes
+        Task { await router.synchronize(nodes: nodes, executors: executors) }
+    }
+
+    private func refreshInventory(nodeID: UUID) async throws {
+        let inventory = try await installedModels(on: nodeID)
+        try roster.update(nodeID: nodeID) { $0.modelInventory = inventory }
+        pairedNodes = try roster.load()
+        synchronizeRouter()
+    }
+
+    private var routeDisplayName: String {
+        switch modelRoute {
+        case .automatic: "the automatically selected Mac"
+        case .thisMac: "this Mac"
+        case .pairedNode(let id): pairedNodes.first(where: { $0.id == id })?.displayName ?? "the selected Mac"
         }
     }
 
@@ -403,17 +639,19 @@ final class NexusConnectController: ObservableObject {
         role == .client ? clientVault : hostVault
     }
 
-    private static func hasPairing(
-        role: NexusConnectRole,
-        clientVault: NexusIdentityVault,
-        hostVault: NexusIdentityVault
-    ) -> Bool {
-        let vault = role == .client ? clientVault : hostVault
-        return (try? vault.loadPairing()) != nil
-    }
-
     private static func suggestedRole() -> NexusConnectRole {
         let name = Host.current().localizedName?.lowercased() ?? ""
         return name.contains("studio") ? .studioHost : .client
+    }
+
+    private static func restoreRoute(from data: Data?) -> NexusModelRoute {
+        guard let data, let route = try? NexusPayloadCoder.decoder.decode(NexusModelRoute.self, from: data) else {
+            return .automatic
+        }
+        return route
+    }
+
+    private static func gigabytes(_ bytes: UInt64) -> Int {
+        max(1, Int(bytes / 1_073_741_824))
     }
 }

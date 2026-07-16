@@ -46,7 +46,7 @@ actor NexusFramedConnection {
 actor NexusRemoteClientSession: NexusRemoteSession, NexusWorkloadExecuting {
     typealias TransportFactory = @Sendable () -> any NexusByteTransport
 
-    private let vault: NexusIdentityVault
+    private let vault: any NexusSessionCredentialProviding
     private let transportFactory: TransportFactory
     private var connection: NexusFramedConnection?
     private var secureChannel: NexusSecureChannel?
@@ -58,7 +58,7 @@ actor NexusRemoteClientSession: NexusRemoteSession, NexusWorkloadExecuting {
     private(set) var negotiatedFeatures: Set<NexusConnectFeature> = []
 
     init(
-        vault: NexusIdentityVault = NexusIdentityVault(role: .client),
+        vault: any NexusSessionCredentialProviding = NexusIdentityVault(role: .client),
         transportFactory: @escaping TransportFactory = { NexusNWConnectionTransport() }
     ) {
         self.vault = vault
@@ -269,7 +269,7 @@ actor NexusRemoteClientSession: NexusRemoteSession, NexusWorkloadExecuting {
 
 actor NexusConnectHostSession {
     private let transport: any NexusByteTransport
-    private let vault: NexusIdentityVault
+    private let vault: any NexusSessionCredentialProviding
     private let executor: NexusHostServiceExecutor
     private var connection: NexusFramedConnection?
     private var secureChannel: NexusSecureChannel?
@@ -279,7 +279,7 @@ actor NexusConnectHostSession {
 
     init(
         transport: any NexusByteTransport,
-        vault: NexusIdentityVault = NexusIdentityVault(role: .studioHost),
+        vault: any NexusSessionCredentialProviding = NexusIdentityVault(role: .studioHost),
         executor: NexusHostServiceExecutor
     ) {
         self.transport = transport
@@ -424,13 +424,13 @@ actor NexusConnectHostSession {
 final class NexusConnectHostListener: @unchecked Sendable {
     private let queue = DispatchQueue(label: "com.nexus.connect.listener", qos: .userInitiated)
     private let lock = NSLock()
-    private let vault: NexusIdentityVault
+    private let vault: any NexusSessionCredentialProviding
     private let executor: NexusHostServiceExecutor
     private var listener: NWListener?
     private var sessions: [UUID: Task<Void, Never>] = [:]
 
     init(
-        vault: NexusIdentityVault = NexusIdentityVault(role: .studioHost),
+        vault: any NexusSessionCredentialProviding = NexusIdentityVault(role: .studioHost),
         executor: NexusHostServiceExecutor
     ) {
         self.vault = vault

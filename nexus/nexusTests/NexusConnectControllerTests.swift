@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 import XCTest
 @testable import nexus
@@ -88,6 +89,40 @@ extension NexusGeometryTests {
         )) { error in
             XCTAssertEqual(error as? NexusConnectError, .unsupportedProtocol)
         }
+    }
+
+    @MainActor
+    func testNX2PairingSurvivesControllerRestartWithoutAnotherCode() throws {
+        let defaultsName = "NexusConnectNX2Restart.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: defaultsName))
+        defer { defaults.removePersistentDomain(forName: defaultsName) }
+        let store = NexusMemorySecretStore()
+        let hostIdentity = NexusDeviceIdentity(
+            deviceID: UUID(),
+            signingPrivateKey: Curve25519.Signing.PrivateKey().rawRepresentation
+        )
+        let generated = try NexusPairingCode.generateInvitation(
+            identity: hostIdentity,
+            displayName: "Vishay's iMac",
+            endpoint: "vishays-imac.example.ts.net"
+        )
+
+        var firstController: NexusConnectController? = NexusConnectController(
+            defaults: defaults,
+            secretStore: store
+        )
+        firstController?.setRole(.client)
+        firstController?.pairingCode = generated.code
+        firstController?.applyPairingCode()
+        XCTAssertEqual(firstController?.pairedNodes.map(\.id), [hostIdentity.deviceID])
+        firstController?.shutdown()
+        firstController = nil
+
+        let restarted = NexusConnectController(defaults: defaults, secretStore: store)
+        XCTAssertTrue(restarted.isPaired)
+        XCTAssertEqual(restarted.pairedNodes.first?.displayName, "Vishay's iMac")
+        XCTAssertEqual(restarted.pairedNodes.first?.status, .reconnecting)
+        restarted.shutdown()
     }
 
     func testPairingCodeRoundTripsAndDetectsDamage() throws {

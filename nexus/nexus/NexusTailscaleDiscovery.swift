@@ -215,6 +215,11 @@ protocol NexusStudioDiscovering: Sendable {
     func routeSample(to peer: NexusTailscalePeer) async throws -> NexusTailscaleRouteSample
 }
 
+protocol NexusNodeDiscovering: Sendable {
+    func snapshot() async throws -> NexusTailscaleSnapshot
+    func routeSample(to peer: NexusTailscalePeer) async throws -> NexusTailscaleRouteSample
+}
+
 struct NexusTailscaleDiscovery: NexusStudioDiscovering, Sendable {
     private let runner: any NexusCommandRunning
     private let executableOverride: URL?
@@ -343,6 +348,36 @@ struct NexusTailscaleDiscovery: NexusStudioDiscovering, Sendable {
                   let range = Range(match.range(at: 1), in: text) else { return nil }
             return String(text[range])
         }
+    }
+}
+
+extension NexusTailscaleDiscovery: NexusNodeDiscovering {}
+
+extension NexusTailscaleSnapshot {
+    func exactPeer(for node: NexusPairedNode) throws -> NexusTailscalePeer {
+        guard backendState.caseInsensitiveCompare("Running") == .orderedSame else {
+            throw NexusConnectError.unavailable("Tailscale backend is \(backendState)")
+        }
+        let expectedEndpoint = node.endpoint.lowercased().trimmingCharacters(in: CharacterSet(charactersIn: "."))
+        let peer = peers.first { peer in
+            let dns = peer.dnsName.lowercased().trimmingCharacters(in: CharacterSet(charactersIn: "."))
+            let identityMatches = node.tailscaleNodeID.map {
+                $0 == peer.id || $0 == peer.nodeKey
+            } ?? false
+            let endpointMatches = !expectedEndpoint.isEmpty && (
+                dns == expectedEndpoint ||
+                peer.hostName.lowercased() == expectedEndpoint ||
+                peer.addresses.contains(expectedEndpoint)
+            )
+            return identityMatches || endpointMatches
+        }
+        guard let peer else {
+            throw NexusConnectError.unavailable("\(node.displayName) is not installed or is not visible on this tailnet")
+        }
+        guard peer.online else {
+            throw NexusConnectError.unavailable("\(node.displayName) is powered off, sleeping, or offline")
+        }
+        return peer
     }
 }
 

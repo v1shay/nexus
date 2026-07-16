@@ -277,7 +277,7 @@ struct NexusModelPullPayload: Codable, Equatable, Sendable {
     let quantization: String?
 }
 
-struct NexusModelDescriptor: Codable, Equatable, Sendable {
+struct NexusModelDescriptor: Codable, Equatable, Hashable, Sendable {
     let runtime: NexusRuntimeKind
     let identifier: String
 }

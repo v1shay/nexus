@@ -118,6 +118,228 @@ protocol NexusRemoteSession: Sendable {
     func disconnect() async
 }
 
+protocol NexusManagedRemoteSession: NexusRemoteSession, NexusWorkloadExecuting {}
+
+extension NexusRemoteClientSession: NexusManagedRemoteSession {}
+
+/// Maintains an independent authenticated session and reconnect loop for every
+/// saved node. The legacy single-Studio coordinator remains below only for v1
+/// API compatibility; new app code uses this roster coordinator.
+@MainActor
+final class NexusPairedNodeCoordinator: ObservableObject {
+    typealias SessionFactory = @Sendable (NexusPairedNode) -> any NexusManagedRemoteSession
+
+    @Published private(set) var nodes: [NexusPairedNode] = []
+
+    private let discovery: any NexusNodeDiscovering
+    private let roster: NexusPairedNodeStore
+    private let sessionFactory: SessionFactory
+    private let reconnectPolicy: NexusReconnectPolicy
+    private let healthIntervalNanoseconds: UInt64
+    private var sessions: [UUID: any NexusManagedRemoteSession] = [:]
+    private var tasks: [UUID: Task<Void, Never>] = [:]
+    private var enabled = false
+
+    init(
+        discovery: any NexusNodeDiscovering,
+        roster: NexusPairedNodeStore,
+        reconnectPolicy: NexusReconnectPolicy = .standard,
+        healthIntervalSeconds: TimeInterval = 5,
+        sessionFactory: @escaping SessionFactory
+    ) {
+        self.discovery = discovery
+        self.roster = roster
+        self.reconnectPolicy = reconnectPolicy
+        self.healthIntervalNanoseconds = UInt64(max(0.05, healthIntervalSeconds) * 1_000_000_000)
+        self.sessionFactory = sessionFactory
+    }
+
+    func start(nodes initialNodes: [NexusPairedNode]) {
+        enabled = true
+        let desiredIDs = Set(initialNodes.map(\.id))
+        for id in tasks.keys where !desiredIDs.contains(id) {
+            tasks.removeValue(forKey: id)?.cancel()
+            if let session = sessions.removeValue(forKey: id) {
+                Task { await session.disconnect() }
+            }
+        }
+        nodes = initialNodes
+        for node in initialNodes where tasks[node.id] == nil {
+            startLoop(for: node)
+        }
+    }
+
+    func reconnect(nodeID: UUID) {
+        guard enabled, let node = nodes.first(where: { $0.id == nodeID }) else { return }
+        tasks.removeValue(forKey: nodeID)?.cancel()
+        if let session = sessions.removeValue(forKey: nodeID) {
+            Task { await session.disconnect() }
+        }
+        update(nodeID) {
+            $0.status = .reconnecting
+            $0.statusDetail = "Reconnect requested"
+        }
+        startLoop(for: node)
+    }
+
+    func forget(nodeID: UUID) {
+        tasks.removeValue(forKey: nodeID)?.cancel()
+        if let session = sessions.removeValue(forKey: nodeID) {
+            Task { await session.disconnect() }
+        }
+        nodes.removeAll { $0.id == nodeID }
+    }
+
+    func stop() {
+        enabled = false
+        let activeTasks = tasks.values
+        let activeSessions = sessions.values
+        tasks.removeAll()
+        sessions.removeAll()
+        activeTasks.forEach { $0.cancel() }
+        for session in activeSessions { Task { await session.disconnect() } }
+    }
+
+    func executor(for nodeID: UUID) -> (any NexusWorkloadExecuting)? {
+        guard nodes.first(where: { $0.id == nodeID })?.status == .online else { return nil }
+        return sessions[nodeID]
+    }
+
+    private func startLoop(for node: NexusPairedNode) {
+        let session = sessionFactory(node)
+        sessions[node.id] = session
+        tasks[node.id] = Task { [weak self] in
+            await self?.run(nodeID: node.id, session: session)
+        }
+    }
+
+    private func run(nodeID: UUID, session: any NexusManagedRemoteSession) async {
+        var attempt = 0
+        while enabled, !Task.isCancelled {
+            do {
+                update(nodeID) {
+                    $0.status = .reconnecting
+                    $0.statusDetail = attempt == 0 ? "Connecting…" : "Reconnect attempt \(attempt + 1)"
+                }
+                let savedNode = try currentNode(nodeID)
+                let snapshot = try await discovery.snapshot()
+                let peer = try snapshot.exactPeer(for: savedNode)
+                let health = try await session.connect(to: peer)
+                guard health.nodeID == nodeID else { throw NexusConnectError.identityMismatch }
+                let remoteRange = NexusProtocolVersionRange(
+                    minimum: health.protocolMinimum,
+                    maximum: health.protocolMaximum
+                )
+                guard NexusProtocolVersionRange.local.highestCommonVersion(with: remoteRange) != nil else {
+                    throw NexusConnectError.unsupportedProtocol
+                }
+                let quality = await connectionQuality(for: peer)
+                let inventory = try await loadInventory(from: session)
+                applyOnline(
+                    nodeID: nodeID,
+                    health: health,
+                    peer: peer,
+                    quality: quality,
+                    inventory: inventory
+                )
+                attempt = 0
+
+                while enabled, !Task.isCancelled {
+                    try await Task.sleep(nanoseconds: healthIntervalNanoseconds)
+                    let latest = try await session.health()
+                    guard latest.nodeID == nodeID else { throw NexusConnectError.identityMismatch }
+                    applyOnline(nodeID: nodeID, health: latest, peer: peer, quality: quality, inventory: nil)
+                }
+            } catch is CancellationError {
+                return
+            } catch NexusConnectError.identityMismatch {
+                await session.disconnect()
+                update(nodeID) {
+                    $0.status = .incompatible
+                    $0.statusDetail = "Security identity mismatch. Forget and pair this device again."
+                }
+                return
+            } catch NexusConnectError.unsupportedProtocol {
+                await session.disconnect()
+                update(nodeID) {
+                    $0.status = .incompatible
+                    $0.statusDetail = "No compatible Nexus Connect protocol. Upgrade this Mac or the remote host."
+                }
+                return
+            } catch {
+                await session.disconnect()
+                guard enabled, !Task.isCancelled else { return }
+                let delay = reconnectPolicy.delaySeconds(attempt: attempt)
+                attempt += 1
+                update(nodeID) {
+                    $0.status = .offline
+                    $0.statusDetail = "\(error.localizedDescription) · retrying in \(Int(ceil(delay)))s"
+                }
+                do {
+                    try await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
+                } catch {
+                    return
+                }
+            }
+        }
+    }
+
+    private func loadInventory(from session: any NexusManagedRemoteSession) async throws -> [NexusModelDescriptor] {
+        let request = try NexusWorkloadRequest(
+            kind: .modelList,
+            retrySafety: .idempotent,
+            payload: NexusModelListPayload(runtime: nil)
+        )
+        let stream = try await session.events(for: request)
+        for try await event in stream where event.kind == .result {
+            return try event.decodePayload(NexusModelInventoryPayload.self).models
+        }
+        return []
+    }
+
+    private func connectionQuality(for peer: NexusTailscalePeer) async -> NexusConnectionQuality {
+        let route = try? await discovery.routeSample(to: peer)
+        return .init(
+            route: route?.route ?? .unknown,
+            roundTripMilliseconds: route?.roundTripMilliseconds,
+            uploadBytesPerSecond: nil,
+            downloadBytesPerSecond: nil,
+            recentFailureRate: 0
+        )
+    }
+
+    private func applyOnline(
+        nodeID: UUID,
+        health: NexusNodeHealth,
+        peer: NexusTailscalePeer,
+        quality: NexusConnectionQuality,
+        inventory: [NexusModelDescriptor]?
+    ) {
+        update(nodeID) {
+            $0.apply(
+                health: health,
+                endpoint: peer.connectionHost,
+                tailscaleNodeID: peer.id,
+                inventory: inventory
+            )
+            $0.statusDetail = quality.roundTripMilliseconds.map { "\(Int($0.rounded())) ms" }
+        }
+    }
+
+    private func currentNode(_ id: UUID) throws -> NexusPairedNode {
+        guard let node = nodes.first(where: { $0.id == id }) else {
+            throw NexusConnectError.unavailable("paired device was forgotten")
+        }
+        return node
+    }
+
+    private func update(_ id: UUID, mutation: (inout NexusPairedNode) -> Void) {
+        guard let index = nodes.firstIndex(where: { $0.id == id }) else { return }
+        mutation(&nodes[index])
+        try? roster.upsert(nodes[index])
+    }
+}
+
 @MainActor
 final class NexusConnectCoordinator: ObservableObject {
     @Published private(set) var state: NexusConnectLifecycleState = .disabled

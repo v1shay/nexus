@@ -158,6 +158,37 @@ struct NexusIdentityVault: Sendable {
     }
 }
 
+protocol NexusSessionCredentialProviding: Sendable {
+    func loadOrCreateIdentity() throws -> NexusDeviceIdentity
+    func loadPairing() throws -> NexusPairingMaterial?
+    func savePairing(_ pairing: NexusPairingMaterial) throws
+}
+
+extension NexusIdentityVault: NexusSessionCredentialProviding {}
+
+/// Uses one persistent client identity but a distinct pairing secret and pin
+/// for every remote node.
+struct NexusPairedNodeCredentials: NexusSessionCredentialProviding, Sendable {
+    let identityVault: NexusIdentityVault
+    let roster: NexusPairedNodeStore
+    let nodeID: UUID
+
+    func loadOrCreateIdentity() throws -> NexusDeviceIdentity {
+        try identityVault.loadOrCreateIdentity()
+    }
+
+    func loadPairing() throws -> NexusPairingMaterial? {
+        try roster.pairing(for: nodeID)
+    }
+
+    func savePairing(_ pairing: NexusPairingMaterial) throws {
+        guard pairing.peerDeviceID == nil || pairing.peerDeviceID == nodeID else {
+            throw NexusConnectError.identityMismatch
+        }
+        try roster.savePairing(pairing, for: nodeID)
+    }
+}
+
 struct NexusHandshakeHello: Codable, Equatable, Sendable {
     let protocolMinimum: Int
     let protocolMaximum: Int

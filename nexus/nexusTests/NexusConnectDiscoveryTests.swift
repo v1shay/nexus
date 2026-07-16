@@ -3,6 +3,104 @@ import XCTest
 @testable import nexus
 
 extension NexusGeometryTests {
+    func testExactNodeDiscoveryNeverUsesStudioNameHeuristics() throws {
+        let wanted = NexusPairedNode(
+            id: UUID(),
+            pinnedPublicIdentityKey: Data(repeating: 1, count: 32),
+            displayName: "My iMac",
+            endpoint: "imac.tail.ts.net"
+        )
+        let fakeStudio = NexusTailscalePeer(
+            id: "studio", nodeKey: "nodekey:studio", hostName: "Mac Studio",
+            dnsName: "studio.tail.ts.net.", operatingSystem: "macOS", addresses: ["100.64.0.3"],
+            online: true, active: true, relayRegion: nil, currentEndpoint: nil,
+            receivedBytes: 0, transmittedBytes: 0
+        )
+        let imac = NexusTailscalePeer(
+            id: "imac", nodeKey: "nodekey:imac", hostName: "Vishay iMac",
+            dnsName: "imac.tail.ts.net.", operatingSystem: "macOS", addresses: ["100.64.0.4"],
+            online: true, active: false, relayRegion: nil, currentEndpoint: nil,
+            receivedBytes: 0, transmittedBytes: 0
+        )
+        let snapshot = NexusTailscaleSnapshot(
+            backendState: "Running",
+            localNodeName: "Air",
+            peers: [fakeStudio, imac]
+        )
+
+        XCTAssertEqual(try snapshot.exactPeer(for: wanted).id, "imac")
+        var offline = wanted
+        offline.endpoint = "missing.tail.ts.net"
+        XCTAssertThrowsError(try snapshot.exactPeer(for: offline))
+    }
+
+    @MainActor
+    func testRosterCoordinatorConnectsStudioAndIMacConcurrently() async throws {
+        let studioID = UUID()
+        let imacID = UUID()
+        let nodes = [
+            NexusPairedNode(
+                id: studioID,
+                pinnedPublicIdentityKey: Data(repeating: 1, count: 32),
+                displayName: "Studio",
+                endpoint: "studio.ts.net"
+            ),
+            NexusPairedNode(
+                id: imacID,
+                pinnedPublicIdentityKey: Data(repeating: 2, count: 32),
+                displayName: "iMac",
+                endpoint: "imac.ts.net"
+            )
+        ]
+        let peers = [
+            NexusTailscalePeer(
+                id: "studio-tail", nodeKey: "nodekey:studio", hostName: "Studio", dnsName: "studio.ts.net.",
+                operatingSystem: "macOS", addresses: [], online: true, active: true,
+                relayRegion: nil, currentEndpoint: nil, receivedBytes: 0, transmittedBytes: 0
+            ),
+            NexusTailscalePeer(
+                id: "imac-tail", nodeKey: "nodekey:imac", hostName: "iMac", dnsName: "imac.ts.net.",
+                operatingSystem: "macOS", addresses: [], online: true, active: true,
+                relayRegion: nil, currentEndpoint: nil, receivedBytes: 0, transmittedBytes: 0
+            )
+        ]
+        let discovery = NexusMultiNodeDiscoveryStub(peers: peers)
+        let store = NexusMemorySecretStore()
+        let roster = NexusPairedNodeStore(secretStore: store)
+        for node in nodes { try roster.upsert(node) }
+        let tracker = NexusSessionConnectTracker()
+        let coordinator = NexusPairedNodeCoordinator(
+            discovery: discovery,
+            roster: roster,
+            reconnectPolicy: .init(initialDelaySeconds: 0.01, maximumDelaySeconds: 0.02, multiplier: 2, jitterFraction: 0),
+            healthIntervalSeconds: 0.05,
+            sessionFactory: { node in
+                NexusManagedSessionStub(
+                    health: Self.multiNodeHealth(id: node.id, name: node.displayName),
+                    tracker: tracker
+                )
+            }
+        )
+
+        coordinator.start(nodes: nodes)
+        try await Task.sleep(nanoseconds: 80_000_000)
+
+        XCTAssertEqual(Set(coordinator.nodes.filter { $0.status == .online }.map(\.id)), [studioID, imacID])
+        let connectedIDs = await tracker.connectedNodeIDs()
+        XCTAssertEqual(connectedIDs, Set([studioID, imacID]))
+        coordinator.stop()
+    }
+
+    private static func multiNodeHealth(id: UUID, name: String) -> NexusNodeHealth {
+        .init(
+            nodeID: id, nodeName: name, hostVersion: "2.1", protocolMinimum: 1, protocolMaximum: 2,
+            capabilities: [.health, .inference, .modelList, .modelPull], uptimeSeconds: 10,
+            totalMemoryBytes: 64 * 1_073_741_824, availableMemoryBytes: 48 * 1_073_741_824,
+            availableDiskBytes: 500 * 1_073_741_824, queueDepth: 0, activeJobs: 0,
+            loadAverage: [0.1], modelInventoryDigest: Data(), timestampMilliseconds: NexusClock.nowMilliseconds()
+        )
+    }
+
     func testTailscaleDiscoverySelectsOnlineStudioAndToleratesUnknownJSONFields() async throws {
         let json = #"""
         {
@@ -232,4 +330,59 @@ private actor NexusRemoteSessionStub: NexusRemoteSession {
     }
     func disconnect() async {}
     func healthCount() -> Int { checks }
+}
+
+private struct NexusMultiNodeDiscoveryStub: NexusNodeDiscovering {
+    let peers: [NexusTailscalePeer]
+
+    func snapshot() async throws -> NexusTailscaleSnapshot {
+        .init(backendState: "Running", localNodeName: "Air", peers: peers)
+    }
+
+    func routeSample(to peer: NexusTailscalePeer) async throws -> NexusTailscaleRouteSample {
+        .init(route: .direct, roundTripMilliseconds: 3, description: "direct")
+    }
+}
+
+private actor NexusSessionConnectTracker {
+    private var ids: Set<UUID> = []
+
+    func connected(_ id: UUID) { ids.insert(id) }
+    func connectedNodeIDs() -> Set<UUID> { ids }
+}
+
+private actor NexusManagedSessionStub: NexusManagedRemoteSession {
+    let currentHealth: NexusNodeHealth
+    let tracker: NexusSessionConnectTracker
+
+    init(health: NexusNodeHealth, tracker: NexusSessionConnectTracker) {
+        currentHealth = health
+        self.tracker = tracker
+    }
+
+    func connect(to peer: NexusTailscalePeer) async throws -> NexusNodeHealth {
+        await tracker.connected(currentHealth.nodeID)
+        return currentHealth
+    }
+
+    func health() async throws -> NexusNodeHealth { currentHealth }
+    func disconnect() async {}
+
+    func events(for request: NexusWorkloadRequest) async throws -> AsyncThrowingStream<NexusWorkloadEvent, Error> {
+        AsyncThrowingStream { continuation in
+            if request.kind == .modelList,
+               let event = try? NexusWorkloadEvent(
+                requestID: request.id,
+                kind: .result,
+                sequence: 0,
+                isFinal: true,
+                payload: NexusModelInventoryPayload(models: [])
+               ) {
+                continuation.yield(event)
+            }
+            continuation.finish()
+        }
+    }
+
+    func cancel(requestID: UUID) async {}
 }
