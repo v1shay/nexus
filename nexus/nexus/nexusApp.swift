@@ -23,6 +23,10 @@ final class NexusAppDelegate: NSObject, NSApplicationDelegate {
         NSApp.setActivationPolicy(.accessory)
         notch.install()
     }
+
+    func applicationWillTerminate(_ notification: Notification) {
+        notch.shutdown()
+    }
 }
 
 @MainActor
@@ -42,6 +46,7 @@ final class NotchController: ObservableObject {
     private var pointerMonitor: PointerProximityMonitor?
     private var modelPanel: NSPanel?
     private let speechTranscriber = SpeechTranscriber()
+    private let modelDownloadViewModel = ModelDownloadViewModel()
     private var automaticRevealIsWaitingForNotchVisit = false
 
     static let preview: NotchController = {
@@ -142,11 +147,16 @@ final class NotchController: ObservableObject {
         )
         panel.title = "Models"
         panel.isReleasedWhenClosed = false
-        panel.contentView = NSHostingView(rootView: ModelAggregatorView())
+        panel.contentView = NSHostingView(rootView: ModelAggregatorView(viewModel: modelDownloadViewModel))
         panel.center()
         panel.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
         modelPanel = panel
+    }
+
+    func shutdown() {
+        speechTranscriber.stop()
+        modelDownloadViewModel.shutdown()
     }
 
     func updateHover(_ hovering: Bool) {

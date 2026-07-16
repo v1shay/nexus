@@ -42,4 +42,26 @@ final class NexusGeometryTests: XCTestCase {
         XCTAssertEqual(closed.maxY, screen.maxY)
         XCTAssertEqual(expanded.maxY, screen.maxY)
     }
+
+    func testOllamaRegistryParserExtractsOfficialLibraryModels() {
+        let html = #"<a href="/library/llama3.2"></a><a href="/library/qwen3"></a><a href="/download"></a>"#
+        let identifiers = ModelCatalogService.matches(
+            pattern: ##"href="/library/([^"#?]+)""##,
+            in: html
+        )
+
+        XCTAssertEqual(identifiers, ["llama3.2", "qwen3"])
+    }
+
+    func testRAMRecommendationEstimateUnderstandsParameterTags() {
+        XCTAssertEqual(ModelCatalog.estimatedMinimumRAM(for: "gemma3:12b"), 11)
+        XCTAssertEqual(ModelCatalog.estimatedMinimumRAM(for: "model-without-size"), 0)
+    }
+
+    func testOnlyPreparationAndDownloadsAreActiveStates() {
+        XCTAssertTrue(ModelDownloadState.preparing("Starting").isActive)
+        XCTAssertTrue(ModelDownloadState.downloading(progress: 0.5, completedBytes: 50, totalBytes: 100, status: "pulling").isActive)
+        XCTAssertFalse(ModelDownloadState.installed.isActive)
+        XCTAssertFalse(ModelDownloadState.failed("failed").isActive)
+    }
 }

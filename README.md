@@ -9,8 +9,9 @@ The project builds on macOS 14 with Xcode 15. On macOS 26, build it with Xcode 2
 - A non-activating AppKit panel measured from the display's actual notch geometry—not a normal app window. It expands down from the notch on hover and collapses after the pointer leaves.
 - The idle state is visually indistinguishable from the notch. Hold **Command-Shift-Space** from any app to dictate: the orb appears on the left wing, the waveform appears on the right wing, and the physical notch remains an empty protected center gap. Release to save the transcript, then hover the notch to open it.
 - Native macOS Speech recognition streams the actual dictated text into the glass transcript surface.
-- A deliberately unstyled local-model aggregator is retained as the beginning of Nexus's local-AI layer. It provides RAM-aware recommendations, a small starter catalog, and direct support for arbitrary Ollama tags or LM Studio/Hugging Face model identifiers.
-- Background downloads through the installed CLI: `ollama pull <tag>` or `lms get <model>`, including progress and completion/failure state.
+- A deliberately unstyled local-model aggregator with RAM-aware recommendations, the full Ollama registry (more than 200 official library entries), Hugging Face GGUF search for LM Studio, and support for any exact model identifier.
+- Ollama downloads use the streamed local `POST /api/pull` API, byte-accurate progress, `GET /api/tags` verification, cancellation, retry, duplicate prevention, and persisted completion state. Nexus detects Homebrew, `/usr/local`, and app-bundled executables, starts `ollama serve` without Terminal, and can install the official app into `~/Applications` after one confirmation.
+- LM Studio downloads use its bundled `lms get -y --gguf` command directly through `Foundation.Process`, including progress parsing, cancellation, verification through `lms ls`, and no shell or Terminal window.
 
 ## Run
 
@@ -20,4 +21,4 @@ The app intentionally is not sandboxed: invoking user-installed Ollama and LM St
 
 ## Model identifiers
 
-The catalog is a useful starting set, not a claim that the universe of community model files is finite. Paste any valid Ollama tag or Hugging Face/LM Studio model identifier into the search field, select the corresponding runtime, and press Return or **Download**. Nexus passes it straight to the runtime’s CLI.
+Search the live registry or paste any valid Ollama tag or Hugging Face/LM Studio model identifier, select the runtime, and press **Download**. LM Studio must be installed and opened once so its `~/.lmstudio/bin/lms` helper exists. Ollama can be installed by Nexus when first needed.
