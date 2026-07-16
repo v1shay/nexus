@@ -1,7 +1,7 @@
 import AVFoundation
 import Foundation
 
-/// Owns one warm Piper process for an entire answer and schedules its raw PCM
+/// Owns one Piper process for an entire answer and schedules its raw PCM
 /// output directly into AVAudioEngine. This removes the per-sentence model-load
 /// delay and lets speech follow the model's token stream.
 @MainActor
@@ -20,38 +20,23 @@ final class ResponseSpeaker {
     private var streamingSessionIsActive = false
     private var isMuted = false
     private var scheduledBufferCount = 0
-    private var lastPhraseSentAt: Date?
 
     init() {
         audioEngine.attach(playerNode)
     }
 
-    func prewarm() {
-        guard !isMuted, piperProcess == nil,
-              let configuration = PiperVoiceConfiguration.detect() else { return }
-        piperConfiguration = configuration
-        do { try startPiperStream(configuration) }
-        catch { piperConfiguration = nil }
-    }
-
-    func prepareForNewRequest() {
-        streamingSessionIsActive = false
-        flushTask?.cancel()
-        flushTask = nil
-        chunker = SpeechSentenceChunker()
-        systemSynthesizer.stopSpeaking(at: .immediate)
-        let recentlyQueued = lastPhraseSentAt.map { Date().timeIntervalSince($0) < 0.8 } ?? false
-        if scheduledBufferCount > 0 || recentlyQueued {
-            stopPipeline()
-            prewarm()
-        }
-    }
-
     func beginStreaming() {
         streamingSessionIsActive = true
         chunker = SpeechSentenceChunker()
-        guard !isMuted else { return }
-        prewarm()
+        guard !isMuted, piperProcess == nil,
+              let configuration = PiperVoiceConfiguration.detect() else { return }
+        piperConfiguration = configuration
+        do {
+            try startPiperStream(configuration)
+        } catch {
+            piperConfiguration = nil
+            NSLog("Nexus could not start Piper; using the system voice: %@", error.localizedDescription)
+        }
     }
 
     /// Bypasses phrase buffering for acknowledgements and tool-status speech.
@@ -71,6 +56,8 @@ final class ResponseSpeaker {
         flushTask = nil
         guard streamingSessionIsActive, !isMuted else { return }
         if let remainder = chunker.flush() { enqueue(remainder) }
+        try? piperInput?.close()
+        piperInput = nil
     }
 
     func setMuted(_ muted: Bool) {
@@ -79,8 +66,6 @@ final class ResponseSpeaker {
         if muted {
             stopPipeline()
             chunker = SpeechSentenceChunker()
-        } else {
-            prewarm()
         }
     }
 
@@ -106,7 +91,6 @@ final class ResponseSpeaker {
         if let input = piperInput {
             do {
                 try input.write(contentsOf: Data((cleaned + "\n").utf8))
-                lastPhraseSentAt = Date()
             }
             catch {
                 piperConfiguration = nil
@@ -120,7 +104,7 @@ final class ResponseSpeaker {
     private func startPiperStream(_ configuration: PiperVoiceConfiguration) throws {
         guard piperProcess == nil else { return }
         let format = AVAudioFormat(
-            commonFormat: .pcmFormatInt16,
+            commonFormat: .pcmFormatFloat32,
             sampleRate: configuration.sampleRate,
             channels: 1,
             interleaved: false
@@ -179,11 +163,13 @@ final class ResponseSpeaker {
         pendingPCM.removeFirst(byteCount)
         let frames = AVAudioFrameCount(byteCount / MemoryLayout<Int16>.size)
         guard let buffer = AVAudioPCMBuffer(pcmFormat: audioFormat, frameCapacity: frames),
-              let destination = buffer.int16ChannelData?.pointee else { return }
+              let destination = buffer.floatChannelData?.pointee else { return }
         buffer.frameLength = frames
         audio.withUnsafeBytes { bytes in
-            guard let source = bytes.baseAddress else { return }
-            memcpy(destination, source, byteCount)
+            let samples = bytes.bindMemory(to: Int16.self)
+            for index in 0..<samples.count {
+                destination[index] = Float(samples[index]) / Float(Int16.max)
+            }
         }
         scheduledBufferCount += 1
         playerNode.scheduleBuffer(buffer, completionCallbackType: .dataPlayedBack) { [weak self] _ in
@@ -210,7 +196,6 @@ final class ResponseSpeaker {
         audioEngine.reset()
         audioFormat = nil
         scheduledBufferCount = 0
-        lastPhraseSentAt = nil
         pendingPCM.removeAll(keepingCapacity: true)
     }
 

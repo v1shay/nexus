@@ -1,6 +1,7 @@
 import SwiftUI
 import AppKit
 import Carbon.HIToolbox
+import Darwin
 
 @main
 struct NexusApp: App {
@@ -44,11 +45,41 @@ final class NexusAppDelegate: NSObject, NSApplicationDelegate {
             .runningApplications(withBundleIdentifier: identifier)
             .filter { $0.processIdentifier != currentPID }
 
-        olderInstances.forEach { $0.terminate() }
+        guard !olderInstances.isEmpty else { return }
+        NSLog(
+            "Nexus %d is retiring older process(es): %@",
+            currentPID,
+            olderInstances.map { String($0.processIdentifier) }.joined(separator: ", ")
+        )
+        let olderDebugServers = olderInstances.compactMap {
+            debugServerParent(for: $0.processIdentifier)
+        }
+        olderDebugServers.forEach {
+            _ = Darwin.kill($0, SIGTERM)
+        }
+        olderInstances.forEach {
+            _ = Darwin.kill($0.processIdentifier, SIGTERM)
+        }
         for _ in 0..<12 where olderInstances.contains(where: { !$0.isTerminated }) {
             try? await Task.sleep(for: .milliseconds(50))
         }
-        olderInstances.filter { !$0.isTerminated }.forEach { $0.forceTerminate() }
+        olderInstances.filter { !$0.isTerminated }.forEach {
+            _ = Darwin.kill($0.processIdentifier, SIGKILL)
+        }
+    }
+
+    /// LLDB holds signals sent to a traced app. Retiring that app's dedicated
+    /// debugserver first lets a new Xcode run replace the old notch cleanly.
+    private static func debugServerParent(for processID: pid_t) -> pid_t? {
+        var info = proc_bsdinfo()
+        let infoSize = MemoryLayout<proc_bsdinfo>.size
+        guard proc_pidinfo(processID, PROC_PIDTBSDINFO, 0, &info, Int32(infoSize)) == infoSize else {
+            return nil
+        }
+        let parentID = pid_t(info.pbi_ppid)
+        var pathBuffer = [CChar](repeating: 0, count: 4_096)
+        guard proc_pidpath(parentID, &pathBuffer, UInt32(pathBuffer.count)) > 0 else { return nil }
+        return String(cString: pathBuffer).hasSuffix("/debugserver") ? parentID : nil
     }
 }
 
@@ -106,13 +137,11 @@ final class NotchController: ObservableObject {
         hostingView.sizingOptions = []
         hostingView.autoresizingMask = [.width, .height]
         panel.contentView = hostingView
-        panel.orderFrontRegardless()
         self.panel = panel
-        if ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] == nil {
-            responseSpeaker.prewarm()
-        }
         installHotKeyMonitor()
         installPointerMonitor()
+        panel.orderFrontRegardless()
+        NSLog("Nexus installed its panel, pointer monitor, and global hotkey")
 
         NotificationCenter.default.addObserver(
             self,
@@ -139,13 +168,14 @@ final class NotchController: ObservableObject {
         let isOverPanel = panel?.frame.contains(location) ?? false
         let isInsideNexus = isOverNotchZone || isOverPanel
         guard let didEnter = hoverSession.update(isInside: isInsideNexus) else { return }
+        NSLog("Nexus pointer session %@", didEnter ? "entered" : "exited")
         updateHover(didEnter)
     }
 
     /// Carbon hotkeys are delivered by macOS rather than by Nexus's focused
     /// window, which is what makes this work above every other application.
     private func installHotKeyMonitor() {
-        globalHotKey = NexusGlobalHotKey(
+        let hotKey = NexusGlobalHotKey(
             onPress: { [weak self] in
                 Task { @MainActor in self?.startGlobalDictation() }
             },
@@ -153,14 +183,23 @@ final class NotchController: ObservableObject {
                 Task { @MainActor in self?.finishGlobalDictation() }
             }
         )
-        globalHotKey?.install()
+        globalHotKey = hotKey
+        guard !hotKey.install() else { return }
+
+        // Xcode can briefly overlap a terminating debug process with its
+        // replacement. Retry once after Carbon has released the old binding.
+        Task { [weak self, weak hotKey] in
+            try? await Task.sleep(for: .milliseconds(350))
+            guard let self, let hotKey, self.globalHotKey === hotKey else { return }
+            _ = hotKey.install()
+        }
     }
 
     private func startGlobalDictation() {
         closeTask?.cancel()
         responseTask?.cancel()
         responseGeneration = UUID()
-        responseSpeaker.prepareForNewRequest()
+        responseSpeaker.stop()
         interaction.beginDictation()
         if let screen {
             resize(to: listeningSize(for: screen), animated: true)
@@ -235,7 +274,6 @@ final class NotchController: ObservableObject {
         responseTask?.cancel()
         responseGeneration = UUID()
         responseSpeaker.stop()
-        responseSpeaker.prewarm()
         automaticRevealIsWaitingForNotchVisit = false
         interaction.dismiss()
         if let screen { resize(to: closedSize(for: screen), animated: true) }
@@ -396,13 +434,15 @@ private final class NexusGlobalHotKey {
         self.onRelease = onRelease
     }
 
-    func install() {
+    @discardableResult
+    func install() -> Bool {
+        if hotKey != nil { return true }
         let target = GetApplicationEventTarget()
         var eventTypes = [
             EventTypeSpec(eventClass: OSType(kEventClassKeyboard), eventKind: UInt32(kEventHotKeyPressed)),
             EventTypeSpec(eventClass: OSType(kEventClassKeyboard), eventKind: UInt32(kEventHotKeyReleased))
         ]
-        InstallEventHandler(
+        let handlerStatus = InstallEventHandler(
             target,
             nexusGlobalHotKeyHandler,
             eventTypes.count,
@@ -410,8 +450,13 @@ private final class NexusGlobalHotKey {
             Unmanaged.passUnretained(self).toOpaque(),
             &eventHandler
         )
+        guard handlerStatus == noErr else {
+            NSLog("Nexus could not install its global hotkey handler: %d", handlerStatus)
+            eventHandler = nil
+            return false
+        }
         let identifier = EventHotKeyID(signature: 0x4E585553, id: 1) // "NXUS"
-        RegisterEventHotKey(
+        let registrationStatus = RegisterEventHotKey(
             UInt32(kVK_Space),
             UInt32(cmdKey | shiftKey),
             identifier,
@@ -419,6 +464,15 @@ private final class NexusGlobalHotKey {
             0,
             &hotKey
         )
+        guard registrationStatus == noErr else {
+            NSLog("Nexus could not register Command-Shift-Space: %d", registrationStatus)
+            if let eventHandler { RemoveEventHandler(eventHandler) }
+            eventHandler = nil
+            hotKey = nil
+            return false
+        }
+        NSLog("Nexus registered Command-Shift-Space")
+        return true
     }
 
     fileprivate func handle(_ event: EventRef?) {
@@ -443,22 +497,21 @@ private let nexusGlobalHotKeyHandler: EventHandlerUPP = { _, event, userData in
 }
 
 private final class PointerProximityMonitor {
-    private var globalMonitor: Any?
-    private var localMonitor: Any?
+    private var timer: DispatchSourceTimer?
 
     init(onMove: @escaping (NSPoint) -> Void) {
-        globalMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.mouseMoved, .leftMouseDragged, .rightMouseDragged]) { _ in
+        let timer = DispatchSource.makeTimerSource(queue: .main)
+        timer.schedule(deadline: .now(), repeating: .milliseconds(50), leeway: .milliseconds(10))
+        timer.setEventHandler {
             onMove(NSEvent.mouseLocation)
         }
-        localMonitor = NSEvent.addLocalMonitorForEvents(matching: [.mouseMoved, .leftMouseDragged, .rightMouseDragged]) { event in
-            onMove(NSEvent.mouseLocation)
-            return event
-        }
+        self.timer = timer
+        timer.resume()
     }
 
     deinit {
-        if let globalMonitor { NSEvent.removeMonitor(globalMonitor) }
-        if let localMonitor { NSEvent.removeMonitor(localMonitor) }
+        timer?.setEventHandler {}
+        timer?.cancel()
     }
 }
 

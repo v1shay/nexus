@@ -96,6 +96,22 @@ final class NexusGeometryTests: XCTestCase {
         XCTAssertEqual(session.update(isInside: true), true, "A new visit may launch after a complete exit")
     }
 
+    func testManualCloseDoesNotDisableAReopenOrLaterDictation() {
+        var state = NotchInteractionState()
+        state.beginDictation()
+        state.updateTranscript("First request")
+        state.finishDictation()
+        state.dismiss()
+
+        XCTAssertEqual(state.presentation, .idle)
+        state.showOverlay()
+        XCTAssertEqual(state.presentation, .overlay, "Hover can reopen after a manual close")
+
+        state.dismiss()
+        state.beginDictation()
+        XCTAssertEqual(state.presentation, .dictating, "The global hotkey can start a new session after close")
+    }
+
     func testStreamedSpeechWaitsForNaturalSentenceBoundaries() {
         var chunker = SpeechSentenceChunker()
 
