@@ -138,14 +138,13 @@ private struct TranscriptContents: View {
                     Text(notch.transcript)
                         .font(.system(size: notch.answer.isEmpty ? 25 : 17, weight: .medium, design: .rounded))
                         .foregroundStyle(.white.opacity(notch.answer.isEmpty ? 0.96 : 0.62))
+                        .textSelection(.enabled)
 
                     if !notch.answer.isEmpty {
                         Capsule()
                             .fill(.white.opacity(0.14))
                             .frame(height: 1)
-                        Text(notch.answer)
-                            .font(.system(size: 21, weight: .medium, design: .rounded))
-                            .foregroundStyle(.white.opacity(0.96))
+                        RichMarkdownView(markdown: notch.answer)
                     }
                 }
                 .tracking(-0.2)

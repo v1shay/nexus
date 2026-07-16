@@ -125,4 +125,22 @@ final class NexusGeometryTests: XCTestCase {
         XCTAssertEqual(model?.id, "ollama:gemma3:4b:default")
     }
 
+    func testMarkdownSeparatesProseCodeAndDisplayMath() {
+        let markdown = """
+        **Result:** use this function.
+
+        ```swift
+        print("hello")
+        ```
+
+        $$E = mc^2$$
+        """
+
+        XCTAssertEqual(MarkdownBlockParser.parse(markdown), [
+            .prose("**Result:** use this function."),
+            .code(language: "swift", content: "print(\"hello\")"),
+            .math("E = mc^2")
+        ])
+    }
+
 }
