@@ -59,6 +59,14 @@ final class NexusGeometryTests: XCTestCase {
         XCTAssertEqual(ModelCatalog.estimatedMinimumRAM(for: "model-without-size"), 0)
     }
 
+    func testBatteryPercentageUsesCapacityAndStaysWithinDisplayBounds() {
+        XCTAssertEqual(BatteryStatusReader.percentage(current: 81, maximum: 100), 81)
+        XCTAssertEqual(BatteryStatusReader.percentage(current: 1, maximum: 3), 33)
+        XCTAssertEqual(BatteryStatusReader.percentage(current: 120, maximum: 100), 100)
+        XCTAssertEqual(BatteryStatusReader.percentage(current: -5, maximum: 100), 0)
+        XCTAssertNil(BatteryStatusReader.percentage(current: 50, maximum: 0))
+    }
+
     func testOnlyPreparationAndDownloadsAreActiveStates() {
         XCTAssertTrue(ModelDownloadState.preparing("Starting").isActive)
         XCTAssertTrue(ModelDownloadState.downloading(progress: 0.5, completedBytes: 50, totalBytes: 100, status: "pulling").isActive)
@@ -84,6 +92,21 @@ final class NexusGeometryTests: XCTestCase {
         XCTAssertEqual(state.presentation, .overlay)
         XCTAssertEqual(state.transcript, "What is a local model?")
         XCTAssertEqual(state.answer, "A model running on your own computer.")
+    }
+
+    func testAnswerCanContinueStreamingWhileTheOverlayStaysCollapsed() {
+        var state = NotchInteractionState()
+        state.beginDictation()
+        state.updateTranscript("Keep working after I dismiss you")
+        state.finishDictation()
+        state.receivePartialAnswer("Still working", reveal: false)
+
+        XCTAssertEqual(state.presentation, .idle)
+        XCTAssertEqual(state.answer, "Still working")
+
+        state.showOverlay()
+        XCTAssertEqual(state.presentation, .overlay)
+        XCTAssertEqual(state.answer, "Still working")
     }
 
     func testPhysicalNotchAndPanelShareOneHoverSession() {
@@ -273,9 +296,31 @@ final class NexusGeometryTests: XCTestCase {
             .began
         )
         XCTAssertEqual(
-            gesture.update(commandIsDown: false, hasDisqualifyingInput: false, now: 10.30),
+            gesture.update(commandIsDown: false, hasDisqualifyingInput: false, now: 10.75),
             .ended
         )
+    }
+
+    func testDoubleCommandTapRequestsAQuickDismiss() {
+        var gesture = CommandHoldGestureState()
+
+        XCTAssertNil(gesture.update(commandIsDown: true, hasDisqualifyingInput: false, now: 15.00))
+        XCTAssertNil(gesture.update(commandIsDown: false, hasDisqualifyingInput: false, now: 15.08))
+        XCTAssertNil(gesture.update(commandIsDown: true, hasDisqualifyingInput: false, now: 15.22))
+        XCTAssertEqual(
+            gesture.update(commandIsDown: false, hasDisqualifyingInput: false, now: 15.30),
+            .doubleTapped
+        )
+    }
+
+    func testCommandShortcutsCannotBecomeDoubleCommandTaps() {
+        var gesture = CommandHoldGestureState()
+
+        XCTAssertNil(gesture.update(commandIsDown: true, hasDisqualifyingInput: false, now: 16.00))
+        XCTAssertNil(gesture.update(commandIsDown: true, hasDisqualifyingInput: true, now: 16.04))
+        XCTAssertNil(gesture.update(commandIsDown: false, hasDisqualifyingInput: true, now: 16.10))
+        XCTAssertNil(gesture.update(commandIsDown: true, hasDisqualifyingInput: false, now: 16.20))
+        XCTAssertNil(gesture.update(commandIsDown: false, hasDisqualifyingInput: false, now: 16.28))
     }
 
     func testQuickCommandTapAndCommandShortcutDoNotStartDictation() {

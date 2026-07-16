@@ -1,4 +1,6 @@
 import AppKit
+import Combine
+import IOKit.ps
 import SwiftUI
 
 /// The panel is visually indistinguishable from the physical cutout at rest.
@@ -203,15 +205,19 @@ private struct TranscriptContents: View {
                     close: notch.dismissOverlay
                 )
                 Spacer()
-                Button { notch.openModelAggregator() } label: {
-                    Image(systemName: "cube.transparent")
-                        .font(.system(size: 15, weight: .medium))
-                        .frame(width: 30, height: 30)
-                        .background(.white.opacity(0.09), in: Circle())
+                HStack(spacing: 7) {
+                    BatteryPercentageView()
+
+                    Button { notch.openModelAggregator() } label: {
+                        Image(systemName: "cube.transparent")
+                            .font(.system(size: 15, weight: .medium))
+                            .frame(width: 30, height: 30)
+                            .background(.white.opacity(0.09), in: Circle())
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(.white.opacity(0.72))
+                    .help("Models")
                 }
-                .buttonStyle(.plain)
-                .foregroundStyle(.white.opacity(0.72))
-                .help("Models")
             }
 
             ScrollView(.vertical, showsIndicators: false) {
@@ -237,6 +243,56 @@ private struct TranscriptContents: View {
         .padding(.horizontal, 27)
         .padding(.top, 20)
         .padding(.bottom, 20)
+    }
+}
+
+private struct BatteryPercentageView: View {
+    @State private var percentage = BatteryStatusReader.currentPercentage()
+    private let refreshTimer = Timer.publish(every: 30, on: .main, in: .common).autoconnect()
+
+    var body: some View {
+        Group {
+            if let percentage {
+                Text("\(percentage)%")
+                    .font(.system(size: 11, weight: .semibold, design: .rounded))
+                    .monospacedDigit()
+                    .foregroundStyle(.white.opacity(0.72))
+                    .padding(.horizontal, 9)
+                    .frame(height: 30)
+                    .background(.white.opacity(0.09), in: Capsule())
+                    .accessibilityLabel("Battery \(percentage) percent")
+            }
+        }
+        .onReceive(refreshTimer) { _ in
+            percentage = BatteryStatusReader.currentPercentage()
+        }
+    }
+}
+
+enum BatteryStatusReader {
+    static func currentPercentage() -> Int? {
+        guard let snapshot = IOPSCopyPowerSourcesInfo()?.takeRetainedValue(),
+              let sources = IOPSCopyPowerSourcesList(snapshot)?.takeRetainedValue() as? [CFTypeRef] else {
+            return nil
+        }
+
+        for source in sources {
+            guard let description = IOPSGetPowerSourceDescription(snapshot, source)?.takeUnretainedValue()
+                as? [String: Any],
+                  description[kIOPSTypeKey] as? String == kIOPSInternalBatteryType,
+                  let current = description[kIOPSCurrentCapacityKey] as? Int,
+                  let maximum = description[kIOPSMaxCapacityKey] as? Int,
+                  let percentage = percentage(current: current, maximum: maximum) else {
+                continue
+            }
+            return percentage
+        }
+        return nil
+    }
+
+    static func percentage(current: Int, maximum: Int) -> Int? {
+        guard maximum > 0 else { return nil }
+        return min(100, max(0, Int((Double(current) / Double(maximum) * 100).rounded())))
     }
 }
 

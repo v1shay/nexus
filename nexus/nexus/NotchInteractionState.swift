@@ -75,22 +75,22 @@ struct NotchInteractionState: Equatable {
         presentation = .overlay
     }
 
-    mutating func receiveAnswer(_ text: String) {
+    mutating func receiveAnswer(_ text: String, reveal: Bool = true) {
         toolActivity = nil
         answer = text
-        presentation = .overlay
+        presentation = reveal ? .overlay : .idle
     }
 
-    mutating func receivePartialAnswer(_ text: String) {
+    mutating func receivePartialAnswer(_ text: String, reveal: Bool = true) {
         toolActivity = nil
         answer = text
-        presentation = .overlay
+        presentation = reveal ? .overlay : .idle
     }
 
-    mutating func failResponse(_ message: String) {
+    mutating func failResponse(_ message: String, reveal: Bool = true) {
         toolActivity = nil
         answer = message
-        presentation = .overlay
+        presentation = reveal ? .overlay : .idle
     }
 
     mutating func showOverlay() {

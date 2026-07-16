@@ -113,6 +113,7 @@ final class NotchController: ObservableObject {
     private var responseTask: Task<Void, Never>?
     private var responseGeneration = UUID()
     private var hoverSession = NotchHoverSession()
+    private var suppressAutomaticResponseReveal = false
 
     static let preview: NotchController = {
         let controller = NotchController()
@@ -183,6 +184,9 @@ final class NotchController: ObservableObject {
             },
             onRelease: { [weak self] in
                 Task { @MainActor in self?.finishGlobalDictation() }
+            },
+            onDoubleTap: { [weak self] in
+                Task { @MainActor in self?.quickDismiss() }
             }
         )
         commandHoldMonitor = monitor
@@ -194,6 +198,7 @@ final class NotchController: ObservableObject {
         responseTask?.cancel()
         responseGeneration = UUID()
         responseSpeaker.stop()
+        suppressAutomaticResponseReveal = false
         interaction.beginDictation()
         if let screen {
             resize(to: listeningSize(for: screen), animated: true)
@@ -237,25 +242,31 @@ final class NotchController: ObservableObject {
                     await self.receiveResponseDelta(delta, accumulated: accumulated, generation: generation)
                 }
                 guard !Task.isCancelled, responseGeneration == generation else { return }
-                interaction.receiveAnswer(answer)
-                automaticRevealIsWaitingForNotchVisit = true
-                if let screen { resize(to: expandedSize(for: screen), animated: true) }
+                let reveal = !suppressAutomaticResponseReveal
+                interaction.receiveAnswer(answer, reveal: reveal)
+                automaticRevealIsWaitingForNotchVisit = reveal
+                if reveal, let screen { resize(to: expandedSize(for: screen), animated: true) }
                 responseSpeaker.finishStreaming()
             } catch {
                 guard !Task.isCancelled, responseGeneration == generation else { return }
                 responseSpeaker.stop()
-                interaction.failResponse("Nexus couldn’t get a response. \(error.localizedDescription)")
-                automaticRevealIsWaitingForNotchVisit = true
-                if let screen { resize(to: expandedSize(for: screen), animated: true) }
+                let reveal = !suppressAutomaticResponseReveal
+                interaction.failResponse(
+                    "Nexus couldn’t get a response. \(error.localizedDescription)",
+                    reveal: reveal
+                )
+                automaticRevealIsWaitingForNotchVisit = reveal
+                if reveal, let screen { resize(to: expandedSize(for: screen), animated: true) }
             }
         }
     }
 
     private func receiveResponseDelta(_ delta: String, accumulated: String, generation: UUID) {
         guard !Task.isCancelled, responseGeneration == generation else { return }
-        interaction.receivePartialAnswer(accumulated)
-        automaticRevealIsWaitingForNotchVisit = true
-        if let screen { resize(to: expandedSize(for: screen), animated: true) }
+        let reveal = !suppressAutomaticResponseReveal
+        interaction.receivePartialAnswer(accumulated, reveal: reveal)
+        automaticRevealIsWaitingForNotchVisit = reveal
+        if reveal, let screen { resize(to: expandedSize(for: screen), animated: true) }
         responseSpeaker.append(delta)
     }
 
@@ -277,8 +288,27 @@ final class NotchController: ObservableObject {
         responseGeneration = UUID()
         responseSpeaker.stop()
         automaticRevealIsWaitingForNotchVisit = false
+        suppressAutomaticResponseReveal = false
         interaction.dismiss()
         if let screen { resize(to: closedSize(for: screen), animated: true) }
+    }
+
+    private func quickDismiss() {
+        guard isListening || isExpanded || isThinking || isUsingTool else { return }
+        closeTask?.cancel()
+        automaticRevealIsWaitingForNotchVisit = false
+        suppressAutomaticResponseReveal = true
+
+        if isListening {
+            speechTranscriber.stop()
+            interaction.dismiss()
+            if let screen { resize(to: closedSize(for: screen), animated: true) }
+        } else if isExpanded {
+            collapse()
+        } else {
+            interaction.dismiss()
+            if let screen { resize(to: closedSize(for: screen), animated: true) }
+        }
     }
 
     /// Entry point for the future tool router. It is intentionally not called
@@ -328,6 +358,7 @@ final class NotchController: ObservableObject {
     private func updateHover(_ hovering: Bool) {
         closeTask?.cancel()
         if hovering {
+            suppressAutomaticResponseReveal = false
             guard !isListening && !isThinking && !isUsingTool else { return }
             automaticRevealIsWaitingForNotchVisit = false
             expand()
@@ -429,10 +460,13 @@ final class NotchController: ObservableObject {
 enum CommandHoldTransition: Equatable {
     case began
     case ended
+    case doubleTapped
 }
 
 struct CommandHoldGestureState {
     static let defaultHoldDuration: TimeInterval = 0.65
+    static let defaultDoubleTapInterval: TimeInterval = 0.36
+    static let defaultMaximumTapDuration: TimeInterval = 0.24
 
     private enum Phase: Equatable {
         case idle
@@ -442,10 +476,19 @@ struct CommandHoldGestureState {
     }
 
     let holdDuration: TimeInterval
+    let doubleTapInterval: TimeInterval
+    let maximumTapDuration: TimeInterval
     private var phase: Phase = .idle
+    private var lastTapEndedAt: TimeInterval?
 
-    init(holdDuration: TimeInterval = CommandHoldGestureState.defaultHoldDuration) {
+    init(
+        holdDuration: TimeInterval = CommandHoldGestureState.defaultHoldDuration,
+        doubleTapInterval: TimeInterval = CommandHoldGestureState.defaultDoubleTapInterval,
+        maximumTapDuration: TimeInterval = CommandHoldGestureState.defaultMaximumTapDuration
+    ) {
         self.holdDuration = holdDuration
+        self.doubleTapInterval = doubleTapInterval
+        self.maximumTapDuration = maximumTapDuration
     }
 
     mutating func update(
@@ -455,20 +498,39 @@ struct CommandHoldGestureState {
     ) -> CommandHoldTransition? {
         switch phase {
         case .idle:
-            guard commandIsDown else { return nil }
-            phase = hasDisqualifyingInput ? .cancelledUntilRelease : .tracking(startedAt: now)
+            guard commandIsDown else {
+                expirePendingTap(at: now)
+                return nil
+            }
+            if hasDisqualifyingInput {
+                lastTapEndedAt = nil
+                phase = .cancelledUntilRelease
+            } else {
+                phase = .tracking(startedAt: now)
+            }
             return nil
 
         case .tracking(let startedAt):
             guard commandIsDown else {
                 phase = .idle
+                guard !hasDisqualifyingInput, now - startedAt <= maximumTapDuration else {
+                    lastTapEndedAt = nil
+                    return nil
+                }
+                if let lastTapEndedAt, now - lastTapEndedAt <= doubleTapInterval {
+                    self.lastTapEndedAt = nil
+                    return .doubleTapped
+                }
+                lastTapEndedAt = now
                 return nil
             }
             guard !hasDisqualifyingInput else {
+                lastTapEndedAt = nil
                 phase = .cancelledUntilRelease
                 return nil
             }
             guard now - startedAt >= holdDuration - 0.000_001 else { return nil }
+            lastTapEndedAt = nil
             phase = .active
             return .began
 
@@ -484,15 +546,22 @@ struct CommandHoldGestureState {
             return nil
 
         case .cancelledUntilRelease:
+            lastTapEndedAt = nil
             if !commandIsDown { phase = .idle }
             return nil
         }
+    }
+
+    private mutating func expirePendingTap(at now: TimeInterval) {
+        guard let lastTapEndedAt, now - lastTapEndedAt > doubleTapInterval else { return }
+        self.lastTapEndedAt = nil
     }
 }
 
 private final class NexusCommandHoldMonitor {
     private let onPress: () -> Void
     private let onRelease: () -> Void
+    private let onDoubleTap: () -> Void
     private var gesture = CommandHoldGestureState()
     private var timer: DispatchSourceTimer?
     private var globalInputMonitor: Any?
@@ -508,9 +577,14 @@ private final class NexusCommandHoldMonitor {
         63      // Function
     ]
 
-    init(onPress: @escaping () -> Void, onRelease: @escaping () -> Void) {
+    init(
+        onPress: @escaping () -> Void,
+        onRelease: @escaping () -> Void,
+        onDoubleTap: @escaping () -> Void
+    ) {
         self.onPress = onPress
         self.onRelease = onRelease
+        self.onDoubleTap = onDoubleTap
     }
 
     func install() {
@@ -561,6 +635,7 @@ private final class NexusCommandHoldMonitor {
         switch transition {
         case .began: onPress()
         case .ended: onRelease()
+        case .doubleTapped: onDoubleTap()
         case nil: break
         }
     }

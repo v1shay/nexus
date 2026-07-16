@@ -10,6 +10,7 @@
 ## Dictation hotkey
 
 - Holding `Command` by itself for 650 ms starts dictation globally; releasing it finishes dictation.
+- Double-tapping `Command` by itself collapses an open overlay immediately. During dictation it stops the session and returns Nexus to its idle notch without quitting the app.
 - A quick Command tap and normal Command shortcuts are ignored. Pressing another key, clicking, or scrolling cancels a pending hold so Nexus does not interfere with ordinary shortcuts.
 - Holding it reveals the dictation wings only: the selected pet is left of the physical notch and the waveform is right of it.
 - The physical notch width is a protected center gap; interactive visuals must never be placed inside it.
@@ -23,4 +24,4 @@
 - The compact dictation surface uses only the selected animated pet and waveform, separated by the physical notch.
 - Supplied atlas rows map attentive/waiting to dictation, active work to thinking and tool use, and review to the expanded response.
 - In the expanded overlay, click the pet to mute, Command-click it to cycle through the six bundled pets, or double-click it to close. The selected pet persists across launches.
-- The transcript surface is intentionally sparse: a pet, transcript, and a quiet Models control. Status labels such as “Listening” are avoided.
+- The transcript surface is intentionally sparse: a pet, transcript, compact battery percentage, and a quiet Models control. Status labels such as “Listening” are avoided.
