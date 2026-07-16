@@ -12,8 +12,8 @@
 - `Command` + `Shift` + `Space` is registered as a global hotkey.
 - Holding it reveals the dictation wings only: the orb is left of the physical notch and the waveform is right of it.
 - The physical notch width is a protected center gap; interactive visuals must never be placed inside it.
-- Releasing the hotkey closes the wings and retains the recognized transcript without opening the full surface.
-- Hovering the physical notch after dictation opens the full glass surface with the retained transcript.
+- Releasing the hotkey closes the wings and automatically opens the full surface with the retained transcript.
+- That automatic reveal stays open until the pointer visits the notch and then leaves; later notch hovers reopen the retained transcript normally.
 
 ## Visual language
 

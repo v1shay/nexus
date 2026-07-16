@@ -25,10 +25,12 @@ struct ContentView: View {
                 }
             }
         }
-        .frame(width: notch.currentSize.width, height: notch.currentSize.height)
+        // The hosting view already tracks the animated NSPanel frame. Giving
+        // this view the final width early makes AppKit clip it from one side,
+        // which visually turns a centered expansion into a corner slide.
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .contentShape(Rectangle())
         .onHover { notch.updateHover($0) }
-        .animation(.interpolatingSpring(stiffness: 340, damping: 31), value: notch.currentSize)
         .animation(.easeInOut(duration: 0.18), value: notch.isListening)
         .animation(.easeInOut(duration: 0.22), value: notch.presentation)
     }

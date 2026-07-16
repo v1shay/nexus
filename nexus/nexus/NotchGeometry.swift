@@ -18,4 +18,13 @@ struct NotchGeometry {
         let right = CGRect(x: notch.maxX, y: 0, width: wingWidth, height: listeningSize.height)
         return (left, notch, right)
     }
+
+    static func centeredTopFrame(for size: CGSize, on screenFrame: CGRect) -> CGRect {
+        CGRect(
+            x: screenFrame.midX - size.width / 2,
+            y: screenFrame.maxY - size.height,
+            width: size.width,
+            height: size.height
+        )
+    }
 }

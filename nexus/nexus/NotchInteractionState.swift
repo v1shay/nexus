@@ -18,7 +18,7 @@ struct NotchInteractionState: Equatable {
     }
 
     mutating func finishDictation() {
-        presentation = .idle
+        presentation = .overlay
     }
 
     mutating func showOverlay() {

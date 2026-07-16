@@ -16,17 +16,30 @@ final class NexusGeometryTests: XCTestCase {
         XCTAssertEqual(regions.rightWing.maxX, listening.width)
     }
 
-    func testDictationReleaseSavesTextWithoutOpeningOverlay() {
+    func testDictationReleaseSavesTextAndOpensOverlay() {
         var state = NotchInteractionState()
         state.beginDictation()
         state.updateTranscript("Send the project update")
         state.finishDictation()
 
-        XCTAssertEqual(state.presentation, .idle)
-        XCTAssertEqual(state.transcript, "Send the project update")
-
-        state.showOverlay()
         XCTAssertEqual(state.presentation, .overlay)
         XCTAssertEqual(state.transcript, "Send the project update")
+    }
+
+    func testEveryNotchFrameRemainsCenteredDuringExpansion() {
+        let screen = CGRect(x: 0, y: 0, width: 1_512, height: 982)
+        let closed = NotchGeometry.centeredTopFrame(
+            for: CGSize(width: 190, height: 32),
+            on: screen
+        )
+        let expanded = NotchGeometry.centeredTopFrame(
+            for: CGSize(width: 680, height: 245),
+            on: screen
+        )
+
+        XCTAssertEqual(closed.midX, screen.midX)
+        XCTAssertEqual(expanded.midX, screen.midX)
+        XCTAssertEqual(closed.maxY, screen.maxY)
+        XCTAssertEqual(expanded.maxY, screen.maxY)
     }
 }

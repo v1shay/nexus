@@ -42,6 +42,7 @@ final class NotchController: ObservableObject {
     private var pointerMonitor: PointerProximityMonitor?
     private var modelPanel: NSPanel?
     private let speechTranscriber = SpeechTranscriber()
+    private var automaticRevealIsWaitingForNotchVisit = false
 
     static let preview: NotchController = {
         let controller = NotchController()
@@ -120,8 +121,9 @@ final class NotchController: ObservableObject {
     private func finishGlobalDictation() {
         speechTranscriber.stop()
         interaction.finishDictation()
+        automaticRevealIsWaitingForNotchVisit = true
         if let screen {
-            resize(to: closedSize(for: screen), animated: true)
+            resize(to: expandedSize(for: screen), animated: true)
         }
     }
 
@@ -151,9 +153,11 @@ final class NotchController: ObservableObject {
         closeTask?.cancel()
         if hovering {
             guard !isListening else { return }
+            automaticRevealIsWaitingForNotchVisit = false
             expand()
         } else {
             guard !isListening else { return }
+            guard !automaticRevealIsWaitingForNotchVisit else { return }
             closeTask = Task { [weak self] in
                 try? await Task.sleep(for: .milliseconds(180))
                 guard !Task.isCancelled else { return }
@@ -215,12 +219,7 @@ final class NotchController: ObservableObject {
     }
 
     private func frame(for size: CGSize, on screen: NSScreen) -> NSRect {
-        NSRect(
-            x: screen.frame.midX - size.width / 2,
-            y: screen.frame.maxY - size.height,
-            width: size.width,
-            height: size.height
-        )
+        NotchGeometry.centeredTopFrame(for: size, on: screen.frame)
     }
 
     @objc private func displayConfigurationChanged() {
