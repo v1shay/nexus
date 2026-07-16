@@ -13,15 +13,37 @@ protocol NexusCommandRunning: Sendable {
     func run(
         executable: URL,
         arguments: [String],
+        environment: [String: String]?,
+        workingDirectory: URL?,
         timeoutSeconds: TimeInterval,
         maximumOutputBytes: Int
     ) async throws -> NexusCommandResult
+}
+
+extension NexusCommandRunning {
+    func run(
+        executable: URL,
+        arguments: [String],
+        timeoutSeconds: TimeInterval,
+        maximumOutputBytes: Int
+    ) async throws -> NexusCommandResult {
+        try await run(
+            executable: executable,
+            arguments: arguments,
+            environment: nil,
+            workingDirectory: nil,
+            timeoutSeconds: timeoutSeconds,
+            maximumOutputBytes: maximumOutputBytes
+        )
+    }
 }
 
 final class NexusFoundationCommandRunner: NexusCommandRunning, @unchecked Sendable {
     func run(
         executable: URL,
         arguments: [String],
+        environment: [String: String]? = nil,
+        workingDirectory: URL? = nil,
         timeoutSeconds: TimeInterval = 10,
         maximumOutputBytes: Int = 4 * 1_024 * 1_024
     ) async throws -> NexusCommandResult {
@@ -41,6 +63,10 @@ final class NexusFoundationCommandRunner: NexusCommandRunning, @unchecked Sendab
 
             process.executableURL = executable
             process.arguments = arguments
+            if let environment {
+                process.environment = ProcessInfo.processInfo.environment.merging(environment) { _, supplied in supplied }
+            }
+            process.currentDirectoryURL = workingDirectory
             process.standardOutput = outputPipe
             process.standardError = errorPipe
 

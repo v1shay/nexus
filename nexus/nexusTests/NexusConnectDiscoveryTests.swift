@@ -191,6 +191,8 @@ private struct NexusCommandRunnerStub: NexusCommandRunning {
     func run(
         executable: URL,
         arguments: [String],
+        environment: [String: String]?,
+        workingDirectory: URL?,
         timeoutSeconds: TimeInterval,
         maximumOutputBytes: Int
     ) async throws -> NexusCommandResult {

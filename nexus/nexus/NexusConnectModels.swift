@@ -17,6 +17,7 @@ enum NexusNodeRole: String, Codable, Sendable {
 enum NexusCapability: String, CaseIterable, Codable, Hashable, Sendable {
     case health
     case inference
+    case agent
     case modelList
     case modelPull
     case ocr
@@ -33,6 +34,7 @@ enum NexusCapability: String, CaseIterable, Codable, Hashable, Sendable {
 enum NexusWorkloadKind: String, Codable, Sendable {
     case health
     case inference
+    case agent
     case modelList
     case modelPull
     case ocr
@@ -49,6 +51,7 @@ enum NexusWorkloadKind: String, Codable, Sendable {
         switch self {
         case .health: .health
         case .inference: .inference
+        case .agent: .agent
         case .modelList: .modelList
         case .modelPull: .modelPull
         case .ocr: .ocr
@@ -203,6 +206,16 @@ struct NexusInferencePayload: Codable, Equatable, Sendable {
     let maximumTokens: Int?
 }
 
+struct NexusAgentPayload: Codable, Equatable, Sendable {
+    let runtime: NexusRuntimeKind
+    let model: String
+    let instructions: String
+    let context: [NexusChatMessage]
+    let maximumSteps: Int
+}
+
+struct NexusEmptyPayload: Codable, Equatable, Sendable {}
+
 struct NexusModelListPayload: Codable, Equatable, Sendable {
     let runtime: NexusRuntimeKind?
 }
@@ -211,6 +224,15 @@ struct NexusModelPullPayload: Codable, Equatable, Sendable {
     let runtime: NexusRuntimeKind
     let model: String
     let quantization: String?
+}
+
+struct NexusModelDescriptor: Codable, Equatable, Sendable {
+    let runtime: NexusRuntimeKind
+    let identifier: String
+}
+
+struct NexusModelInventoryPayload: Codable, Equatable, Sendable {
+    let models: [NexusModelDescriptor]
 }
 
 struct NexusProgressPayload: Codable, Equatable, Sendable {
@@ -231,6 +253,11 @@ struct NexusOCRPayload: Codable, Equatable, Sendable {
     let recognitionLanguages: [String]
 }
 
+struct NexusOCRResultPayload: Codable, Equatable, Sendable {
+    let text: String
+    let observations: [String]
+}
+
 struct NexusIndexPayload: Codable, Equatable, Sendable {
     let rootID: String
     let relativePaths: [String]
@@ -240,6 +267,16 @@ struct NexusIndexPayload: Codable, Equatable, Sendable {
 struct NexusIndexSearchPayload: Codable, Equatable, Sendable {
     let query: String
     let limit: Int
+}
+
+struct NexusIndexSearchResult: Codable, Equatable, Sendable {
+    let file: NexusFileReference
+    let score: Double
+    let snippet: String
+}
+
+struct NexusIndexSearchResultsPayload: Codable, Equatable, Sendable {
+    let results: [NexusIndexSearchResult]
 }
 
 struct NexusProcessPayload: Codable, Equatable, Sendable {
@@ -252,6 +289,11 @@ struct NexusProcessPayload: Codable, Equatable, Sendable {
     let approvalToken: String?
 }
 
+struct NexusProcessOutputPayload: Codable, Equatable, Sendable {
+    let data: Data
+    let exitCode: Int32?
+}
+
 struct NexusFileReference: Codable, Equatable, Hashable, Sendable {
     let rootID: String
     let relativePath: String
@@ -261,6 +303,41 @@ struct NexusFileReadPayload: Codable, Equatable, Sendable {
     let file: NexusFileReference
     let offset: Int64
     let maximumLength: Int
+}
+
+struct NexusFileStatPayload: Codable, Equatable, Sendable {
+    let file: NexusFileReference
+}
+
+struct NexusFileStatResultPayload: Codable, Equatable, Sendable {
+    let file: NexusFileReference
+    let exists: Bool
+    let isDirectory: Bool
+    let size: Int64
+    let modifiedAtMilliseconds: Int64?
+}
+
+struct NexusFileListPayload: Codable, Equatable, Sendable {
+    let directory: NexusFileReference
+    let recursive: Bool
+    let maximumEntries: Int
+}
+
+struct NexusFileListEntry: Codable, Equatable, Sendable {
+    let file: NexusFileReference
+    let isDirectory: Bool
+    let size: Int64
+}
+
+struct NexusFileListResultPayload: Codable, Equatable, Sendable {
+    let entries: [NexusFileListEntry]
+}
+
+struct NexusFileDataPayload: Codable, Equatable, Sendable {
+    let file: NexusFileReference
+    let offset: Int64
+    let data: Data
+    let endOfFile: Bool
 }
 
 struct NexusFileWritePayload: Codable, Equatable, Sendable {
@@ -278,6 +355,12 @@ struct NexusDownloadPayload: Codable, Equatable, Sendable {
     let destination: NexusFileReference
     let expectedSHA256: Data?
     let transferID: UUID
+}
+
+struct NexusDownloadResultPayload: Codable, Equatable, Sendable {
+    let destination: NexusFileReference
+    let byteCount: Int64
+    let sha256: Data
 }
 
 struct NexusTransferChunk: Codable, Equatable, Sendable {
