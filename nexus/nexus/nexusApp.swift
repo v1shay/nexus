@@ -257,12 +257,13 @@ private final class NexusGlobalHotKey {
     }
 
     func install() {
+        let target = GetApplicationEventTarget()
         var eventTypes = [
             EventTypeSpec(eventClass: OSType(kEventClassKeyboard), eventKind: UInt32(kEventHotKeyPressed)),
             EventTypeSpec(eventClass: OSType(kEventClassKeyboard), eventKind: UInt32(kEventHotKeyReleased))
         ]
         InstallEventHandler(
-            GetEventDispatcherTarget(),
+            target,
             nexusGlobalHotKeyHandler,
             eventTypes.count,
             &eventTypes,
@@ -274,7 +275,7 @@ private final class NexusGlobalHotKey {
             UInt32(kVK_Space),
             UInt32(cmdKey | shiftKey),
             identifier,
-            GetEventDispatcherTarget(),
+            target,
             0,
             &hotKey
         )
