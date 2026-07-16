@@ -1,40 +1,51 @@
 import SwiftUI
 
-/// The view never pretends to be the camera cutout: at rest it is visually
-/// indistinguishable from it.  The panel simply grows down from that location.
+/// The panel is visually indistinguishable from the physical cutout at rest.
+/// Interaction state is supplied by the AppKit controller above the view.
 struct ContentView: View {
     @EnvironmentObject private var notch: NotchController
+    @State private var showingModels = false
 
     var body: some View {
         ZStack(alignment: .top) {
-            NotchSurface(cornerRadius: notch.isExpanded ? 28 : 10)
-                .fill(.black.opacity(notch.isExpanded ? 0.78 : 1))
-                .background(.ultraThinMaterial, in: NotchSurface(cornerRadius: notch.isExpanded ? 28 : 10))
+            NotchSurface(cornerRadius: notch.isExpanded ? 29 : 10)
+                .fill(.black.opacity(notch.isExpanded ? 0.82 : 1))
+                .background(.ultraThinMaterial, in: NotchSurface(cornerRadius: notch.isExpanded ? 29 : 10))
                 .overlay {
-                    // The low-opacity lower stop lets the desktop gently bleed through,
-                    // instead of ending in a hard black card.
-                    NotchSurface(cornerRadius: notch.isExpanded ? 28 : 10)
-                        .fill(
-                            LinearGradient(
-                                colors: [.black.opacity(0.18), .black.opacity(0.56), .clear],
-                                startPoint: .top,
-                                endPoint: .bottom
-                            )
+                    NotchSurface(cornerRadius: notch.isExpanded ? 29 : 10)
+                        .stroke(.white.opacity(notch.isExpanded ? 0.18 : 0), lineWidth: 0.8)
+                }
+                .overlay(alignment: .bottom) {
+                    if notch.isExpanded {
+                        LinearGradient(
+                            colors: [.clear, .black.opacity(0.38)],
+                            startPoint: .top,
+                            endPoint: .bottom
                         )
+                        .clipShape(NotchSurface(cornerRadius: 29))
+                    }
                 }
 
-            if notch.isListening {
-                ListeningContents()
-                    .padding(.horizontal, notch.isExpanded ? 28 : 13)
-                    .padding(.top, notch.isExpanded ? 22 : 3)
-                    .transition(.opacity.combined(with: .scale(scale: 0.82)))
+            Group {
+                if notch.isListening || notch.isHoverPreview {
+                    ListeningContents()
+                        .transition(.opacity.combined(with: .scale(scale: 0.82)))
+                } else if notch.hasTranscript {
+                    TranscriptContents(showingModels: $showingModels)
+                        .transition(.opacity.combined(with: .move(edge: .top)))
+                }
             }
         }
         .frame(width: notch.currentSize.width, height: notch.currentSize.height)
         .contentShape(Rectangle())
         .onHover { notch.updateHover($0) }
-        .animation(.interpolatingSpring(stiffness: 300, damping: 30), value: notch.isExpanded)
-        .animation(.easeInOut(duration: 0.16), value: notch.isListening)
+        .sheet(isPresented: $showingModels) {
+            ModelAggregatorView()
+                .frame(minWidth: 680, minHeight: 520)
+        }
+        .animation(.interpolatingSpring(stiffness: 340, damping: 31), value: notch.currentSize)
+        .animation(.easeInOut(duration: 0.18), value: notch.isListening)
+        .animation(.easeInOut(duration: 0.22), value: notch.hasTranscript)
     }
 }
 
@@ -42,14 +53,59 @@ private struct ListeningContents: View {
     @EnvironmentObject private var notch: NotchController
 
     var body: some View {
-        HStack {
-            AgentOrb(size: notch.isExpanded ? 31 : 23)
-            Spacer(minLength: 10)
+        HStack(spacing: 15) {
+            AgentOrb(size: notch.isHoverPreview ? 24 : 29)
             DictationBars()
         }
-        .frame(maxWidth: .infinity, alignment: .center)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
         .accessibilityElement(children: .combine)
-        .accessibilityLabel("Nexus dictation is active")
+        .accessibilityLabel("Nexus is dictating")
+    }
+}
+
+private struct TranscriptContents: View {
+    @Binding var showingModels: Bool
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(alignment: .top) {
+                AgentOrb(size: 34)
+                Spacer()
+                Button { showingModels = true } label: {
+                    Image(systemName: "cube.transparent")
+                        .font(.system(size: 15, weight: .medium))
+                        .frame(width: 30, height: 30)
+                        .background(.white.opacity(0.09), in: Circle())
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(.white.opacity(0.72))
+                .help("Models")
+            }
+
+            Spacer(minLength: 20)
+
+            Text("Yo Nexus, send an email to Sam Altman asking for 2 million OpenAI credits, we just ran out.")
+                .font(.system(size: 25, weight: .medium, design: .rounded))
+                .tracking(-0.3)
+                .lineSpacing(5)
+                .foregroundStyle(.white.opacity(0.96))
+                .fixedSize(horizontal: false, vertical: true)
+
+            Spacer()
+
+            HStack(spacing: 8) {
+                Image(systemName: "waveform")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(.cyan.opacity(0.9))
+                Capsule()
+                    .fill(.white.opacity(0.16))
+                    .frame(height: 1)
+            }
+            .padding(.bottom, 1)
+        }
+        .padding(.horizontal, 27)
+        .padding(.top, 20)
+        .padding(.bottom, 20)
     }
 }
 
@@ -57,15 +113,15 @@ private struct DictationBars: View {
     var body: some View {
         TimelineView(.animation(minimumInterval: 1 / 30)) { timeline in
             let time = timeline.date.timeIntervalSinceReferenceDate
-            HStack(alignment: .center, spacing: 2.6) {
+            HStack(alignment: .center, spacing: 2.8) {
                 ForEach(0..<4, id: \.self) { index in
                     let wave = (sin(time * 7.2 + Double(index) * 1.47) + 1) / 2
                     Capsule()
-                        .fill(.white.opacity(0.96))
-                        .frame(width: 3.6, height: 7 + wave * 17)
+                        .fill(.white.opacity(0.97))
+                        .frame(width: 3.7, height: 7 + wave * 18)
                 }
             }
-            .frame(height: 25)
+            .frame(height: 26)
         }
     }
 }
@@ -80,7 +136,7 @@ private struct AgentOrb: View {
                 .fill(AngularGradient(colors: [.cyan, .blue, .white, .indigo, .cyan], center: .center))
                 .rotationEffect(.degrees(rotates ? 360 : 0))
             Circle()
-                .fill(RadialGradient(colors: [.white.opacity(0.9), .clear], center: .init(x: 0.31, y: 0.25), startRadius: 0, endRadius: size * 0.58))
+                .fill(RadialGradient(colors: [.white.opacity(0.92), .clear], center: .init(x: 0.31, y: 0.25), startRadius: 0, endRadius: size * 0.58))
             Circle().stroke(.white.opacity(0.45), lineWidth: 0.6)
         }
         .frame(width: size, height: size)
@@ -91,7 +147,7 @@ private struct AgentOrb: View {
     }
 }
 
-/// A notch has square top edges (hidden in the menu bar) and only rounds at its bottom.
+/// A notch has square top edges (hidden in the menu bar) and rounds only at its bottom.
 private struct NotchSurface: Shape {
     var cornerRadius: CGFloat
 
