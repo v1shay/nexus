@@ -7,7 +7,7 @@ The project builds on macOS 14 with Xcode 15. On macOS 26, build it with Xcode 2
 ## Included
 
 - A non-activating AppKit panel measured from the display's actual notch geometry—not a normal app window. It expands down from the notch on hover and collapses after the pointer leaves.
-- The idle state is visually indistinguishable from the notch. Hold **Command** by itself for 180 ms from any app to dictate: the selected animated pet appears on the left wing, the waveform appears on the right wing, and the physical notch remains an empty protected center gap. Release to open the transcript automatically. Quick Command taps and ordinary Command shortcuts are ignored.
+- The idle state is visually indistinguishable from the notch. Hold **Command** by itself for 650 ms from any app to dictate: the selected animated pet appears on the left wing, the waveform appears on the right wing, and the physical notch remains an empty protected center gap. Release to open the transcript automatically. Quick Command taps and ordinary Command shortcuts are ignored.
 - Six bundled animated pets—Tiko, Kabi, Macintosh, Lil Finder, CRT Pal, and Pan-chan—use task-specific listening, working, and review loops. In the expanded overlay, click the pet to mute, Command-click to choose the next pet, or double-click to close; Nexus remembers the selection.
 - Native macOS Speech recognition streams the actual dictated text into the glass transcript surface.
 - A deliberately unstyled local-model aggregator with RAM-aware recommendations, the full Ollama registry (more than 200 official library entries), Hugging Face GGUF search for LM Studio, and support for any exact model identifier.

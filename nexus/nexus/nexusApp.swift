@@ -432,6 +432,8 @@ enum CommandHoldTransition: Equatable {
 }
 
 struct CommandHoldGestureState {
+    static let defaultHoldDuration: TimeInterval = 0.65
+
     private enum Phase: Equatable {
         case idle
         case tracking(startedAt: TimeInterval)
@@ -442,7 +444,7 @@ struct CommandHoldGestureState {
     let holdDuration: TimeInterval
     private var phase: Phase = .idle
 
-    init(holdDuration: TimeInterval = 0.18) {
+    init(holdDuration: TimeInterval = CommandHoldGestureState.defaultHoldDuration) {
         self.holdDuration = holdDuration
     }
 
@@ -529,7 +531,10 @@ private final class NexusCommandHoldMonitor {
         timer.setEventHandler { [weak self] in self?.poll() }
         self.timer = timer
         timer.resume()
-        NSLog("Nexus registered hold-Command dictation with a 180 ms threshold")
+        NSLog(
+            "Nexus registered hold-Command dictation with a %d ms threshold",
+            Int(gesture.holdDuration * 1_000)
+        )
     }
 
     func cancelCurrentHold() {

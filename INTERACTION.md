@@ -9,7 +9,7 @@
 
 ## Dictation hotkey
 
-- Holding `Command` by itself for 180 ms starts dictation globally; releasing it finishes dictation.
+- Holding `Command` by itself for 650 ms starts dictation globally; releasing it finishes dictation.
 - A quick Command tap and normal Command shortcuts are ignored. Pressing another key, clicking, or scrolling cancels a pending hold so Nexus does not interfere with ordinary shortcuts.
 - Holding it reveals the dictation wings only: the selected pet is left of the physical notch and the waveform is right of it.
 - The physical notch width is a protected center gap; interactive visuals must never be placed inside it.

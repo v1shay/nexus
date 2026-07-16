@@ -264,12 +264,12 @@ final class NexusGeometryTests: XCTestCase {
     }
 
     func testHoldingCommandAloneStartsAndReleaseEndsDictation() {
-        var gesture = CommandHoldGestureState(holdDuration: 0.18)
+        var gesture = CommandHoldGestureState()
 
         XCTAssertNil(gesture.update(commandIsDown: true, hasDisqualifyingInput: false, now: 10))
-        XCTAssertNil(gesture.update(commandIsDown: true, hasDisqualifyingInput: false, now: 10.17))
+        XCTAssertNil(gesture.update(commandIsDown: true, hasDisqualifyingInput: false, now: 10.64))
         XCTAssertEqual(
-            gesture.update(commandIsDown: true, hasDisqualifyingInput: false, now: 10.18),
+            gesture.update(commandIsDown: true, hasDisqualifyingInput: false, now: 10.65),
             .began
         )
         XCTAssertEqual(
@@ -279,11 +279,11 @@ final class NexusGeometryTests: XCTestCase {
     }
 
     func testQuickCommandTapAndCommandShortcutDoNotStartDictation() {
-        var quickTap = CommandHoldGestureState(holdDuration: 0.18)
+        var quickTap = CommandHoldGestureState()
         XCTAssertNil(quickTap.update(commandIsDown: true, hasDisqualifyingInput: false, now: 20))
         XCTAssertNil(quickTap.update(commandIsDown: false, hasDisqualifyingInput: false, now: 20.10))
 
-        var shortcut = CommandHoldGestureState(holdDuration: 0.18)
+        var shortcut = CommandHoldGestureState()
         XCTAssertNil(shortcut.update(commandIsDown: true, hasDisqualifyingInput: false, now: 30))
         XCTAssertNil(shortcut.update(commandIsDown: true, hasDisqualifyingInput: true, now: 30.05))
         XCTAssertNil(shortcut.update(commandIsDown: true, hasDisqualifyingInput: false, now: 30.40))
@@ -291,10 +291,10 @@ final class NexusGeometryTests: XCTestCase {
     }
 
     func testCommandClickCancellationEndsAnActiveHoldWithoutRestartingIt() {
-        var gesture = CommandHoldGestureState(holdDuration: 0.18)
+        var gesture = CommandHoldGestureState()
         XCTAssertNil(gesture.update(commandIsDown: true, hasDisqualifyingInput: false, now: 40))
         XCTAssertEqual(
-            gesture.update(commandIsDown: true, hasDisqualifyingInput: false, now: 40.18),
+            gesture.update(commandIsDown: true, hasDisqualifyingInput: false, now: 40.65),
             .began
         )
         XCTAssertEqual(
