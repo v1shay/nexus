@@ -29,6 +29,11 @@ struct NotchInteractionState: Equatable {
         presentation = .thinking
     }
 
+    mutating func acknowledge(_ text: String) {
+        answer = text
+        presentation = .overlay
+    }
+
     mutating func receiveAnswer(_ text: String) {
         answer = text
         presentation = .overlay
@@ -52,6 +57,23 @@ struct NotchInteractionState: Equatable {
     mutating func hideOverlay() {
         guard presentation != .dictating && presentation != .thinking else { return }
         presentation = .idle
+    }
+
+    mutating func dismiss() {
+        presentation = .idle
+    }
+}
+
+enum PromptAcknowledgement {
+    static func text(for prompt: String) -> String {
+        let normalized = prompt.lowercased()
+        if normalized.contains("search") || normalized.contains("look up") || normalized.contains("research") {
+            return "Got it. I’ll look into that."
+        }
+        if normalized.contains("write") || normalized.contains("create") || normalized.contains("build") {
+            return "Understood. I’ll put that together."
+        }
+        return "Got it. Let me work through that."
     }
 }
 

@@ -56,6 +56,7 @@ final class NexusAppDelegate: NSObject, NSApplicationDelegate {
 final class NotchController: ObservableObject {
     @Published private var interaction = NotchInteractionState()
     @Published private(set) var currentSize = CGSize(width: 190, height: 32)
+    @Published private(set) var isVoiceMuted = false
 
     var presentation: NotchPresentation { interaction.presentation }
     var isExpanded: Bool { interaction.presentation == .overlay }
@@ -182,11 +183,16 @@ final class NotchController: ObservableObject {
         responseGeneration = generation
         responseTask = Task { [weak self] in
             guard let self else { return }
-            try? await Task.sleep(for: .milliseconds(650))
+            guard !Task.isCancelled, responseGeneration == generation else { return }
+            let acknowledgement = PromptAcknowledgement.text(for: prompt)
+            responseSpeaker.beginStreaming()
+            interaction.acknowledge(acknowledgement)
+            if let screen { resize(to: expandedSize(for: screen), animated: true) }
+            responseSpeaker.speakImmediately(acknowledgement)
+            try? await Task.sleep(for: .milliseconds(240))
             guard !Task.isCancelled, responseGeneration == generation else { return }
             interaction.beginThinking()
             if let screen { resize(to: listeningSize(for: screen), animated: true) }
-            responseSpeaker.beginStreaming()
             do {
                 let answer = try await modelDownloadViewModel.response(to: prompt) { [weak self] delta, accumulated in
                     guard let self else { return }
@@ -213,6 +219,20 @@ final class NotchController: ObservableObject {
         automaticRevealIsWaitingForNotchVisit = true
         if let screen { resize(to: expandedSize(for: screen), animated: true) }
         responseSpeaker.append(delta)
+    }
+
+    func toggleVoiceMute() {
+        isVoiceMuted.toggle()
+        responseSpeaker.setMuted(isVoiceMuted)
+    }
+
+    func dismissOverlay() {
+        responseTask?.cancel()
+        responseGeneration = UUID()
+        responseSpeaker.stop()
+        automaticRevealIsWaitingForNotchVisit = false
+        interaction.dismiss()
+        if let screen { resize(to: closedSize(for: screen), animated: true) }
     }
 
     func openModelAggregator() {

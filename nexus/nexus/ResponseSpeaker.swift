@@ -1,184 +1,250 @@
 import AVFoundation
 import Foundation
 
-/// Speaks streamed model output in natural sentence-sized pieces. Piper is
-/// kept off the shell entirely: each chunk is passed through standard input to
-/// an explicitly located executable, then played before the next chunk.
+/// Owns one warm Piper process for an entire answer and schedules its raw PCM
+/// output directly into AVAudioEngine. This removes the per-sentence model-load
+/// delay and lets speech follow the model's token stream.
 @MainActor
 final class ResponseSpeaker {
     private let systemSynthesizer = AVSpeechSynthesizer()
-    private var audioPlayer: AVAudioPlayer?
-    private var generatedAudioURL: URL?
-    private var piperTask: Task<Void, Never>?
+    private let audioEngine = AVAudioEngine()
+    private let playerNode = AVAudioPlayerNode()
+    private var audioFormat: AVAudioFormat?
     private var piperProcess: Process?
-    private var piperQueue: [String] = []
+    private var piperInput: FileHandle?
+    private var piperOutput: Pipe?
     private var piperConfiguration: PiperVoiceConfiguration?
+    private var pendingPCM = Data()
     private var chunker = SpeechSentenceChunker()
+    private var flushTask: Task<Void, Never>?
+    private var streamingSessionIsActive = false
+    private var isMuted = false
+
+    init() {
+        audioEngine.attach(playerNode)
+    }
 
     func beginStreaming() {
-        stop()
+        stopPipeline()
+        streamingSessionIsActive = true
         chunker = SpeechSentenceChunker()
+        guard !isMuted else { return }
         piperConfiguration = PiperVoiceConfiguration.detect()
+        if let configuration = piperConfiguration {
+            do { try startPiperStream(configuration) }
+            catch { piperConfiguration = nil }
+        }
+    }
+
+    /// Bypasses phrase buffering for acknowledgements and tool-status speech.
+    func speakImmediately(_ text: String) {
+        guard !isMuted else { return }
+        enqueue(text)
     }
 
     func append(_ delta: String) {
-        enqueue(chunker.append(delta))
+        guard streamingSessionIsActive, !isMuted else { return }
+        chunker.append(delta).forEach(enqueue)
+        schedulePendingPhraseFlush()
     }
 
     func finishStreaming() {
-        if let remainder = chunker.finish() { enqueue([remainder]) }
+        flushTask?.cancel()
+        flushTask = nil
+        guard streamingSessionIsActive, !isMuted else { return }
+        if let remainder = chunker.flush() { enqueue(remainder) }
+        finishPiperInput()
     }
 
-    func speak(_ text: String) {
-        beginStreaming()
-        append(text)
-        finishStreaming()
+    func setMuted(_ muted: Bool) {
+        guard isMuted != muted else { return }
+        isMuted = muted
+        if muted {
+            stopPipeline()
+            chunker = SpeechSentenceChunker()
+        } else if streamingSessionIsActive {
+            piperConfiguration = PiperVoiceConfiguration.detect()
+            if let configuration = piperConfiguration {
+                do { try startPiperStream(configuration) }
+                catch { piperConfiguration = nil }
+            }
+        }
     }
 
     func stop() {
-        systemSynthesizer.stopSpeaking(at: .immediate)
-        audioPlayer?.stop()
-        audioPlayer = nil
-        if let generatedAudioURL { try? FileManager.default.removeItem(at: generatedAudioURL) }
-        generatedAudioURL = nil
-        piperTask?.cancel()
-        piperTask = nil
-        if piperProcess?.isRunning == true { piperProcess?.terminate() }
-        piperProcess = nil
-        piperQueue.removeAll()
-        piperConfiguration = nil
+        streamingSessionIsActive = false
         chunker = SpeechSentenceChunker()
+        stopPipeline()
     }
 
-    private func enqueue(_ chunks: [String]) {
-        guard !chunks.isEmpty else { return }
-        guard piperConfiguration != nil else {
-            chunks.forEach(speakWithSystemVoice)
-            return
+    private func schedulePendingPhraseFlush() {
+        flushTask?.cancel()
+        flushTask = Task { [weak self] in
+            try? await Task.sleep(for: .milliseconds(260))
+            guard !Task.isCancelled, let self, !self.isMuted,
+                  let phrase = self.chunker.flush() else { return }
+            self.enqueue(phrase)
         }
-        piperQueue.append(contentsOf: chunks)
-        startPiperWorkerIfNeeded()
     }
 
-    private func startPiperWorkerIfNeeded() {
-        guard piperTask == nil, let configuration = piperConfiguration else { return }
-        piperTask = Task { [weak self] in
-            guard let self else { return }
-            while !Task.isCancelled, !piperQueue.isEmpty {
-                let text = piperQueue.removeFirst()
-                do {
-                    let audio = try await Self.renderWithPiper(
-                        text: text,
-                        configuration: configuration
-                    ) { process in
-                        Task { @MainActor [weak self] in self?.piperProcess = process }
-                    }
-                    try Task.checkCancellation()
-                    generatedAudioURL = audio
-                    let player = try AVAudioPlayer(contentsOf: audio)
-                    audioPlayer = player
-                    player.play()
-                    while player.isPlaying {
-                        try Task.checkCancellation()
-                        try await Task.sleep(for: .milliseconds(45))
-                    }
-                    audioPlayer = nil
-                    generatedAudioURL = nil
-                    piperProcess = nil
-                    try? FileManager.default.removeItem(at: audio)
-                } catch is CancellationError {
-                    break
-                } catch {
-                    piperConfiguration = nil
-                    speakWithSystemVoice(text)
-                    piperQueue.forEach(speakWithSystemVoice)
-                    piperQueue.removeAll()
-                }
+    private func enqueue(_ phrase: String) {
+        let cleaned = SpeechSanitizer.forSpeech(phrase)
+        guard !cleaned.isEmpty, !isMuted else { return }
+        if let input = piperInput {
+            do { try input.write(contentsOf: Data((cleaned + "\n").utf8)) }
+            catch {
+                piperConfiguration = nil
+                speakWithSystemVoice(cleaned)
             }
-            piperTask = nil
-            if !piperQueue.isEmpty { startPiperWorkerIfNeeded() }
+        } else {
+            speakWithSystemVoice(cleaned)
         }
     }
 
-    private func speakWithSystemVoice(_ text: String) {
-        let utterance = AVSpeechUtterance(string: text)
-        utterance.rate = 0.48
-        utterance.pitchMultiplier = 1.02
-        utterance.voice = AVSpeechSynthesisVoice(language: Locale.current.language.languageCode?.identifier ?? "en-US")
-        systemSynthesizer.speak(utterance)
-    }
+    private func startPiperStream(_ configuration: PiperVoiceConfiguration) throws {
+        guard piperProcess == nil else { return }
+        let format = AVAudioFormat(
+            commonFormat: .pcmFormatInt16,
+            sampleRate: configuration.sampleRate,
+            channels: 1,
+            interleaved: false
+        )!
+        audioEngine.disconnectNodeOutput(playerNode)
+        audioEngine.connect(playerNode, to: audioEngine.mainMixerNode, format: format)
+        audioEngine.prepare()
+        try audioEngine.start()
+        playerNode.play()
+        audioFormat = format
 
-    private nonisolated static func renderWithPiper(
-        text: String,
-        configuration: PiperVoiceConfiguration,
-        processStarted: @escaping @Sendable (Process) -> Void
-    ) async throws -> URL {
-        let output = FileManager.default.temporaryDirectory.appendingPathComponent("nexus-response-\(UUID().uuidString).wav")
         let process = Process()
         let input = Pipe()
+        let output = Pipe()
         process.executableURL = configuration.executable
         process.arguments = [
             "--model", configuration.model.path,
             "--config", configuration.config.path,
-            "--output_file", output.path,
-            "--sentence-silence", "0.10"
+            "--output_raw",
+            "--length-scale", "0.78",
+            "--sentence-silence", "0.04"
         ]
         process.standardInput = input
-        process.standardOutput = FileHandle.nullDevice
+        process.standardOutput = output
         process.standardError = FileHandle.nullDevice
-        try process.run()
-        processStarted(process)
-        input.fileHandleForWriting.write(Data((text + "\n").utf8))
-        try input.fileHandleForWriting.close()
-        let status = await withTaskCancellationHandler {
-            await withCheckedContinuation { continuation in
-                process.terminationHandler = { continuation.resume(returning: $0.terminationStatus) }
+        process.environment = ProcessInfo.processInfo.environment
+        output.fileHandleForReading.readabilityHandler = { [weak self] handle in
+            let data = handle.availableData
+            guard !data.isEmpty else {
+                handle.readabilityHandler = nil
+                return
             }
-        } onCancel: {
-            if process.isRunning { process.terminate() }
+            Task { @MainActor [weak self] in self?.schedulePCM(data) }
         }
-        if Task.isCancelled {
-            try? FileManager.default.removeItem(at: output)
-            throw CancellationError()
+        process.terminationHandler = { [weak self, weak process] _ in
+            Task { @MainActor [weak self, weak process] in
+                guard let self, self.piperProcess === process else { return }
+                self.piperProcess = nil
+                self.piperInput = nil
+                self.piperOutput = nil
+            }
         }
-        guard status == 0, FileManager.default.fileExists(atPath: output.path) else {
-            try? FileManager.default.removeItem(at: output)
-            throw LocalModelError.invalidResponse("Piper did not produce audio")
+        try process.run()
+        piperProcess = process
+        piperInput = input.fileHandleForWriting
+        piperOutput = output
+    }
+
+    private func schedulePCM(_ incoming: Data) {
+        guard !isMuted, let audioFormat else { return }
+        pendingPCM.append(incoming)
+        let byteCount = pendingPCM.count - (pendingPCM.count % MemoryLayout<Int16>.size)
+        guard byteCount > 0 else { return }
+        let audio = pendingPCM.prefix(byteCount)
+        pendingPCM.removeFirst(byteCount)
+        let frames = AVAudioFrameCount(byteCount / MemoryLayout<Int16>.size)
+        guard let buffer = AVAudioPCMBuffer(pcmFormat: audioFormat, frameCapacity: frames),
+              let destination = buffer.int16ChannelData?.pointee else { return }
+        buffer.frameLength = frames
+        audio.withUnsafeBytes { bytes in
+            guard let source = bytes.baseAddress else { return }
+            memcpy(destination, source, byteCount)
         }
-        return output
+        playerNode.scheduleBuffer(buffer)
+        if !playerNode.isPlaying { playerNode.play() }
+    }
+
+    private func finishPiperInput() {
+        try? piperInput?.close()
+        piperInput = nil
+    }
+
+    private func stopPipeline() {
+        flushTask?.cancel()
+        flushTask = nil
+        systemSynthesizer.stopSpeaking(at: .immediate)
+        piperOutput?.fileHandleForReading.readabilityHandler = nil
+        try? piperInput?.close()
+        piperInput = nil
+        if piperProcess?.isRunning == true { piperProcess?.terminate() }
+        piperProcess = nil
+        piperOutput = nil
+        playerNode.stop()
+        audioEngine.stop()
+        audioEngine.reset()
+        audioFormat = nil
+        pendingPCM.removeAll(keepingCapacity: true)
+    }
+
+    private func speakWithSystemVoice(_ text: String) {
+        let utterance = AVSpeechUtterance(string: text)
+        utterance.rate = 0.56
+        utterance.pitchMultiplier = 1.02
+        utterance.voice = AVSpeechSynthesisVoice(language: Locale.current.language.languageCode?.identifier ?? "en-US")
+        systemSynthesizer.speak(utterance)
     }
 }
 
 struct SpeechSentenceChunker: Equatable {
     private var storage = ""
-    private let maximumCharacters = 150
+    private let maximumCharacters = 56
 
     mutating func append(_ text: String) -> [String] {
         storage += text
         var chunks: [String] = []
-
-        while let boundary = storage.firstIndex(where: { ".!?\n".contains($0) }) {
+        while let boundary = storage.firstIndex(where: { ".!?;:\n".contains($0) }) {
             let end = storage.index(after: boundary)
-            let sentence = String(storage[..<end]).trimmingCharacters(in: .whitespacesAndNewlines)
-            storage = String(storage[end...]).trimmingCharacters(in: .whitespacesAndNewlines)
-            if !sentence.isEmpty { chunks.append(sentence) }
+            if let phrase = takePrefix(through: end) { chunks.append(phrase) }
         }
-
         while storage.count >= maximumCharacters {
             let limit = storage.index(storage.startIndex, offsetBy: maximumCharacters)
             let candidate = storage[..<limit]
             let split = candidate.lastIndex(where: { $0.isWhitespace }) ?? limit
-            let phrase = String(storage[..<split]).trimmingCharacters(in: .whitespacesAndNewlines)
-            storage = String(storage[split...]).trimmingCharacters(in: .whitespacesAndNewlines)
-            if !phrase.isEmpty { chunks.append(phrase) }
+            if let phrase = takePrefix(through: split) { chunks.append(phrase) }
         }
         return chunks
     }
 
-    mutating func finish() -> String? {
+    mutating func flush() -> String? {
         let remainder = storage.trimmingCharacters(in: .whitespacesAndNewlines)
         storage = ""
         return remainder.isEmpty ? nil : remainder
+    }
+
+    private mutating func takePrefix(through end: String.Index) -> String? {
+        let phrase = String(storage[..<end]).trimmingCharacters(in: .whitespacesAndNewlines)
+        storage = String(storage[end...]).trimmingCharacters(in: .whitespacesAndNewlines)
+        return phrase.isEmpty ? nil : phrase
+    }
+}
+
+enum SpeechSanitizer {
+    static func forSpeech(_ markdown: String) -> String {
+        markdown
+            .replacingOccurrences(of: #"```[\s\S]*?```"#, with: " code block ", options: .regularExpression)
+            .replacingOccurrences(of: #"`([^`]+)`"#, with: "$1", options: .regularExpression)
+            .replacingOccurrences(of: #"\[([^\]]+)\]\([^\)]+\)"#, with: "$1", options: .regularExpression)
+            .replacingOccurrences(of: #"[*_>#]"#, with: "", options: .regularExpression)
+            .replacingOccurrences(of: #"\s+"#, with: " ", options: .regularExpression)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
     }
 }
 
@@ -186,12 +252,12 @@ struct PiperVoiceConfiguration: Sendable, Equatable {
     let executable: URL
     let model: URL
     let config: URL
+    let sampleRate: Double
 
     static func detect(fileManager: FileManager = .default) -> PiperVoiceConfiguration? {
         let home = fileManager.homeDirectoryForCurrentUser
         let voiceDirectory = home.appendingPathComponent("Library/Application Support/Nexus/Voice", isDirectory: true)
         let downloads = home.appendingPathComponent("Downloads", isDirectory: true)
-
         let executableCandidates = [
             voiceDirectory.appendingPathComponent("piper"),
             URL(fileURLWithPath: "/opt/homebrew/bin/piper"),
@@ -216,6 +282,19 @@ struct PiperVoiceConfiguration: Sendable, Equatable {
         guard let pair = voicePairs.first(where: {
             fileManager.fileExists(atPath: $0.0.path) && fileManager.fileExists(atPath: $0.1.path)
         }) else { return nil }
-        return PiperVoiceConfiguration(executable: executable, model: pair.0, config: pair.1)
+        return PiperVoiceConfiguration(
+            executable: executable,
+            model: pair.0,
+            config: pair.1,
+            sampleRate: sampleRate(from: pair.1, fileManager: fileManager)
+        )
+    }
+
+    private static func sampleRate(from config: URL, fileManager: FileManager) -> Double {
+        guard let data = fileManager.contents(atPath: config.path),
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let audio = json["audio"] as? [String: Any],
+              let rate = audio["sample_rate"] as? NSNumber else { return 22_050 }
+        return rate.doubleValue
     }
 }

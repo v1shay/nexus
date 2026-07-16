@@ -102,7 +102,19 @@ final class NexusGeometryTests: XCTestCase {
         XCTAssertEqual(chunker.append("Hello from Nex"), [])
         XCTAssertEqual(chunker.append("us. How can I help"), ["Hello from Nexus."])
         XCTAssertEqual(chunker.append("?"), ["How can I help?"])
-        XCTAssertNil(chunker.finish())
+        XCTAssertNil(chunker.flush())
+    }
+
+    func testStreamedSpeechFlushesShortPartialOutputWithoutWaitingForCompletion() {
+        var chunker = SpeechSentenceChunker()
+
+        XCTAssertEqual(chunker.append("The first streamed phrase"), [])
+        XCTAssertEqual(chunker.flush(), "The first streamed phrase")
+    }
+
+    func testAcknowledgementMatchesThePromptIntent() {
+        XCTAssertEqual(PromptAcknowledgement.text(for: "Search Google for Swift"), "Got it. I’ll look into that.")
+        XCTAssertEqual(PromptAcknowledgement.text(for: "Build a prototype"), "Understood. I’ll put that together.")
     }
 
     func testLegacyDownloadedOllamaModelBecomesRestorableDefault() {

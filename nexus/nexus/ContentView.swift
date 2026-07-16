@@ -115,7 +115,12 @@ private struct TranscriptContents: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             HStack(alignment: .top) {
-                AgentOrb(size: 34)
+                InteractiveAgentOrb(
+                    size: 34,
+                    isMuted: notch.isVoiceMuted,
+                    mute: notch.toggleVoiceMute,
+                    close: notch.dismissOverlay
+                )
                 Spacer()
                 Button { notch.openModelAggregator() } label: {
                     Image(systemName: "cube.transparent")
@@ -152,6 +157,40 @@ private struct TranscriptContents: View {
         .padding(.horizontal, 27)
         .padding(.top, 20)
         .padding(.bottom, 20)
+    }
+}
+
+private struct InteractiveAgentOrb: View {
+    let size: CGFloat
+    let isMuted: Bool
+    let mute: () -> Void
+    let close: () -> Void
+
+    var body: some View {
+        ZStack {
+            AgentOrb(size: size)
+                .opacity(isMuted ? 0.55 : 1)
+            if isMuted {
+                Circle().fill(.black.opacity(0.48))
+                Image(systemName: "speaker.slash.fill")
+                    .font(.system(size: size * 0.34, weight: .semibold))
+                    .foregroundStyle(.white)
+            }
+        }
+        .frame(width: size, height: size)
+        .contentShape(Circle())
+        .gesture(
+            TapGesture(count: 2)
+                .exclusively(before: TapGesture(count: 1))
+                .onEnded { result in
+                    switch result {
+                    case .first: close()
+                    case .second: mute()
+                    }
+                }
+        )
+        .help(isMuted ? "Click to unmute · Double-click to close" : "Click to mute · Double-click to close")
+        .accessibilityLabel(isMuted ? "Nexus voice muted" : "Nexus voice active")
     }
 }
 
