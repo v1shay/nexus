@@ -7,8 +7,8 @@ struct ContentView: View {
 
     var body: some View {
         ZStack(alignment: .top) {
-            if notch.isListening {
-                ListeningWings()
+            if notch.isListening || notch.isThinking {
+                ListeningWings(isThinking: notch.isThinking)
                     .transition(.opacity.combined(with: .scale(scale: 0.92, anchor: .top)))
             } else {
                 AdaptiveNotchGlass(isExpanded: notch.isExpanded)
@@ -82,6 +82,7 @@ private struct LegacyNotchGlass: View {
 }
 
 private struct ListeningWings: View {
+    let isThinking: Bool
     private let wingWidth = NotchGeometry.wingWidth
 
     var body: some View {
@@ -96,13 +97,15 @@ private struct ListeningWings: View {
                 Color.clear
                     .frame(maxWidth: .infinity)
 
-                DictationBars()
-                    .frame(width: wingWidth)
+                Group {
+                    if isThinking { ThinkingIndicator() } else { DictationBars() }
+                }
+                .frame(width: wingWidth)
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .accessibilityElement(children: .combine)
-        .accessibilityLabel("Nexus is dictating")
+        .accessibilityLabel(isThinking ? "Nexus is thinking" : "Nexus is dictating")
     }
 }
 
@@ -125,30 +128,48 @@ private struct TranscriptContents: View {
                 .help("Models")
             }
 
-            Spacer(minLength: 20)
+            ScrollView(.vertical, showsIndicators: false) {
+                VStack(alignment: .leading, spacing: 14) {
+                    Text(notch.transcript)
+                        .font(.system(size: notch.answer.isEmpty ? 25 : 17, weight: .medium, design: .rounded))
+                        .foregroundStyle(.white.opacity(notch.answer.isEmpty ? 0.96 : 0.62))
 
-            Text(notch.transcript)
-                .font(.system(size: 25, weight: .medium, design: .rounded))
-                .tracking(-0.3)
-                .lineSpacing(5)
-                .foregroundStyle(.white.opacity(0.96))
-                .fixedSize(horizontal: false, vertical: true)
-
-            Spacer()
-
-            HStack(spacing: 8) {
-                Image(systemName: "waveform")
-                    .font(.system(size: 12, weight: .semibold))
-                    .foregroundStyle(.cyan.opacity(0.9))
-                Capsule()
-                    .fill(.white.opacity(0.16))
-                    .frame(height: 1)
+                    if !notch.answer.isEmpty {
+                        Capsule()
+                            .fill(.white.opacity(0.14))
+                            .frame(height: 1)
+                        Text(notch.answer)
+                            .font(.system(size: 21, weight: .medium, design: .rounded))
+                            .foregroundStyle(.white.opacity(0.96))
+                    }
+                }
+                .tracking(-0.2)
+                .lineSpacing(4)
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
-            .padding(.bottom, 1)
+            .padding(.top, 18)
         }
         .padding(.horizontal, 27)
         .padding(.top, 20)
         .padding(.bottom, 20)
+    }
+}
+
+private struct ThinkingIndicator: View {
+    var body: some View {
+        TimelineView(.animation(minimumInterval: 1 / 30)) { timeline in
+            let time = timeline.date.timeIntervalSinceReferenceDate
+            HStack(spacing: 4) {
+                ForEach(0..<3, id: \.self) { index in
+                    let phase = (sin(time * 5.2 - Double(index) * 1.25) + 1) / 2
+                    Circle()
+                        .fill(.white.opacity(0.45 + phase * 0.5))
+                        .frame(width: 5 + phase * 2.5, height: 5 + phase * 2.5)
+                        .offset(y: -phase * 3)
+                }
+            }
+            .frame(height: 22)
+        }
     }
 }
 

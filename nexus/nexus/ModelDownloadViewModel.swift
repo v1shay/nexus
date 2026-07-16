@@ -9,6 +9,7 @@ final class ModelDownloadViewModel: ObservableObject {
     @Published private(set) var states: [String: ModelDownloadState] = [:]
     @Published private(set) var catalogMessage = "Loading the model registry…"
     @Published var pendingOllamaInstall: LocalModel?
+    @Published private(set) var activeModel: LocalModel?
 
     let memoryGB = max(1, Int(ProcessInfo.processInfo.physicalMemory / 1_073_741_824))
 
@@ -17,6 +18,7 @@ final class ModelDownloadViewModel: ObservableObject {
     private let catalogService: ModelCatalogService
     private var downloadTasks: [String: Task<Void, Never>] = [:]
     private let installedDefaultsKey = "nexus.installed-model-ids"
+    private let activeModelDefaultsKey = "nexus.active-model"
 
     init(ollama: OllamaManager = .init(), lmStudio: LMStudioManager = .init(), catalogService: ModelCatalogService = .init()) {
         self.ollama = ollama
@@ -24,6 +26,9 @@ final class ModelDownloadViewModel: ObservableObject {
         self.catalogService = catalogService
         let persisted = UserDefaults.standard.stringArray(forKey: installedDefaultsKey) ?? []
         persisted.forEach { states[$0] = .installed }
+        if let data = UserDefaults.standard.data(forKey: activeModelDefaultsKey) {
+            activeModel = try? JSONDecoder().decode(LocalModel.self, from: data)
+        }
         Task { await refreshCatalog() }
     }
 
@@ -91,6 +96,24 @@ final class ModelDownloadViewModel: ObservableObject {
         download(model)
     }
 
+    func use(_ model: LocalModel) {
+        guard states[model.id] == .installed else { return }
+        activeModel = model
+        if let data = try? JSONEncoder().encode(model) {
+            UserDefaults.standard.set(data, forKey: activeModelDefaultsKey)
+        }
+    }
+
+    func response(to prompt: String) async throws -> String {
+        guard let activeModel else {
+            throw LocalModelError.invalidResponse("Choose an installed model in the model window first")
+        }
+        switch activeModel.backend {
+        case .ollama: return try await ollama.chat(model: activeModel.identifier, prompt: prompt)
+        case .lmStudio: return try await lmStudio.chat(model: activeModel.identifier, prompt: prompt)
+        }
+    }
+
     func shutdown() {
         downloadTasks.values.forEach { $0.cancel() }
         downloadTasks.removeAll()
@@ -119,6 +142,7 @@ final class ModelDownloadViewModel: ObservableObject {
                 }
                 states[model.id] = .installed
                 persistInstalledModelIDs()
+                use(model)
             } catch {
                 states[model.id] = (error as? LocalModelError) == .cancelled ? .idle : .failed(error.localizedDescription)
             }

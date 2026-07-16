@@ -14,6 +14,8 @@
 - The physical notch width is a protected center gap; interactive visuals must never be placed inside it.
 - Releasing the hotkey closes the wings and automatically opens the full surface with the retained transcript.
 - That automatic reveal stays open until the pointer visits the notch and then leaves; later notch hovers reopen the retained transcript normally.
+- If an installed model is selected, Nexus briefly reveals the prompt, contracts to the orb and a thinking indicator, then reopens automatically with the latest prompt and answer.
+- Nexus reads the answer aloud using the system voice or the configured local Piper voice.
 
 ## Visual language
 

@@ -64,4 +64,20 @@ final class NexusGeometryTests: XCTestCase {
         XCTAssertFalse(ModelDownloadState.installed.isActive)
         XCTAssertFalse(ModelDownloadState.failed("failed").isActive)
     }
+
+    func testPromptThinkingAndAnswerPresentationFlow() {
+        var state = NotchInteractionState()
+        state.beginDictation()
+        state.updateTranscript("What is a local model?")
+        state.finishDictation()
+        XCTAssertEqual(state.presentation, .overlay)
+
+        state.beginThinking()
+        XCTAssertEqual(state.presentation, .thinking)
+
+        state.receiveAnswer("A model running on your own computer.")
+        XCTAssertEqual(state.presentation, .overlay)
+        XCTAssertEqual(state.transcript, "What is a local model?")
+        XCTAssertEqual(state.answer, "A model running on your own computer.")
+    }
 }

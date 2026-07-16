@@ -104,6 +104,22 @@ final class OllamaManager: @unchecked Sendable {
         return try JSONDecoder().decode(OllamaTagsResponse.self, from: data).models.map(\.name)
     }
 
+    func chat(model: String, prompt: String) async throws -> String {
+        try await ensureServerRunning()
+        var request = URLRequest(url: Self.serverURL.appendingPathComponent("api/chat"))
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try JSONEncoder().encode(
+            OllamaChatRequest(model: model, messages: [.init(role: "user", content: prompt)], stream: false)
+        )
+        let (data, response) = try await session.data(for: request)
+        try Self.requireSuccess(response)
+        let content = try JSONDecoder().decode(OllamaChatResponse.self, from: data).message.content
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !content.isEmpty else { throw LocalModelError.invalidResponse("Ollama returned an empty answer") }
+        return content
+    }
+
     func stopManagedServer() {
         processLock.lock()
         let process = managedServerProcess
@@ -159,13 +175,30 @@ private struct OllamaTagsResponse: Decodable {
     struct Model: Decodable { let name: String }
     let models: [Model]
 }
+private struct OllamaChatRequest: Encodable {
+    struct Message: Encodable { let role: String; let content: String }
+    let model: String
+    let messages: [Message]
+    let stream: Bool
+}
+private struct OllamaChatResponse: Decodable {
+    struct Message: Decodable { let content: String }
+    let message: Message
+}
 
 final class LMStudioManager: @unchecked Sendable {
+    static let serverURL = URL(string: "http://127.0.0.1:1234")!
+
     private let fileManager: FileManager
+    private let session: URLSession
     private let processLock = NSLock()
     private var downloads: [String: Process] = [:]
+    private var serverStartProcess: Process?
 
-    init(fileManager: FileManager = .default) { self.fileManager = fileManager }
+    init(fileManager: FileManager = .default, session: URLSession = .shared) {
+        self.fileManager = fileManager
+        self.session = session
+    }
 
     func executableURL() -> URL? {
         let home = fileManager.homeDirectoryForCurrentUser.path
@@ -226,9 +259,99 @@ final class LMStudioManager: @unchecked Sendable {
         if process?.isRunning == true { process?.terminate() }
     }
 
+    func chat(model: String, prompt: String) async throws -> String {
+        try await ensureServerRunning()
+        let resolvedModel = await resolvedModelIdentifier(preferred: model)
+        if let response = try? await nativeChat(model: resolvedModel, prompt: prompt) { return response }
+
+        var request = URLRequest(url: Self.serverURL.appendingPathComponent("v1/chat/completions"))
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try JSONEncoder().encode(
+            OpenAIChatRequest(model: resolvedModel, messages: [.init(role: "user", content: prompt)], stream: false)
+        )
+        let (data, response) = try await session.data(for: request)
+        try Self.requireSuccess(response)
+        let content = try JSONDecoder().decode(OpenAIChatResponse.self, from: data).choices.first?.message.content
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard !content.isEmpty else { throw LocalModelError.invalidResponse("LM Studio returned an empty answer") }
+        return content
+    }
+
+    func ensureServerRunning() async throws {
+        if await serverResponds() { return }
+        guard let executable = executableURL() else { throw LocalModelError.lmStudioMissing }
+        let process = Process()
+        process.executableURL = executable
+        process.arguments = ["server", "start"]
+        process.standardOutput = FileHandle.nullDevice
+        process.standardError = FileHandle.nullDevice
+        process.environment = ProcessInfo.processInfo.environment
+        do { try process.run() } catch { throw LocalModelError.serverUnavailable("LM Studio") }
+        setServerStartProcess(process)
+        for _ in 0..<80 {
+            try Task.checkCancellation()
+            if await serverResponds() { return }
+            try await Task.sleep(nanoseconds: 250_000_000)
+        }
+        throw LocalModelError.serverUnavailable("LM Studio")
+    }
+
     func stopManagedProcesses() {
-        processLock.lock(); let processes = Array(downloads.values); downloads.removeAll(); processLock.unlock()
+        processLock.lock()
+        var processes = Array(downloads.values)
+        if let serverStartProcess { processes.append(serverStartProcess) }
+        downloads.removeAll()
+        serverStartProcess = nil
+        processLock.unlock()
         processes.filter(\.isRunning).forEach { $0.terminate() }
+    }
+
+    private func nativeChat(model: String, prompt: String) async throws -> String {
+        var request = URLRequest(url: Self.serverURL.appendingPathComponent("api/v1/chat"))
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try JSONEncoder().encode(LMStudioChatRequest(model: model, input: prompt, store: false))
+        let (data, response) = try await session.data(for: request)
+        try Self.requireSuccess(response)
+        let content = try JSONDecoder().decode(LMStudioChatResponse.self, from: data).output
+            .filter { $0.type == "message" }.compactMap(\.content).joined(separator: "\n")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !content.isEmpty else { throw LocalModelError.invalidResponse("LM Studio returned an empty answer") }
+        return content
+    }
+
+    private func serverResponds() async -> Bool {
+        var request = URLRequest(url: Self.serverURL.appendingPathComponent("v1/models"))
+        request.timeoutInterval = 1
+        guard let (_, response) = try? await session.data(for: request), let http = response as? HTTPURLResponse else { return false }
+        return (200..<300).contains(http.statusCode)
+    }
+
+    private func resolvedModelIdentifier(preferred: String) async -> String {
+        let needle = preferred.split(separator: "/").last.map(String.init) ?? preferred
+        if let (data, _) = try? await session.data(from: Self.serverURL.appendingPathComponent("api/v1/models")),
+           let response = try? JSONDecoder().decode(LMStudioModelsResponse.self, from: data),
+           let match = response.models.first(where: { $0.key == preferred || $0.key.localizedCaseInsensitiveContains(needle) }) {
+            return match.key
+        }
+        if let (data, _) = try? await session.data(from: Self.serverURL.appendingPathComponent("v1/models")),
+           let response = try? JSONDecoder().decode(OpenAIModelsResponse.self, from: data),
+           let match = response.data.first(where: { $0.id == preferred || $0.id.localizedCaseInsensitiveContains(needle) }) {
+            return match.id
+        }
+        return preferred
+    }
+
+    private func setServerStartProcess(_ process: Process) {
+        processLock.lock(); defer { processLock.unlock() }
+        serverStartProcess = process
+    }
+
+    private static func requireSuccess(_ response: URLResponse) throws {
+        guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
+            throw LocalModelError.invalidResponse("LM Studio HTTP \((response as? HTTPURLResponse)?.statusCode ?? -1)")
+        }
     }
 
     private func isInstalled(_ model: LocalModel) async throws -> Bool {
@@ -261,6 +384,33 @@ final class LMStudioManager: @unchecked Sendable {
               let range = Range(match.range(at: 1), in: text) else { return nil }
         return Int(text[range]).map { min(100, $0) }
     }
+}
+
+private struct LMStudioChatRequest: Encodable { let model: String; let input: String; let store: Bool }
+private struct LMStudioChatResponse: Decodable {
+    struct Output: Decodable { let type: String; let content: String? }
+    let output: [Output]
+}
+private struct OpenAIChatRequest: Encodable {
+    struct Message: Encodable { let role: String; let content: String }
+    let model: String
+    let messages: [Message]
+    let stream: Bool
+}
+private struct OpenAIChatResponse: Decodable {
+    struct Choice: Decodable {
+        struct Message: Decodable { let content: String }
+        let message: Message
+    }
+    let choices: [Choice]
+}
+private struct LMStudioModelsResponse: Decodable {
+    struct Model: Decodable { let key: String }
+    let models: [Model]
+}
+private struct OpenAIModelsResponse: Decodable {
+    struct Model: Decodable { let id: String }
+    let data: [Model]
 }
 
 private final class SynchronizedText: @unchecked Sendable {

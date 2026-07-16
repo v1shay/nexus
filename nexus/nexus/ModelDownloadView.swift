@@ -71,7 +71,11 @@ struct ModelDownloadView: View {
         case .failed:
             Button("Retry") { viewModel.retry(model) }.keyboardShortcut(.defaultAction)
         case .installed:
-            Label("Installed", systemImage: "checkmark.circle.fill").foregroundStyle(.green)
+            if viewModel.activeModel?.id == model.id {
+                Label("In Use", systemImage: "checkmark.circle.fill").foregroundStyle(.green)
+            } else {
+                Button("Use") { viewModel.use(model) }
+            }
         case .idle:
             Button("Download") { viewModel.download(model) }.keyboardShortcut(.defaultAction)
         }

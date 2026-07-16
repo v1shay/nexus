@@ -37,7 +37,9 @@ final class NotchController: ObservableObject {
     var presentation: NotchPresentation { interaction.presentation }
     var isExpanded: Bool { interaction.presentation == .overlay }
     var isListening: Bool { interaction.presentation == .dictating }
+    var isThinking: Bool { interaction.presentation == .thinking }
     var transcript: String { interaction.transcript }
+    var answer: String { interaction.answer }
 
     private var panel: NexusNotchPanel?
     private var screen: NSScreen?
@@ -48,6 +50,8 @@ final class NotchController: ObservableObject {
     private let speechTranscriber = SpeechTranscriber()
     private let modelDownloadViewModel = ModelDownloadViewModel()
     private var automaticRevealIsWaitingForNotchVisit = false
+    private let responseSpeaker = ResponseSpeaker()
+    private var responseTask: Task<Void, Never>?
 
     static let preview: NotchController = {
         let controller = NotchController()
@@ -114,6 +118,8 @@ final class NotchController: ObservableObject {
 
     private func startGlobalDictation() {
         closeTask?.cancel()
+        responseTask?.cancel()
+        responseSpeaker.stop()
         interaction.beginDictation()
         if let screen {
             resize(to: listeningSize(for: screen), animated: true)
@@ -129,6 +135,33 @@ final class NotchController: ObservableObject {
         automaticRevealIsWaitingForNotchVisit = true
         if let screen {
             resize(to: expandedSize(for: screen), animated: true)
+        }
+        startResponseIfPossible()
+    }
+
+    private func startResponseIfPossible() {
+        let prompt = transcript.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !prompt.isEmpty, modelDownloadViewModel.activeModel != nil else { return }
+        responseTask?.cancel()
+        responseTask = Task { [weak self] in
+            guard let self else { return }
+            try? await Task.sleep(for: .milliseconds(650))
+            guard !Task.isCancelled else { return }
+            interaction.beginThinking()
+            if let screen { resize(to: listeningSize(for: screen), animated: true) }
+            do {
+                let answer = try await modelDownloadViewModel.response(to: prompt)
+                guard !Task.isCancelled else { return }
+                interaction.receiveAnswer(answer)
+                automaticRevealIsWaitingForNotchVisit = true
+                if let screen { resize(to: expandedSize(for: screen), animated: true) }
+                responseSpeaker.speak(answer)
+            } catch {
+                guard !Task.isCancelled else { return }
+                interaction.failResponse("Nexus couldn’t get a response. \(error.localizedDescription)")
+                automaticRevealIsWaitingForNotchVisit = true
+                if let screen { resize(to: expandedSize(for: screen), animated: true) }
+            }
         }
     }
 
@@ -156,17 +189,19 @@ final class NotchController: ObservableObject {
 
     func shutdown() {
         speechTranscriber.stop()
+        responseTask?.cancel()
+        responseSpeaker.stop()
         modelDownloadViewModel.shutdown()
     }
 
     func updateHover(_ hovering: Bool) {
         closeTask?.cancel()
         if hovering {
-            guard !isListening else { return }
+            guard !isListening && !isThinking else { return }
             automaticRevealIsWaitingForNotchVisit = false
             expand()
         } else {
-            guard !isListening else { return }
+            guard !isListening && !isThinking else { return }
             guard !automaticRevealIsWaitingForNotchVisit else { return }
             closeTask = Task { [weak self] in
                 try? await Task.sleep(for: .milliseconds(180))
@@ -238,6 +273,7 @@ final class NotchController: ObservableObject {
         let size: CGSize = switch interaction.presentation {
         case .idle: closedSize(for: screen)
         case .dictating: listeningSize(for: screen)
+        case .thinking: listeningSize(for: screen)
         case .overlay: expandedSize(for: screen)
         }
         resize(to: size, animated: false)

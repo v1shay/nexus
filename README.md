@@ -7,11 +7,12 @@ The project builds on macOS 14 with Xcode 15. On macOS 26, build it with Xcode 2
 ## Included
 
 - A non-activating AppKit panel measured from the display's actual notch geometry—not a normal app window. It expands down from the notch on hover and collapses after the pointer leaves.
-- The idle state is visually indistinguishable from the notch. Hold **Command-Shift-Space** from any app to dictate: the orb appears on the left wing, the waveform appears on the right wing, and the physical notch remains an empty protected center gap. Release to save the transcript, then hover the notch to open it.
+- The idle state is visually indistinguishable from the notch. Hold **Command-Shift-Space** from any app to dictate: the orb appears on the left wing, the waveform appears on the right wing, and the physical notch remains an empty protected center gap. Release to open the transcript automatically.
 - Native macOS Speech recognition streams the actual dictated text into the glass transcript surface.
 - A deliberately unstyled local-model aggregator with RAM-aware recommendations, the full Ollama registry (more than 200 official library entries), Hugging Face GGUF search for LM Studio, and support for any exact model identifier.
 - Ollama downloads use the streamed local `POST /api/pull` API, byte-accurate progress, `GET /api/tags` verification, cancellation, retry, duplicate prevention, and persisted completion state. Nexus detects Homebrew, `/usr/local`, and app-bundled executables, starts `ollama serve` without Terminal, and can install the official app into `~/Applications` after one confirmation.
 - LM Studio downloads use its bundled `lms get -y --gguf` command directly through `Foundation.Process`, including progress parsing, cancellation, verification through `lms ls`, and no shell or Terminal window.
+- A completed download becomes the active model. Dictated prompts are sent only to that local runtime; the notch contracts to an orb and thinking indicator, reopens with the latest prompt and answer, and speaks the answer. See [VOICE_SETUP.md](VOICE_SETUP.md) to replace the system voice with a local Piper `.onnx` voice.
 
 ## Run
 
