@@ -286,6 +286,40 @@ final class NexusConnectController: ObservableObject {
         return []
     }
 
+    /// Runs one allowlisted executable after an intentional user confirmation.
+    /// Arguments remain a structured array and no shell interpreter is used.
+    func runApprovedProcess(
+        executableID: String,
+        arguments: [String],
+        workingDirectory: NexusFileReference? = nil,
+        timeoutSeconds: TimeInterval = 120,
+        maximumOutputBytes: Int = 8 * 1_024 * 1_024
+    ) async throws -> NexusStructuredProcessResult {
+        let alert = NSAlert()
+        alert.messageText = "Allow \(executableID) on \(shouldUseStudio ? "Mac Studio" : "this Mac")?"
+        alert.informativeText = arguments.isEmpty
+            ? "Nexus will run the executable once without a shell."
+            : "Arguments:\n\(arguments.joined(separator: " "))\n\nNexus will not use zsh -c or execute model-generated shell text."
+        alert.alertStyle = .warning
+        alert.addButton(withTitle: "Run Once")
+        alert.addButton(withTitle: "Cancel")
+        guard alert.runModal() == .alertFirstButtonReturn else { throw NexusConnectError.cancelled }
+
+        let approval = try await workloads.requestProcessApproval(
+            executableID: executableID,
+            validFor: 60
+        )
+        return try await workloads.runApprovedProcess(.init(
+            executableID: executableID,
+            arguments: arguments,
+            environment: [:],
+            workingDirectory: workingDirectory,
+            timeoutSeconds: timeoutSeconds,
+            maximumOutputBytes: maximumOutputBytes,
+            approvalToken: approval.token
+        ))
+    }
+
     func shutdown() {
         hostStartTask?.cancel()
         hostListener?.stop()

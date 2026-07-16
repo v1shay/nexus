@@ -124,6 +124,40 @@ extension NexusGeometryTests {
         XCTAssertNotNil(failure)
         XCTAssertEqual(try Data(contentsOf: outside), Data("unchanged".utf8))
     }
+
+    func testUnifiedProcessApprovalIsShortLivedSingleUseAndNeverAllowsAShell() async throws {
+        let policy = NexusExecutionPolicy(
+            allowedCapabilities: [.process],
+            roots: [:],
+            executables: [
+                "true": .init(executableURL: URL(fileURLWithPath: "/usr/bin/true")),
+                "zsh": .init(executableURL: URL(fileURLWithPath: "/bin/zsh"), requiresApproval: false)
+            ]
+        )
+        let services = NexusHostServiceExecutor(nodeID: UUID(), policy: policy)
+        let api = NexusUnifiedWorkloadAPI(executor: NexusLocalWorkloadExecutor(services: services))
+        let approval = try await api.requestProcessApproval(executableID: "true", validFor: 30)
+        let payload = NexusProcessPayload(
+            executableID: "true",
+            arguments: [],
+            environment: [:],
+            workingDirectory: nil,
+            timeoutSeconds: 5,
+            maximumOutputBytes: 1_024,
+            approvalToken: approval.token
+        )
+
+        let result = try await api.runApprovedProcess(payload)
+        XCTAssertEqual(result.exitCode, 0)
+        do {
+            _ = try await api.runApprovedProcess(payload)
+            XCTFail("A process approval token must be consumed exactly once")
+        } catch {}
+        do {
+            _ = try await api.requestProcessApproval(executableID: "zsh")
+            XCTFail("Shell interpreters must never receive approval tokens")
+        } catch {}
+    }
 }
 
 private actor NexusTransferProgressCollector {

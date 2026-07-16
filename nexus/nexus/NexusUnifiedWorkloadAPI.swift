@@ -116,6 +116,22 @@ actor NexusUnifiedWorkloadAPI {
         return .init(standardOutput: stdout, standardError: stderr, exitCode: exitCode)
     }
 
+    func requestProcessApproval(
+        executableID: String,
+        validFor seconds: TimeInterval = 60
+    ) async throws -> NexusProcessApprovalResultPayload {
+        let request = try NexusWorkloadRequest(
+            kind: .processApproval,
+            priority: .interactive,
+            retrySafety: .neverReplay,
+            payload: NexusProcessApprovalRequestPayload(
+                executableID: executableID,
+                validitySeconds: seconds
+            )
+        )
+        return try await firstResult(request, as: NexusProcessApprovalResultPayload.self)
+    }
+
     func listFiles(
         in directory: NexusFileReference,
         recursive: Bool = false,

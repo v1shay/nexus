@@ -349,6 +349,17 @@ actor NexusHostServiceExecutor {
             await emitter.emit(kind: .result, payload: NexusIndexSearchResultsPayload(
                 results: await index.search(query: payload.query, limit: payload.limit)
             ))
+        case .processApproval:
+            let payload: NexusProcessApprovalRequestPayload = try request.decodePayload()
+            try policy.requireApprovableExecutable(payload.executableID)
+            guard (1...300).contains(payload.validitySeconds) else {
+                throw NexusConnectError.policyDenied("process approval lifetime must be between 1 and 300 seconds")
+            }
+            let token = await approvals.issue(validFor: payload.validitySeconds)
+            await emitter.emit(kind: .result, payload: NexusProcessApprovalResultPayload(
+                token: token,
+                expiresAtMilliseconds: NexusClock.nowMilliseconds() + Int64(payload.validitySeconds * 1_000)
+            ))
         case .process:
             try await process(try request.decodePayload(), emitter: emitter)
         case .fileStat:

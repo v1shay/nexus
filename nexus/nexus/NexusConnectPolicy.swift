@@ -122,6 +122,18 @@ struct NexusExecutionPolicy: Sendable {
         return rule
     }
 
+    func requireApprovableExecutable(_ executableID: String) throws {
+        try require(.process)
+        guard let rule = executables[executableID] else {
+            throw NexusConnectError.policyDenied("unknown executable ID")
+        }
+        let forbiddenShells = ["sh", "zsh", "bash", "fish", "dash"]
+        guard !forbiddenShells.contains(executableID.lowercased()),
+              !forbiddenShells.contains(rule.executableURL.lastPathComponent.lowercased()) else {
+            throw NexusConnectError.policyDenied("shell interpreters are not available")
+        }
+    }
+
     private func canonicalizingExistingAncestors(of url: URL) -> URL {
         var existing = url.standardizedFileURL
         var missingComponents: [String] = []

@@ -116,9 +116,10 @@ final class NotchController: ObservableObject {
     private var hoverSession = NotchHoverSession()
     private var suppressAutomaticResponseReveal = false
 
-    init(connectController: NexusConnectController = .shared) {
-        self.connectController = connectController
-        modelDownloadViewModel = ModelDownloadViewModel(connect: connectController)
+    init(connectController: NexusConnectController? = nil) {
+        let resolvedConnectController = connectController ?? .shared
+        self.connectController = resolvedConnectController
+        modelDownloadViewModel = ModelDownloadViewModel(connect: resolvedConnectController)
     }
 
     static let preview: NotchController = {

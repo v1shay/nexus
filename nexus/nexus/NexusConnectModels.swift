@@ -40,6 +40,7 @@ enum NexusWorkloadKind: String, Codable, Sendable {
     case ocr
     case index
     case searchIndex
+    case processApproval
     case process
     case fileStat
     case fileRead
@@ -57,6 +58,7 @@ enum NexusWorkloadKind: String, Codable, Sendable {
         case .ocr: .ocr
         case .index: .index
         case .searchIndex: .searchIndex
+        case .processApproval: .process
         case .process: .process
         case .fileStat: .fileStat
         case .fileRead: .fileRead
@@ -296,6 +298,16 @@ struct NexusProcessPayload: Codable, Equatable, Sendable {
     let timeoutSeconds: Double
     let maximumOutputBytes: Int
     let approvalToken: String?
+}
+
+struct NexusProcessApprovalRequestPayload: Codable, Equatable, Sendable {
+    let executableID: String
+    let validitySeconds: TimeInterval
+}
+
+struct NexusProcessApprovalResultPayload: Codable, Equatable, Sendable {
+    let token: String
+    let expiresAtMilliseconds: Int64
 }
 
 struct NexusProcessOutputPayload: Codable, Equatable, Sendable {
