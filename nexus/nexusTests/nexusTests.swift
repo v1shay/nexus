@@ -80,4 +80,15 @@ final class NexusGeometryTests: XCTestCase {
         XCTAssertEqual(state.transcript, "What is a local model?")
         XCTAssertEqual(state.answer, "A model running on your own computer.")
     }
+
+    func testPhysicalNotchAndPanelShareOneHoverSession() {
+        var session = NotchHoverSession()
+
+        XCTAssertEqual(session.update(isInside: true), true)
+        XCTAssertNil(session.update(isInside: true), "Mouse moves inside the notch must not relaunch the animation")
+        XCTAssertNil(session.update(isInside: true), "Crossing from the cutout into the panel remains the same visit")
+        XCTAssertEqual(session.update(isInside: false), false)
+        XCTAssertNil(session.update(isInside: false))
+        XCTAssertEqual(session.update(isInside: true), true, "A new visit may launch after a complete exit")
+    }
 }

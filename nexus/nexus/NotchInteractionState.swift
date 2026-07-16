@@ -49,3 +49,16 @@ struct NotchInteractionState: Equatable {
         presentation = .idle
     }
 }
+
+/// Converts the continuous mouse-move stream into one enter and one exit per
+/// visit. The session spans both the physical camera cutout and Nexus's panel,
+/// so resizing the panel underneath the cursor cannot retrigger expansion.
+struct NotchHoverSession: Equatable {
+    private(set) var isActive = false
+
+    mutating func update(isInside: Bool) -> Bool? {
+        guard isInside != isActive else { return nil }
+        isActive = isInside
+        return isInside
+    }
+}

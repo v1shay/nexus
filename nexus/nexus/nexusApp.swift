@@ -18,14 +18,37 @@ struct NexusApp: App {
 @MainActor
 final class NexusAppDelegate: NSObject, NSApplicationDelegate {
     private let notch = NotchController()
+    private var launchTask: Task<Void, Never>?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
-        notch.install()
+        launchTask = Task { @MainActor [weak self] in
+            await Self.retireOlderInstances()
+            guard !Task.isCancelled else { return }
+            self?.notch.install()
+        }
     }
 
     func applicationWillTerminate(_ notification: Notification) {
+        launchTask?.cancel()
         notch.shutdown()
+    }
+
+    /// Xcode can launch a new debug build while the previous accessory app is
+    /// still alive. Retire the older process before creating any panel so two
+    /// independent notch windows can never be visible together.
+    private static func retireOlderInstances() async {
+        guard let identifier = Bundle.main.bundleIdentifier else { return }
+        let currentPID = ProcessInfo.processInfo.processIdentifier
+        let olderInstances = NSRunningApplication
+            .runningApplications(withBundleIdentifier: identifier)
+            .filter { $0.processIdentifier != currentPID }
+
+        olderInstances.forEach { $0.terminate() }
+        for _ in 0..<12 where olderInstances.contains(where: { !$0.isTerminated }) {
+            try? await Task.sleep(for: .milliseconds(50))
+        }
+        olderInstances.filter { !$0.isTerminated }.forEach { $0.forceTerminate() }
     }
 }
 
@@ -52,6 +75,7 @@ final class NotchController: ObservableObject {
     private var automaticRevealIsWaitingForNotchVisit = false
     private let responseSpeaker = ResponseSpeaker()
     private var responseTask: Task<Void, Never>?
+    private var hoverSession = NotchHoverSession()
 
     static let preview: NotchController = {
         let controller = NotchController()
@@ -60,6 +84,7 @@ final class NotchController: ObservableObject {
     }()
 
     func install() {
+        guard panel == nil else { return }
         let screen = NSScreen.main ?? NSScreen.screens[0]
         self.screen = screen
         currentSize = closedSize(for: screen)
@@ -70,7 +95,13 @@ final class NotchController: ObservableObject {
             backing: .buffered,
             defer: false
         )
-        panel.contentView = NSHostingView(rootView: ContentView().environmentObject(self))
+        let hostingView = NSHostingView(rootView: ContentView().environmentObject(self))
+        // The NSPanel is the sole owner of notch geometry. Without this,
+        // NSHostingView advertises the transcript's ideal size and AppKit can
+        // grow the window to nearly the entire screen for a long sentence.
+        hostingView.sizingOptions = []
+        hostingView.autoresizingMask = [.width, .height]
+        panel.contentView = hostingView
         panel.orderFrontRegardless()
         self.panel = panel
         installHotKeyMonitor()
@@ -98,8 +129,10 @@ final class NotchController: ObservableObject {
         let closed = closedSize(for: screen)
         let isOverNotchZone = abs(location.x - screen.frame.midX) <= max(150, closed.width / 2 + 72)
             && location.y >= screen.frame.maxY - 66
-        let isOverPanel = isExpanded && (panel?.frame.contains(location) ?? false)
-        updateHover(isOverNotchZone || isOverPanel)
+        let isOverPanel = panel?.frame.contains(location) ?? false
+        let isInsideNexus = isOverNotchZone || isOverPanel
+        guard let didEnter = hoverSession.update(isInside: isInsideNexus) else { return }
+        updateHover(didEnter)
     }
 
     /// Carbon hotkeys are delivered by macOS rather than by Nexus's focused
@@ -194,7 +227,7 @@ final class NotchController: ObservableObject {
         modelDownloadViewModel.shutdown()
     }
 
-    func updateHover(_ hovering: Bool) {
+    private func updateHover(_ hovering: Bool) {
         closeTask?.cancel()
         if hovering {
             guard !isListening && !isThinking else { return }
@@ -229,8 +262,13 @@ final class NotchController: ObservableObject {
 
     private func resize(to size: CGSize, animated: Bool) {
         guard let panel, let screen else { return }
-        currentSize = size
         let targetFrame = frame(for: size, on: screen)
+        let frameChanged = abs(panel.frame.minX - targetFrame.minX) > 0.5
+            || abs(panel.frame.minY - targetFrame.minY) > 0.5
+            || abs(panel.frame.width - targetFrame.width) > 0.5
+            || abs(panel.frame.height - targetFrame.height) > 0.5
+        currentSize = size
+        guard frameChanged else { return }
         if animated {
             NSAnimationContext.runAnimationGroup { context in
                 context.duration = 0.30
