@@ -1,4 +1,5 @@
 import XCTest
+import WebKit
 @testable import nexus
 
 final class NexusGeometryTests: XCTestCase {
@@ -186,6 +187,53 @@ final class NexusGeometryTests: XCTestCase {
             InlineMathParser.parse(#"Use \(x + y\) next."#),
             [.text("Use "), .math("x + y"), .text(" next.")]
         )
+    }
+
+    func testMarkdownProsePreservesLineBreaksAndVisibleIndentation() {
+        let rendered = MarkdownProseFormatter.render("First line\n\tIndented line")
+
+        XCTAssertEqual(rendered, "First line\n\u{00a0}\u{00a0}\u{00a0}\u{00a0}Indented line")
+    }
+
+    func testInlineLatexBecomesReadableWithoutAnUnwrappableSubviewRow() {
+        XCTAssertEqual(
+            MarkdownProseFormatter.render(#"Energy is $E=mc^2$ and $\alpha \leq \beta$."#),
+            "Energy is E=mc² and α ≤ β."
+        )
+    }
+
+    func testDisplayLatexUsesOnlyBundledKaTeXAssets() {
+        let document = KaTeXHTML.document(for: #"\frac{x}{y}"#)
+
+        XCTAssertTrue(document.contains("katex.min.css"))
+        XCTAssertTrue(document.contains("katex.min.js"))
+        XCTAssertFalse(document.contains("https://"))
+        XCTAssertTrue(document.contains(#"\\frac{x}{y}"#))
+    }
+
+    @MainActor
+    func testBundledKaTeXRendersAnEquationInsideWebKit() async throws {
+        let resourceDirectory = try XCTUnwrap(
+            Bundle.main.resourceURL?.appendingPathComponent("KaTeX", isDirectory: true)
+        )
+        XCTAssertTrue(FileManager.default.fileExists(atPath: resourceDirectory.appendingPathComponent("katex.min.js").path))
+
+        let webView = WKWebView(frame: CGRect(x: 0, y: 0, width: 520, height: 120))
+        webView.loadHTMLString(
+            KaTeXHTML.document(for: #"\frac{x^2 + y^2}{\sqrt{z}}"#),
+            baseURL: resourceDirectory
+        )
+
+        var didRender = false
+        for _ in 0..<40 {
+            try await Task.sleep(for: .milliseconds(50))
+            if let value = try? await webView.evaluateJavaScript("Boolean(document.querySelector('.katex'))"),
+               value as? Bool == true {
+                didRender = true
+                break
+            }
+        }
+        XCTAssertTrue(didRender, "The bundled KaTeX script should replace raw LaTeX with rendered math")
     }
 
 }

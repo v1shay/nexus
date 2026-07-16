@@ -19,6 +19,7 @@
 		B100000730075C29006660E4 /* ModelDownloadView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B100000830075C29006660E4 /* ModelDownloadView.swift */; };
 		C100000130075C29006660E4 /* ResponseSpeaker.swift in Sources */ = {isa = PBXBuildFile; fileRef = C100000230075C29006660E4 /* ResponseSpeaker.swift */; };
 		D100000130075C29006660E4 /* RichMarkdownView.swift in Sources */ = {isa = PBXBuildFile; fileRef = D100000230075C29006660E4 /* RichMarkdownView.swift */; };
+		E100000130075C29006660E4 /* KaTeX in Resources */ = {isa = PBXBuildFile; fileRef = E100000230075C29006660E4 /* KaTeX */; };
 		156AB6C030075C2A006660E4 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 156AB6BF30075C2A006660E4 /* Assets.xcassets */; };
 		156AB6C430075C2A006660E4 /* Preview Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 156AB6C330075C2A006660E4 /* Preview Assets.xcassets */; };
 		156AB6CE30075C2A006660E4 /* nexusTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 156AB6CD30075C2A006660E4 /* nexusTests.swift */; };
@@ -57,6 +58,7 @@
 		B100000830075C29006660E4 /* ModelDownloadView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ModelDownloadView.swift; sourceTree = "<group>"; };
 		C100000230075C29006660E4 /* ResponseSpeaker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ResponseSpeaker.swift; sourceTree = "<group>"; };
 		D100000230075C29006660E4 /* RichMarkdownView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RichMarkdownView.swift; sourceTree = "<group>"; };
+		E100000230075C29006660E4 /* KaTeX */ = {isa = PBXFileReference; explicitFileType = folder; path = KaTeX; sourceTree = "<group>"; };
 		156AB6BF30075C2A006660E4 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		156AB6C130075C2A006660E4 /* nexus.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = nexus.entitlements; sourceTree = "<group>"; };
 		156AB6C330075C2A006660E4 /* Preview Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = "Preview Assets.xcassets"; sourceTree = "<group>"; };
@@ -127,6 +129,7 @@
 				B100000830075C29006660E4 /* ModelDownloadView.swift */,
 				C100000230075C29006660E4 /* ResponseSpeaker.swift */,
 				D100000230075C29006660E4 /* RichMarkdownView.swift */,
+				E100000230075C29006660E4 /* KaTeX */,
 				156AB6BF30075C2A006660E4 /* Assets.xcassets */,
 				156AB6C130075C2A006660E4 /* nexus.entitlements */,
 				156AB6C230075C2A006660E4 /* Preview Content */,
@@ -263,6 +266,7 @@
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				E100000130075C29006660E4 /* KaTeX in Resources */,
 				156AB6C430075C2A006660E4 /* Preview Assets.xcassets in Resources */,
 				156AB6C030075C2A006660E4 /* Assets.xcassets in Resources */,
 			);

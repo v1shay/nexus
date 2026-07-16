@@ -109,6 +109,91 @@ enum InlineMathParser {
     }
 }
 
+enum MarkdownProseFormatter {
+    private static let superscripts: [Character: Character] = [
+        "0": "⁰", "1": "¹", "2": "²", "3": "³", "4": "⁴",
+        "5": "⁵", "6": "⁶", "7": "⁷", "8": "⁸", "9": "⁹",
+        "+": "⁺", "-": "⁻", "=": "⁼", "(": "⁽", ")": "⁾", "n": "ⁿ"
+    ]
+    private static let subscripts: [Character: Character] = [
+        "0": "₀", "1": "₁", "2": "₂", "3": "₃", "4": "₄",
+        "5": "₅", "6": "₆", "7": "₇", "8": "₈", "9": "₉",
+        "+": "₊", "-": "₋", "=": "₌", "(": "₍", ")": "₎"
+    ]
+    private static let symbols: [(String, String)] = [
+        (#"\alpha"#, "α"), (#"\beta"#, "β"), (#"\gamma"#, "γ"),
+        (#"\delta"#, "δ"), (#"\theta"#, "θ"), (#"\lambda"#, "λ"),
+        (#"\mu"#, "μ"), (#"\pi"#, "π"), (#"\sigma"#, "σ"),
+        (#"\phi"#, "φ"), (#"\omega"#, "ω"), (#"\times"#, "×"),
+        (#"\cdot"#, "·"), (#"\pm"#, "±"), (#"\leq"#, "≤"),
+        (#"\geq"#, "≥"), (#"\neq"#, "≠"), (#"\infty"#, "∞"),
+        (#"\sum"#, "∑"), (#"\int"#, "∫")
+    ]
+
+    static func render(_ source: String) -> String {
+        InlineMathParser.parse(normalizedWhitespace(in: source)).map { segment in
+            switch segment {
+            case .text(let text): text
+            case .math(let equation): readableInlineMath(equation)
+            }
+        }.joined()
+    }
+
+    private static func normalizedWhitespace(in source: String) -> String {
+        source
+            .replacingOccurrences(of: "\r\n", with: "\n")
+            .replacingOccurrences(of: "\r", with: "\n")
+            .replacingOccurrences(of: "\t", with: String(repeating: "\u{00a0}", count: 4))
+    }
+
+    private static func readableInlineMath(_ equation: String) -> String {
+        var value = equation
+            .replacingOccurrences(of: #"\left"#, with: "")
+            .replacingOccurrences(of: #"\right"#, with: "")
+
+        value = replacing(pattern: #"\\frac\{([^{}]+)\}\{([^{}]+)\}"#, in: value) { match in
+            "(\(match[1]))/(\(match[2]))"
+        }
+        value = replacing(pattern: #"\\sqrt\{([^{}]+)\}"#, in: value) { match in
+            "√(\(match[1]))"
+        }
+        value = replacingScript(pattern: #"\^\{?([0-9+\-=()n]+)\}?"#, in: value, table: superscripts)
+        value = replacingScript(pattern: #"_\{?([0-9+\-=()]+)\}?"#, in: value, table: subscripts)
+        for (command, symbol) in symbols {
+            value = value.replacingOccurrences(of: command, with: symbol)
+        }
+        return value.replacingOccurrences(of: #"\,"#, with: " ")
+    }
+
+    private static func replacing(
+        pattern: String,
+        in source: String,
+        transform: ([String]) -> String
+    ) -> String {
+        guard let regex = try? NSRegularExpression(pattern: pattern) else { return source }
+        var result = source
+        for match in regex.matches(in: source, range: NSRange(source.startIndex..., in: source)).reversed() {
+            guard let range = Range(match.range, in: source) else { continue }
+            let captures = (0..<match.numberOfRanges).map { index -> String in
+                guard let captureRange = Range(match.range(at: index), in: source) else { return "" }
+                return String(source[captureRange])
+            }
+            result.replaceSubrange(range, with: transform(captures))
+        }
+        return result
+    }
+
+    private static func replacingScript(
+        pattern: String,
+        in source: String,
+        table: [Character: Character]
+    ) -> String {
+        replacing(pattern: pattern, in: source) { match in
+            String(match[1].map { table[$0] ?? $0 })
+        }
+    }
+}
+
 struct RichMarkdownView: View {
     let markdown: String
 
@@ -138,48 +223,26 @@ struct RichMarkdownView: View {
 private struct MarkdownProseView: View {
     let source: String
 
-    private var segments: [InlineMarkdownSegment] { InlineMathParser.parse(source) }
-    private var containsMath: Bool { segments.contains { if case .math = $0 { true } else { false } } }
-
-    private func attributed(_ text: String, syntax: AttributedString.MarkdownParsingOptions.InterpretedSyntax = .full) -> AttributedString {
+    private func attributed(_ text: String) -> AttributedString {
         (try? AttributedString(
             markdown: text,
             options: .init(
-                interpretedSyntax: syntax,
+                interpretedSyntax: .inlineOnlyPreservingWhitespace,
                 failurePolicy: .returnPartiallyParsedIfPossible
             )
         )) ?? AttributedString(text)
     }
 
-    @ViewBuilder
     var body: some View {
-        if containsMath {
-            HStack(alignment: .center, spacing: 3) {
-                ForEach(Array(segments.enumerated()), id: \.offset) { _, segment in
-                    switch segment {
-                    case .text(let text):
-                        Text(attributed(text, syntax: .inlineOnlyPreservingWhitespace))
-                            .textSelection(.enabled)
-                    case .math(let equation):
-                        MathJaxView(equation: equation, isInline: true)
-                            .frame(width: min(230, max(46, CGFloat(equation.count) * 10)), height: 34)
-                    }
-                }
-            }
+        Text(attributed(MarkdownProseFormatter.render(source)))
             .font(.system(size: 19, weight: .regular, design: .rounded))
             .foregroundStyle(.white.opacity(0.96))
             .tint(.cyan)
             .lineSpacing(4)
+            .lineLimit(nil)
+            .textSelection(.enabled)
+            .fixedSize(horizontal: false, vertical: true)
             .frame(maxWidth: .infinity, alignment: .leading)
-        } else {
-            Text(attributed(source))
-                .font(.system(size: 19, weight: .regular, design: .rounded))
-                .foregroundStyle(.white.opacity(0.96))
-                .tint(.cyan)
-                .lineSpacing(4)
-                .textSelection(.enabled)
-                .frame(maxWidth: .infinity, alignment: .leading)
-        }
     }
 }
 
@@ -222,7 +285,7 @@ private struct MarkdownMathBlock: View {
 
     var body: some View {
         ZStack(alignment: .topTrailing) {
-            MathJaxView(equation: equation, isInline: false)
+            KaTeXView(equation: equation)
                 .frame(height: min(150, max(64, CGFloat(equation.count / 48 + 1) * 38)))
             CopyControl(text: equation, label: "Copy equation")
                 .padding(8)
@@ -260,9 +323,8 @@ private struct CopyControl: View {
     }
 }
 
-private struct MathJaxView: NSViewRepresentable {
+private struct KaTeXView: NSViewRepresentable {
     let equation: String
-    let isInline: Bool
 
     final class Coordinator {
         var renderedEquation = ""
@@ -282,30 +344,51 @@ private struct MathJaxView: NSViewRepresentable {
     }
 
     func updateNSView(_ webView: WKWebView, context: Context) {
-        let renderingKey = "\(isInline):\(equation)"
-        guard context.coordinator.renderedEquation != renderingKey else { return }
-        context.coordinator.renderedEquation = renderingKey
-        webView.loadHTMLString(Self.html(for: equation, isInline: isInline), baseURL: nil)
+        guard context.coordinator.renderedEquation != equation else { return }
+        context.coordinator.renderedEquation = equation
+        let resourceDirectory = Bundle.main.resourceURL?.appendingPathComponent("KaTeX", isDirectory: true)
+        webView.loadHTMLString(KaTeXHTML.document(for: equation), baseURL: resourceDirectory)
     }
+}
 
-    private static func html(for equation: String, isInline: Bool) -> String {
-        let escaped = equation
-            .replacingOccurrences(of: "&", with: "&amp;")
-            .replacingOccurrences(of: "<", with: "&lt;")
-            .replacingOccurrences(of: ">", with: "&gt;")
-        let padding = isInline ? "2px" : "12px 48px"
-        let delimiters = isInline ? ("\\(", "\\)") : ("\\[", "\\]")
+enum KaTeXHTML {
+    static func document(for equation: String) -> String {
+        let encodedEquation = javaScriptString(equation)
         return """
         <!doctype html><html><head><meta charset="utf-8">
         <meta name="viewport" content="width=device-width,initial-scale=1">
+        <link rel="stylesheet" href="katex.min.css">
         <style>
           html,body{margin:0;min-height:100%;background:transparent;color:rgba(255,255,255,.95);overflow:hidden}
-          body{display:flex;align-items:center;justify-content:center;padding:\(padding);box-sizing:border-box;font-size:18px}
-          mjx-container{margin:0!important;max-width:100%;overflow-x:auto;overflow-y:hidden}
+          body{display:flex;align-items:center;justify-content:center;padding:12px 48px;box-sizing:border-box;font-size:18px}
+          #equation{max-width:100%;overflow-x:auto;overflow-y:hidden;padding:2px;box-sizing:border-box}
+          .katex-display{margin:0;max-width:100%}
         </style>
-        <script>window.MathJax={svg:{fontCache:'local'},options:{enableMenu:false}};</script>
-        <script defer src="https://cdn.jsdelivr.net/npm/mathjax@4/tex-svg.js"></script>
-        </head><body>\(delimiters.0)\(escaped)\(delimiters.1)</body></html>
+        </head><body><div id="equation"></div>
+        <script src="katex.min.js"></script>
+        <script>
+          const equation = \(encodedEquation);
+          const target = document.getElementById('equation');
+          if (window.katex) {
+            katex.render(equation, target, {
+              displayMode: true,
+              throwOnError: false,
+              strict: false,
+              output: 'htmlAndMathml'
+            });
+          } else {
+            target.textContent = equation;
+          }
+        </script></body></html>
         """
+    }
+
+    private static func javaScriptString(_ value: String) -> String {
+        guard
+            let data = try? JSONSerialization.data(withJSONObject: [value]),
+            let json = String(data: data, encoding: .utf8),
+            json.count >= 2
+        else { return "\"\"" }
+        return String(json.dropFirst().dropLast())
     }
 }
