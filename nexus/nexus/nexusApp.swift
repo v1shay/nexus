@@ -62,6 +62,8 @@ final class NotchController: ObservableObject {
     var isExpanded: Bool { interaction.presentation == .overlay }
     var isListening: Bool { interaction.presentation == .dictating }
     var isThinking: Bool { interaction.presentation == .thinking }
+    var isUsingTool: Bool { interaction.presentation == .tool }
+    var toolActivity: ToolActivity? { interaction.toolActivity }
     var transcript: String { interaction.transcript }
     var answer: String { interaction.answer }
 
@@ -235,6 +237,20 @@ final class NotchController: ObservableObject {
         if let screen { resize(to: closedSize(for: screen), animated: true) }
     }
 
+    /// Entry point for the future tool router. It is intentionally not called
+    /// by ordinary prompts yet; when tool execution is added, this keeps UI and
+    /// voice status synchronized through the same activity object.
+    func beginToolActivity(_ activity: ToolActivity) {
+        interaction.beginToolActivity(activity)
+        if let screen { resize(to: toolActivitySize(for: screen), animated: true) }
+        responseSpeaker.speakImmediately(activity.spokenStatus)
+    }
+
+    func finishToolActivity() {
+        interaction.beginThinking()
+        if let screen { resize(to: listeningSize(for: screen), animated: true) }
+    }
+
     func openModelAggregator() {
         if let modelPanel {
             modelPanel.makeKeyAndOrderFront(nil)
@@ -267,11 +283,11 @@ final class NotchController: ObservableObject {
     private func updateHover(_ hovering: Bool) {
         closeTask?.cancel()
         if hovering {
-            guard !isListening && !isThinking else { return }
+            guard !isListening && !isThinking && !isUsingTool else { return }
             automaticRevealIsWaitingForNotchVisit = false
             expand()
         } else {
-            guard !isListening && !isThinking else { return }
+            guard !isListening && !isThinking && !isUsingTool else { return }
             guard !automaticRevealIsWaitingForNotchVisit else { return }
             closeTask = Task { [weak self] in
                 try? await Task.sleep(for: .milliseconds(180))
@@ -343,6 +359,10 @@ final class NotchController: ObservableObject {
         NotchGeometry.listeningSize(for: closedSize(for: screen))
     }
 
+    private func toolActivitySize(for screen: NSScreen) -> CGSize {
+        CGSize(width: min(500, screen.frame.width * 0.42), height: 82)
+    }
+
     private func frame(for size: CGSize, on screen: NSScreen) -> NSRect {
         NotchGeometry.centeredTopFrame(for: size, on: screen.frame)
     }
@@ -354,6 +374,7 @@ final class NotchController: ObservableObject {
         case .idle: closedSize(for: screen)
         case .dictating: listeningSize(for: screen)
         case .thinking: listeningSize(for: screen)
+        case .tool: toolActivitySize(for: screen)
         case .overlay: expandedSize(for: screen)
         }
         resize(to: size, animated: false)

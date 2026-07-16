@@ -143,4 +143,22 @@ final class NexusGeometryTests: XCTestCase {
         ])
     }
 
+    func testFutureGoogleToolActivityCarriesUIAndVoiceStatus() {
+        let activity = ToolActivity.googleSearch(query: "Swift concurrency")
+        var state = NotchInteractionState()
+        state.beginDictation()
+        state.updateTranscript("Research Swift concurrency")
+        state.finishDictation()
+        state.beginToolActivity(activity)
+
+        XCTAssertEqual(state.presentation, .tool)
+        XCTAssertEqual(state.toolActivity?.status, "Researching Swift concurrency with Google")
+        XCTAssertEqual(state.toolActivity?.spokenStatus, "Searching Google for Swift concurrency.")
+        if case .svg(let data, _) = activity.icon {
+            XCTAssertTrue(String(data: data, encoding: .utf8)?.contains("<svg") == true)
+        } else {
+            XCTFail("Google Search should carry its SVG icon")
+        }
+    }
+
 }

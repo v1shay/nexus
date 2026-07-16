@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 /// The panel is visually indistinguishable from the physical cutout at rest.
@@ -7,7 +8,10 @@ struct ContentView: View {
 
     var body: some View {
         ZStack(alignment: .top) {
-            if notch.isListening || notch.isThinking {
+            if notch.isUsingTool, let activity = notch.toolActivity {
+                ToolActivityNotch(activity: activity)
+                    .transition(.opacity.combined(with: .scale(scale: 0.94, anchor: .top)))
+            } else if notch.isListening || notch.isThinking {
                 ListeningWings(isThinking: notch.isThinking)
                     .transition(.opacity.combined(with: .scale(scale: 0.92, anchor: .top)))
             } else {
@@ -27,6 +31,74 @@ struct ContentView: View {
         .contentShape(Rectangle())
         .animation(.easeInOut(duration: 0.18), value: notch.isListening)
         .animation(.easeInOut(duration: 0.22), value: notch.presentation)
+    }
+}
+
+private struct ToolActivityNotch: View {
+    let activity: ToolActivity
+
+    var body: some View {
+        ZStack(alignment: .top) {
+            NotchSurface(cornerRadius: 18).fill(.black)
+            HStack(spacing: 0) {
+                AgentOrb(size: 27).frame(width: NotchGeometry.wingWidth)
+                Color.clear.frame(maxWidth: .infinity)
+                ToolIconView(source: activity.icon)
+                    .frame(width: NotchGeometry.wingWidth)
+            }
+            .frame(height: 34)
+
+            ShimmeringStatusText(text: activity.status)
+                .padding(.horizontal, 24)
+                .padding(.top, 45)
+        }
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("\(activity.toolName). \(activity.status)")
+    }
+}
+
+private struct ToolIconView: View {
+    let source: ToolIconSource
+
+    var body: some View {
+        Group {
+            switch source {
+            case .systemSymbol(let name):
+                Image(systemName: name).resizable().scaledToFit()
+            case .svg(let data, let fallback):
+                if let image = NSImage(data: data) {
+                    Image(nsImage: image).resizable().scaledToFit()
+                } else {
+                    Image(systemName: fallback).resizable().scaledToFit()
+                }
+            }
+        }
+        .frame(width: 24, height: 24)
+        .foregroundStyle(.white.opacity(0.88))
+    }
+}
+
+private struct ShimmeringStatusText: View {
+    let text: String
+
+    var body: some View {
+        TimelineView(.animation(minimumInterval: 1 / 30)) { timeline in
+            let phase = timeline.date.timeIntervalSinceReferenceDate
+                .truncatingRemainder(dividingBy: 1.8) / 1.8
+            ZStack {
+                Text(text).foregroundStyle(.white.opacity(0.42))
+                LinearGradient(
+                    colors: [.clear, .cyan.opacity(0.7), .white, .cyan.opacity(0.7), .clear],
+                    startPoint: UnitPoint(x: phase - 0.38, y: 0.5),
+                    endPoint: UnitPoint(x: phase + 0.38, y: 0.5)
+                )
+                .mask(Text(text))
+                .shadow(color: .cyan.opacity(0.65), radius: 7)
+            }
+            .font(.system(size: 13, weight: .medium, design: .rounded))
+            .lineLimit(1)
+            .frame(maxWidth: .infinity)
+        }
     }
 }
 
