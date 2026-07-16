@@ -7,29 +7,19 @@ struct ContentView: View {
 
     var body: some View {
         ZStack(alignment: .top) {
-            NotchSurface(cornerRadius: notch.isExpanded ? 29 : 10)
-                .fill(.black.opacity(notch.isExpanded ? 0.82 : 1))
-                .background(.ultraThinMaterial, in: NotchSurface(cornerRadius: notch.isExpanded ? 29 : 10))
-                .overlay {
-                    NotchSurface(cornerRadius: notch.isExpanded ? 29 : 10)
-                        .stroke(.white.opacity(notch.isExpanded ? 0.18 : 0), lineWidth: 0.8)
-                }
-                .overlay(alignment: .bottom) {
-                    if notch.isExpanded {
-                        LinearGradient(
-                            colors: [.clear, .black.opacity(0.38)],
-                            startPoint: .top,
-                            endPoint: .bottom
-                        )
-                        .clipShape(NotchSurface(cornerRadius: 29))
+            if notch.isListening {
+                ListeningWings()
+                    .transition(.opacity.combined(with: .scale(scale: 0.92, anchor: .top)))
+            } else {
+                NotchSurface(cornerRadius: notch.isExpanded ? 29 : 10)
+                    .fill(.black.opacity(notch.isExpanded ? 0.82 : 1))
+                    .background(.ultraThinMaterial, in: NotchSurface(cornerRadius: notch.isExpanded ? 29 : 10))
+                    .overlay {
+                        NotchSurface(cornerRadius: notch.isExpanded ? 29 : 10)
+                            .stroke(.white.opacity(notch.isExpanded ? 0.18 : 0), lineWidth: 0.8)
                     }
-                }
 
-            Group {
-                if notch.isListening || notch.isHoverPreview {
-                    ListeningContents()
-                        .transition(.opacity.combined(with: .scale(scale: 0.82)))
-                } else if notch.hasTranscript {
+                if notch.isExpanded {
                     TranscriptContents()
                         .transition(.opacity.combined(with: .move(edge: .top)))
                 }
@@ -44,13 +34,24 @@ struct ContentView: View {
     }
 }
 
-private struct ListeningContents: View {
-    @EnvironmentObject private var notch: NotchController
+private struct ListeningWings: View {
+    private let wingWidth: CGFloat = 62
 
     var body: some View {
-        HStack(spacing: 15) {
-            AgentOrb(size: notch.isHoverPreview ? 24 : 29)
-            DictationBars()
+        ZStack {
+            NotchSurface(cornerRadius: 13)
+                .fill(.black)
+
+            HStack(spacing: 0) {
+                AgentOrb(size: 27)
+                    .frame(width: wingWidth)
+
+                Color.clear
+                    .frame(maxWidth: .infinity)
+
+                DictationBars()
+                    .frame(width: wingWidth)
+            }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .accessibilityElement(children: .combine)
@@ -79,7 +80,7 @@ private struct TranscriptContents: View {
 
             Spacer(minLength: 20)
 
-            Text("Yo Nexus, send an email to Sam Altman asking for 2 million OpenAI credits, we just ran out.")
+            Text(notch.transcript)
                 .font(.system(size: 25, weight: .medium, design: .rounded))
                 .tracking(-0.3)
                 .lineSpacing(5)
