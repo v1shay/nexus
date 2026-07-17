@@ -327,9 +327,11 @@ final class NotchController: ObservableObject {
             if let screen { resize(to: expandedSize(for: screen), animated: true) }
             await responseSpeaker.speakImmediatelyAndWait(acknowledgement)
             guard !Task.isCancelled, responseGeneration == generation else { return }
+            interaction.beginThinking()
+            if let screen { resize(to: listeningSize(for: screen), animated: true) }
             do {
                 let webPlan = await plannedWebSearch
-                let webContext = await retrieveWebContext(plan: webPlan, generation: generation)
+                let webRetrieval = await retrieveWebContext(plan: webPlan, generation: generation)
                 guard !Task.isCancelled, responseGeneration == generation else { return }
                 if let compound = NexCompoundMemoryQuery.split(prompt) {
                     // Answer the independent portion first, then visibly check
@@ -337,7 +339,9 @@ final class NotchController: ObservableObject {
                     // second segment. This avoids one long silent retrieval.
                     interaction.beginThinking()
                     if let screen { resize(to: listeningSize(for: screen), animated: true) }
-                    var immediateMessages = await conversationSession.contextMessages(webContext: webContext)
+                    var immediateMessages = await conversationSession.contextMessages(
+                        webContext: webRetrieval.context
+                    )
                     immediateMessages.append(.init(
                         role: "system",
                         content: "For this first response segment, answer only this independent question: \(compound.immediateQuestion). Do not answer the memory-dependent part yet."
@@ -362,7 +366,7 @@ final class NotchController: ObservableObject {
                     var memoryMessages = await conversationSession.contextMessages(
                         retrievedContext: retrievedContext,
                         memoryLookupPerformed: true,
-                        webContext: webContext
+                        webContext: webRetrieval.context
                     )
                     memoryMessages.append(.init(role: "assistant", content: immediateRenderedAnswer))
                     memoryMessages.append(.init(
@@ -381,7 +385,7 @@ final class NotchController: ObservableObject {
                     let messages = await conversationSession.contextMessages(
                         retrievedContext: retrievedContext,
                         memoryLookupPerformed: memoryLookupPerformed,
-                        webContext: webContext
+                        webContext: webRetrieval.context
                     )
                     let answer = try await streamModelResponse(messages: messages, generation: generation)
                     let finalSpeechDelta = responseSpeechCursor.consume(delta: "", accumulated: answer)
@@ -389,8 +393,11 @@ final class NotchController: ObservableObject {
                 }
                 guard !Task.isCancelled, responseGeneration == generation else { return }
                 let reveal = !suppressAutomaticResponseReveal
-                interaction.receiveAnswer(responseSpeechCursor.text, reveal: reveal)
-                let assistantTurn = await conversationSession.appendAssistant(responseSpeechCursor.text)
+                let completedAnswer = webRetrieval.response?.appendingSourceLinks(
+                    to: responseSpeechCursor.text
+                ) ?? responseSpeechCursor.text
+                interaction.receiveAnswer(completedAnswer, reveal: reveal)
+                let assistantTurn = await conversationSession.appendAssistant(completedAnswer)
                 await memory.conversationDidChange()
                 responseIsStreaming = false
                 automaticRevealIsWaitingForNotchVisit = reveal
@@ -413,6 +420,9 @@ final class NotchController: ObservableObject {
     }
 
     private func planWebSearch(for prompt: String) async -> NexWebSearchPlan {
+        if NexWebSearchPlanner.obviousWebNeed(prompt) {
+            return .init(shouldSearch: true, query: NexWebSearchPlanner.fallbackQuery(prompt))
+        }
         do {
             let raw = try await modelDownloadViewModel.response(
                 messages: NexWebSearchPlanner.planningMessages(for: prompt),
@@ -431,17 +441,28 @@ final class NotchController: ObservableObject {
         }
     }
 
-    private func retrieveWebContext(plan: NexWebSearchPlan, generation: UUID) async -> String? {
-        guard plan.shouldSearch, let query = plan.query, !query.isEmpty else { return nil }
+    private struct WebRetrieval {
+        let context: String?
+        let response: NexWebSearchResponse?
+
+        static let none = WebRetrieval(context: nil, response: nil)
+    }
+
+    private func retrieveWebContext(plan: NexWebSearchPlan, generation: UUID) async -> WebRetrieval {
+        guard plan.shouldSearch, let query = plan.query, !query.isEmpty else { return .none }
+        NSLog("Nex web search query: %@", query)
         do {
             let response = try await webSearch.search(query: query)
-            return response.modelContext()
+            return .init(context: response.modelContext(), response: response)
         } catch is CancellationError {
-            return nil
+            return .none
         } catch {
-            guard !Task.isCancelled, responseGeneration == generation else { return nil }
+            guard !Task.isCancelled, responseGeneration == generation else { return .none }
             try? await Task.sleep(for: .milliseconds(500))
-            return "Live web search was required for this request but failed: \(error.localizedDescription). Do not present changing facts as verified or fabricate sources; briefly explain that live lookup failed."
+            return .init(
+                context: "Live web search was required for this request but failed: \(error.localizedDescription). Do not present changing facts as verified or fabricate sources; briefly explain that live lookup failed.",
+                response: nil
+            )
         }
     }
 

@@ -5,16 +5,26 @@ final class NexWebSearchTests: XCTestCase {
     func testLiveCurrentEventsSearchWhenEnabled() async throws {
         try XCTSkipUnless(
             ProcessInfo.processInfo.environment["NEXUS_RUN_LIVE_WEB_TESTS"] == "1",
-            "Opt-in integration test for public search providers."
+            "Live web tests are opt-in"
         )
         let service = NexWebSearchService()
-        let response = try await service.search(
-            query: "latest emerging virus outbreak July 2026 global health"
-        ) { _, _ in }
-
-        XCTAssertFalse(response.results.isEmpty)
-        XCTAssertTrue(response.results.allSatisfy { NexWebURLSafety.isSyntacticallyPublic($0.url) })
-        XCTAssertTrue(response.modelContext().contains("Web source 1"))
+        let cases = [
+            ("What is that new virus spreading right now?", ["virus", "outbreak", "health"]),
+            ("What changed in the newest Swift release?", ["swift", "release"]),
+            ("What is the biggest AI news today?", ["ai", "artificial intelligence"])
+        ]
+        for (prompt, topicalTerms) in cases {
+            let query = NexWebSearchQueryBuilder.query(for: prompt)
+            let response = try await service.search(query: query) { _, _ in }
+            let searchable = response.results.map { $0.title + " " + $0.snippet }
+                .joined(separator: " ").lowercased()
+            print("LIVE WEB QUERY: \(query)")
+            print("LIVE WEB TITLES: \(response.results.map(\.title).joined(separator: " | "))")
+            XCTAssertFalse(response.results.isEmpty)
+            XCTAssertTrue(response.results.allSatisfy { NexWebURLSafety.isSyntacticallyPublic($0.url) })
+            XCTAssertTrue(topicalTerms.contains(where: searchable.contains), searchable)
+            XCTAssertTrue(response.modelContext().contains("Web source 1"))
+        }
     }
 
     func testPlannerRequestsCurrentInformationAndCreatesCleanQuery() {
@@ -22,7 +32,8 @@ final class NexWebSearchTests: XCTestCase {
         let plan = NexWebSearchPlanner.parse(raw, originalPrompt: "what's that new virus spreading")
 
         XCTAssertTrue(plan.shouldSearch)
-        XCTAssertEqual(plan.query, "Chikungunya outbreak latest July 2026")
+        XCTAssertTrue(plan.query?.contains("chikungunya outbreak") == true)
+        XCTAssertTrue(plan.query?.contains("virus") == true)
         XCTAssertTrue(NexWebSearchPlanner.obviousWebNeed("What changed in the newest version?"))
     }
 
@@ -44,7 +55,55 @@ final class NexWebSearchTests: XCTestCase {
         )
 
         XCTAssertTrue(plan.shouldSearch)
-        XCTAssertEqual(plan.query, prompt)
+        XCTAssertTrue(plan.query?.hasPrefix("virus outbreak health") == true)
+        XCTAssertTrue(plan.query?.contains("spreading") == true)
+        XCTAssertGreaterThanOrEqual(plan.query?.split(separator: " ").count ?? 0, 5)
+    }
+
+    func testOneWordPlannerQueriesAreRebuiltFromTheActualPrompt() {
+        let cases = [
+            ("What is that new virus spreading right now?", "what", "virus"),
+            ("What changed in the newest Swift release?", "changes", "swift"),
+            ("What is the biggest AI news today?", "big", "ai")
+        ]
+
+        for (prompt, badQuery, requiredTopic) in cases {
+            let raw = "{\"use_web\":true,\"query\":\"\(badQuery)\"}"
+            let query = NexWebSearchPlanner.parse(raw, originalPrompt: prompt).query ?? ""
+            XCTAssertNotEqual(query, badQuery)
+            XCTAssertTrue(query.contains(requiredTopic), query)
+            XCTAssertGreaterThanOrEqual(query.split(separator: " ").count, 3)
+        }
+    }
+
+    func testSpeechTranscriptionTyposAreNormalizedInFallbackQueries() {
+        let query = NexWebSearchQueryBuilder.query(
+            for: "waht changed in the newest siwf trealize",
+            now: Date(timeIntervalSince1970: 1_784_236_800)
+        )
+
+        XCTAssertTrue(query.contains("swift"))
+        XCTAssertTrue(query.contains("release"))
+    }
+
+    func testCurrentSearchQueriesPutTheActualTopicBeforeGenericModifiers() {
+        let now = Date(timeIntervalSince1970: 1_784_236_800)
+
+        XCTAssertTrue(
+            NexWebSearchQueryBuilder.query(
+                for: "What changed in the newest Swift release?", now: now
+            ).hasPrefix("swift programming language release")
+        )
+        XCTAssertTrue(
+            NexWebSearchQueryBuilder.query(
+                for: "What is the biggest AI news today?", now: now
+            ).hasPrefix("artificial intelligence ai news")
+        )
+        XCTAssertTrue(
+            NexWebSearchQueryBuilder.query(
+                for: "What is that new virus spreading right now?", now: now
+            ).hasPrefix("virus outbreak health")
+        )
     }
 
     func testURLSafetyRejectsLocalAndPrivateTargets() async {

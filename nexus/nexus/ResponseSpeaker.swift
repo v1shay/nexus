@@ -115,7 +115,11 @@ final class ResponseSpeaker {
 
     private func waitForPiperPlayback(after startingEpoch: UInt64, text: String) async {
         let wordCount = max(1, text.split(whereSeparator: { $0.isWhitespace }).count)
-        let timeout = min(15.0, max(5.0, Double(wordCount) / 2.2 + 4.0))
+        // The old five-second minimum made a completed two-word
+        // acknowledgement look frozen whenever Piper's final buffer callback
+        // arrived late. Keep the real playback drain check, but bound its
+        // fallback to the phrase's expected speaking time.
+        let timeout = min(8.0, max(2.5, Double(wordCount) / 2.2 + 1.5))
         let deadline = ProcessInfo.processInfo.systemUptime + timeout
         var observedAudio = false
 
@@ -400,8 +404,13 @@ struct StreamingSpeechMarkdownFilter: Equatable {
 
     private var mode: Mode = .prose
     private var pendingBackticks = 0
+    private var linkFilter = StreamingSpeechLinkFilter()
 
     mutating func append(_ text: String) -> String {
+        processMarkdown(linkFilter.append(text))
+    }
+
+    private mutating func processMarkdown(_ text: String) -> String {
         var output = ""
         for character in text {
             switch mode {
@@ -443,7 +452,7 @@ struct StreamingSpeechMarkdownFilter: Equatable {
     }
 
     mutating func finish() -> String {
-        var output = ""
+        var output = processMarkdown(linkFilter.finish())
         switch mode {
         case .prose:
             flushLiteralBackticks(into: &output)
@@ -454,6 +463,7 @@ struct StreamingSpeechMarkdownFilter: Equatable {
         }
         mode = .prose
         pendingBackticks = 0
+        linkFilter = StreamingSpeechLinkFilter()
         return output
     }
 
@@ -495,12 +505,79 @@ struct StreamingSpeechMarkdownFilter: Equatable {
     }
 }
 
+/// Buffers Markdown links across token boundaries and emits only their human
+/// label. A URL can therefore never reach the sentence chunker half-finished
+/// and be spoken before the final `)` arrives.
+struct StreamingSpeechLinkFilter: Equatable {
+    private enum Mode: Equatable {
+        case text
+        case label(String)
+        case awaitingDestination(String)
+        case destination(label: String, depth: Int)
+    }
+
+    private var mode: Mode = .text
+
+    mutating func append(_ text: String) -> String {
+        var output = ""
+        for character in text {
+            switch mode {
+            case .text:
+                if character == "[" {
+                    mode = .label("")
+                } else {
+                    output.append(character)
+                }
+            case .label(let label):
+                if character == "]" {
+                    mode = .awaitingDestination(label)
+                } else if character == "\n" || label.count >= 200 {
+                    output += "[" + label + String(character)
+                    mode = .text
+                } else {
+                    mode = .label(label + String(character))
+                }
+            case .awaitingDestination(let label):
+                if character == "(" {
+                    mode = .destination(label: label, depth: 1)
+                } else {
+                    output += "[" + label + "]" + String(character)
+                    mode = .text
+                }
+            case .destination(let label, let depth):
+                if character == "(" {
+                    mode = .destination(label: label, depth: depth + 1)
+                } else if character == ")" {
+                    if depth == 1 {
+                        output += label
+                        mode = .text
+                    } else {
+                        mode = .destination(label: label, depth: depth - 1)
+                    }
+                }
+            }
+        }
+        return output
+    }
+
+    mutating func finish() -> String {
+        defer { mode = .text }
+        switch mode {
+        case .text: return ""
+        case .label(let label): return "[" + label
+        case .awaitingDestination(let label): return "[" + label + "]"
+        case .destination(let label, _): return label
+        }
+    }
+}
+
 enum SpeechSanitizer {
     static func forSpeech(_ markdown: String) -> String {
         markdown
             .replacingOccurrences(of: #"```[\s\S]*?```"#, with: " code block ", options: .regularExpression)
             .replacingOccurrences(of: #"`([^`]+)`"#, with: "$1", options: .regularExpression)
             .replacingOccurrences(of: #"\[([^\]]+)\]\([^\)]+\)"#, with: "$1", options: .regularExpression)
+            .replacingOccurrences(of: #"https?://[^\s]+"#, with: "", options: [.regularExpression, .caseInsensitive])
             .replacingOccurrences(of: #"[*_>#]"#, with: "", options: .regularExpression)
             .replacingOccurrences(of: #"\s+"#, with: " ", options: .regularExpression)
             .trimmingCharacters(in: .whitespacesAndNewlines)

@@ -318,6 +318,22 @@ final class NexusGeometryTests: XCTestCase {
         XCTAssertFalse(spoken.contains("secret"))
     }
 
+    func testStreamingSpeechReadsLinkLabelsButNeverCitationURLs() {
+        var filter = StreamingSpeechMarkdownFilter()
+        var spoken = filter.append("According to [Swift release")
+        spoken += filter.append(" notes](https://swift.org/blog/release-(latest)), it changed.")
+        spoken += filter.finish()
+
+        XCTAssertTrue(spoken.contains("Swift release notes"))
+        XCTAssertTrue(spoken.contains("it changed"))
+        XCTAssertFalse(spoken.contains("https"))
+        XCTAssertFalse(spoken.contains("swift.org"))
+        XCTAssertEqual(
+            SpeechSanitizer.forSpeech("Source https://example.com/news?id=1"),
+            "Source"
+        )
+    }
+
     func testThinkingBeginsOnlyAfterAcknowledgementStateIsFinished() {
         var state = NotchInteractionState()
         state.beginDictation()

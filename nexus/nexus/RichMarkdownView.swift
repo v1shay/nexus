@@ -237,7 +237,7 @@ private struct MarkdownProseView: View {
         Text(attributed(MarkdownProseFormatter.render(source)))
             .font(.system(size: 19, weight: .regular, design: .rounded))
             .foregroundStyle(.white.opacity(0.96))
-            .tint(.cyan)
+            .tint(.blue)
             .lineSpacing(4)
             .lineLimit(nil)
             .textSelection(.enabled)
