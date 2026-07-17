@@ -102,7 +102,10 @@ extension NexusGeometryTests {
         try await fixture.index.index(chat.document)
         try await fixture.index.index(memory.document)
 
-        let relevant = try await fixture.index.search(query: "Have I used neural networks in Atlas?")
+        let relevant = try await fixture.index.search(
+            query: "Have I used neural networks in Atlas?",
+            options: .init(evidenceOnly: true)
+        )
         let unrelated = try await fixture.index.search(query: "medieval sourdough taxation")
 
         XCTAssertTrue(relevant.contains(where: { $0.sourceID == memory.document.id }))
@@ -328,13 +331,82 @@ extension NexusGeometryTests {
             "Where do I go to high school?",
             "What are my current research roles?",
             "How do I prefer answers to be written?",
-            "Check your memory: what is Moonshot Robotics?"
+            "Check your memory: what is Moonshot Robotics?",
+            "Should I do open source contributions for college?",
+            "What is the best demo for my AI agent?",
+            "Give me an ab workout I can do on my bed"
         ]
 
         XCTAssertTrue(personalPrompts.allSatisfy(NexMemoryRetrievalIntent.shouldSearch))
         XCTAssertFalse(NexMemoryRetrievalIntent.shouldSearch(prompt: "What's the weather?"))
         XCTAssertFalse(NexMemoryRetrievalIntent.shouldSearch(prompt: "Why?"))
         XCTAssertFalse(NexMemoryRetrievalIntent.shouldSearch(prompt: "Continue"))
+    }
+
+    func testEvidenceOnlyRetrievalRejectsSavedAssistantHallucinations() async throws {
+        let fixture = try NexMemoryFixture()
+        let session = NexConversationSession()
+        await session.appendUser("I attend Lynbrook High School.")
+        let identitySnapshot = await session.snapshot()
+        let evidenceID = try XCTUnwrap(identitySnapshot.turns.last?.id)
+        let memory = try await fixture.vault.saveMemory(
+            .init(
+                idempotencyKey: "school-lynbrook",
+                kind: .personalContext,
+                title: "School",
+                statement: "Vishay attends Lynbrook High School.",
+                topics: ["school", "education"],
+                entities: ["Lynbrook High School", "Vishay"],
+                evidenceMessageIDs: [evidenceID],
+                importance: 1,
+                confidence: 1
+            ),
+            supportedBy: identitySnapshot
+        )
+        await session.appendUser("What school do I attend?")
+        await session.appendAssistant("You attend Crestwood University, ranked #23 nationally.")
+        let chat = try await fixture.vault.saveConversation(await session.snapshot())
+        try await fixture.index.index(memory.document)
+        try await fixture.index.index(chat.document)
+
+        let results = try await fixture.index.search(
+            query: "What school do I attend?",
+            options: .init(evidenceOnly: true)
+        )
+
+        XCTAssertTrue(results.contains(where: { $0.excerpt.contains("Lynbrook High School") }))
+        XCTAssertFalse(results.contains(where: { $0.excerpt.contains("Crestwood") }))
+        XCTAssertTrue(results.allSatisfy(\.storedEvidence))
+        XCTAssertFalse(results.contains(where: { $0.sourceRole == .assistant }))
+    }
+
+    func testMissingMemoryEvidenceAddsAnExplicitDoNotGuessContract() async {
+        let session = NexConversationSession()
+        await session.appendUser("What school do I attend?")
+
+        let messages = await session.contextMessages(memoryLookupPerformed: true)
+
+        XCTAssertTrue(messages.contains(where: {
+            $0.role == "system" && $0.content.contains("found no relevant user-supported evidence")
+        }))
+    }
+
+    func testRetrievedEvidenceCannotBeContaminatedByPriorAssistantClaims() async throws {
+        let session = NexConversationSession()
+        await session.appendUser("What school do I attend?")
+        await session.appendAssistant("You attend Crestwood University.")
+        await session.appendUser("Are you sure?")
+
+        let messages = await session.contextMessages(
+            retrievedContext: "[source_id=profile] You attend Lynbrook High School.",
+            memoryLookupPerformed: true
+        )
+        let evidenceIndex = try XCTUnwrap(messages.firstIndex(where: { $0.content.contains("source_id=profile") }))
+
+        XCTAssertFalse(messages.contains(where: { $0.content.contains("Crestwood") }))
+        XCTAssertTrue(messages[..<evidenceIndex].contains(where: { $0.content.contains("What school") }))
+        XCTAssertTrue(messages[evidenceIndex].content.contains("overrides any conflicting factual claim"))
+        XCTAssertEqual(messages.last?.content, "Are you sure?")
     }
 
     func testStreamingCursorPreservesOrderedTwoPhaseAnswer() {

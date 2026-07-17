@@ -78,7 +78,8 @@ actor NexMemoryService {
         var ingested = 0
         var unchanged = 0
         let embeddingChanged = try await index.requiresEmbeddingRebuild()
-        if embeddingChanged {
+        let indexFormatChanged = try await index.requiresIndexFormatRebuild()
+        if embeddingChanged || indexFormatChanged {
             try await index.rebuild(documents: scan.documents, tombstonedIDs: scan.tombstonedIDs)
             ingested = scan.documents.count
         } else {
@@ -206,7 +207,8 @@ extension NexMemoryService {
                 "query": .init(.string, required: true),
                 "limit": .init(.integer, minimum: 1, maximum: 12),
                 "document_types": .init(.stringArray),
-                "include_transcript_excerpts": .init(.boolean)
+                "include_transcript_excerpts": .init(.boolean),
+                "evidence_only": .init(.boolean)
             ]),
             handler: { arguments, context in
                 let query = arguments["query"]?.string ?? ""
@@ -218,7 +220,8 @@ extension NexMemoryService {
                 let options = NexMemorySearchOptions(
                     limit: limit,
                     documentTypes: Set(typeNames.compactMap(NexMemoryDocumentType.init)),
-                    includeTranscriptExcerpts: arguments["include_transcript_excerpts"] == .bool(false) ? false : true
+                    includeTranscriptExcerpts: arguments["include_transcript_excerpts"] == .bool(false) ? false : true,
+                    evidenceOnly: arguments["evidence_only"] == .bool(false) ? false : true
                 )
                 let results = try await service.search(query, options: options)
                 return .object([
@@ -391,28 +394,79 @@ extension NexMemoryService {
             "title": .string(result.title),
             "excerpt": .string(result.excerpt),
             "score": .number(result.score),
-            "stored_evidence": .bool(true)
+            "stored_evidence": .bool(result.storedEvidence),
+            "source_role": result.sourceRole.map { .string($0.rawValue) } ?? .null
         ])
     }
 }
 
 enum NexMemoryRetrievalIntent {
-    static func shouldSearch(prompt: String) -> Bool {
-        let normalized = prompt.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
-        let activeOnly = ["why", "why?", "continue", "continue.", "do that", "do it", "yes", "no"]
-        if activeOnly.contains(normalized) { return false }
-        let signals = [
+    enum Kind: String, Equatable, Sendable {
+        case none
+        case explicit
+        case personalFact = "personal_fact"
+        case personalizedAdvice = "personalized_advice"
+        case ownedWork = "owned_work"
+        case conversationHistory = "conversation_history"
+    }
+
+    static func infer(prompt: String) -> Kind {
+        let normalized = prompt
+            .lowercased()
+            .replacingOccurrences(of: "’", with: "'")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let compact = normalized.split { !$0.isLetter && !$0.isNumber }.joined(separator: " ")
+        let activeOnly = ["why", "continue", "do that", "do it", "yes", "no", "go on"]
+        if activeOnly.contains(compact) { return .none }
+
+        let explicitSignals = [
             "check your memory", "check memory", "from your memory", "according to your memory",
-            "remember", "memory", "have i", "did i", "was i", "who am i", "about me",
-            "what's my", "what is my", "what are my", "what were my",
-            "where do i", "where did i", "which of my",
-            "how do i prefer", "how should you answer me", "my project", "my preference",
-            "my name", "my github", "my school", "my career", "my research", "my role",
-            "my background", "my education", "my interests", "my skills", "my nonprofit",
-            "i told you", "we discussed", "we decided", "last time", "previous conversation",
-            "before", "what do you know about me", "resume", "saved chat"
+            "what do you remember", "search memory", "look in memory"
         ]
-        return signals.contains(where: normalized.contains)
+        if explicitSignals.contains(where: normalized.contains) { return .explicit }
+
+        let historySignals = [
+            "i told you", "we discussed", "we decided", "last time", "previous conversation",
+            "earlier conversation", "saved chat", "resume our", "what did we", "where did we leave"
+        ]
+        if historySignals.contains(where: normalized.contains) { return .conversationHistory }
+
+        let adviceSignals = [
+            "should i", "would i", "for me", "best for me", "recommend for me",
+            "based on my", "given my", "fit my", "suit me", "help me choose"
+        ]
+        if adviceSignals.contains(where: normalized.contains) { return .personalizedAdvice }
+
+        let tokens = Set(compact.split(separator: " ").map(String.init))
+        let personalDomainSignals: Set<String> = [
+            "workout", "exercise", "fitness", "health", "diet", "sleep", "college",
+            "career", "school", "application", "resume", "portfolio", "project", "demo"
+        ]
+        if !tokens.isDisjoint(with: ["i", "me", "my", "mine"]),
+           !tokens.isDisjoint(with: personalDomainSignals) {
+            return .personalizedAdvice
+        }
+
+        let ownedWorkSignals = [
+            "my project", "my projects", "my agent", "my app", "my research", "my codebase",
+            "my repository", "my repo", "my startup", "my nonprofit", "my portfolio",
+            "my resume", "my github", "my demo", "my work"
+        ]
+        if ownedWorkSignals.contains(where: normalized.contains) { return .ownedWork }
+
+        let personalFactSignals = [
+            "remember", "memory", "have i", "did i", "was i", "who am i", "about me",
+            "what's my", "what is my", "what are my", "what were my", "where do i",
+            "where did i", "which of my", "how do i prefer", "how should you answer me",
+            "my name", "my school", "my career", "my role", "my background", "my education",
+            "my interests", "my skills", "my preference", "my preferences", "my goals",
+            "my profile", "my college", "my experience"
+        ]
+        return personalFactSignals.contains(where: normalized.contains) ? .personalFact : .none
+    }
+
+    static func shouldSearch(prompt: String) -> Bool {
+        infer(prompt: prompt) != .none
     }
 }
 

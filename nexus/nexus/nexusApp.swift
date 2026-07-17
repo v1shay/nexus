@@ -349,7 +349,10 @@ final class NotchController: ObservableObject {
                     interaction.beginThinking()
                     if let screen { resize(to: listeningSize(for: screen), animated: true) }
                     responseSpeechCursor.beginSegment()
-                    var memoryMessages = await conversationSession.contextMessages(retrievedContext: retrievedContext)
+                    var memoryMessages = await conversationSession.contextMessages(
+                        retrievedContext: retrievedContext,
+                        memoryLookupPerformed: true
+                    )
                     memoryMessages.append(.init(role: "assistant", content: immediateRenderedAnswer))
                     memoryMessages.append(.init(
                         role: "system",
@@ -359,11 +362,15 @@ final class NotchController: ObservableObject {
                     let finalDelta = responseSpeechCursor.consume(delta: "", accumulated: memoryAnswer)
                     if !finalDelta.isEmpty { responseSpeaker.append(finalDelta) }
                 } else {
+                    let memoryLookupPerformed = NexMemoryRetrievalIntent.shouldSearch(prompt: prompt)
                     let retrievedContext = await retrieveMemoryContext(prompt: prompt, generation: generation)
                     guard !Task.isCancelled, responseGeneration == generation else { return }
                     interaction.beginThinking()
                     if let screen { resize(to: listeningSize(for: screen), animated: true) }
-                    let messages = await conversationSession.contextMessages(retrievedContext: retrievedContext)
+                    let messages = await conversationSession.contextMessages(
+                        retrievedContext: retrievedContext,
+                        memoryLookupPerformed: memoryLookupPerformed
+                    )
                     let answer = try await streamModelResponse(messages: messages, generation: generation)
                     let finalSpeechDelta = responseSpeechCursor.consume(delta: "", accumulated: answer)
                     if !finalSpeechDelta.isEmpty { responseSpeaker.append(finalSpeechDelta) }

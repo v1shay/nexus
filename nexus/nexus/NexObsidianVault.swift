@@ -800,7 +800,7 @@ private enum NexMarkdownCodec {
             for (index, turn) in conversation.turns.enumerated() where turn.state == .finalized {
                 chunks.append(.init(
                     id: "\(documentID.uuidString.lowercased()):message:\(turn.id.uuidString.lowercased())",
-                    kind: "transcript_excerpt",
+                    kind: turn.role == .user ? "user_transcript" : "assistant_transcript",
                     text: turn.text,
                     sourceMessageID: turn.id,
                     ordinal: index + 1

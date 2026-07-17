@@ -63,19 +63,22 @@ struct NexMemorySearchOptions: Codable, Equatable, Sendable {
     var projects: Set<String>
     var entities: Set<String>
     var includeTranscriptExcerpts: Bool
+    var evidenceOnly: Bool
 
     init(
         limit: Int = 6,
         documentTypes: Set<NexMemoryDocumentType> = [],
         projects: Set<String> = [],
         entities: Set<String> = [],
-        includeTranscriptExcerpts: Bool = true
+        includeTranscriptExcerpts: Bool = true,
+        evidenceOnly: Bool = false
     ) {
         self.limit = min(20, max(1, limit))
         self.documentTypes = documentTypes
         self.projects = projects
         self.entities = entities
         self.includeTranscriptExcerpts = includeTranscriptExcerpts
+        self.evidenceOnly = evidenceOnly
     }
 }
 
@@ -92,6 +95,7 @@ struct NexMemorySearchResult: Codable, Equatable, Identifiable, Sendable {
     let score: Double
     let updatedAt: Date
     let storedEvidence: Bool
+    let sourceRole: NexConversationRole?
 }
 
 struct NexSavedConversationSummary: Codable, Equatable, Identifiable, Sendable {
@@ -120,6 +124,7 @@ enum NexMemoryIndexError: LocalizedError, Equatable {
 
 actor NexMemoryIndex {
     static let schemaVersion = 1
+    static let indexFormatVersion = 2
 
     let databaseURL: URL
     let embeddingIdentifier: String
@@ -239,12 +244,18 @@ actor NexMemoryIndex {
         for document in documents where !tombstonedIDs.contains(document.id) { try index(document) }
         for id in tombstonedIDs { try remove(documentID: id) }
         try setMetadata(key: "embedding_identifier", value: embeddingIdentifier)
+        try setMetadata(key: "index_format_version", value: String(Self.indexFormatVersion))
     }
 
     func requiresEmbeddingRebuild() throws -> Bool {
         try ensureMigrated()
         guard let stored = try metadata(key: "embedding_identifier") else { return false }
         return stored != embeddingIdentifier
+    }
+
+    func requiresIndexFormatRebuild() throws -> Bool {
+        try ensureMigrated()
+        return try metadata(key: "index_format_version") != String(Self.indexFormatVersion)
     }
 
     func savedConversations() throws -> [NexSavedConversationSummary] {
@@ -286,7 +297,10 @@ actor NexMemoryIndex {
         let now = Date()
         var results: [NexMemorySearchResult] = candidates.values.compactMap { candidate in
             guard options.documentTypes.isEmpty || options.documentTypes.contains(candidate.documentType) else { return nil }
-            guard options.includeTranscriptExcerpts || candidate.chunkKind != "transcript_excerpt" else { return nil }
+            let isTranscript = candidate.chunkKind == "user_transcript"
+                || candidate.chunkKind == "assistant_transcript"
+                || candidate.chunkKind == "transcript_excerpt"
+            guard options.includeTranscriptExcerpts || !isTranscript else { return nil }
             let projects = Set(candidate.projects.map { $0.lowercased() })
             let entities = Set(candidate.entities.map { $0.lowercased() })
             let requestedProjects = Set(options.projects.map { $0.lowercased() })
@@ -294,14 +308,24 @@ actor NexMemoryIndex {
             guard requestedProjects.isEmpty || !projects.isDisjoint(with: requestedProjects) else { return nil }
             guard requestedEntities.isEmpty || !entities.isDisjoint(with: requestedEntities) else { return nil }
 
+            let sourceRole: NexConversationRole? = switch candidate.chunkKind {
+            case "user_transcript": .user
+            case "assistant_transcript": .assistant
+            default: nil
+            }
+            let storedEvidence = candidate.documentType == .memory || sourceRole == .user
+            guard !options.evidenceOnly || storedEvidence else { return nil }
+
             let relationTerms = Set((candidate.topics + candidate.projects + candidate.entities).flatMap(Self.tokens))
             let relation = queryTokens.isEmpty ? 0 : Double(queryTokens.intersection(relationTerms).count) / Double(queryTokens.count)
             let ageDays = max(0, now.timeIntervalSince(candidate.updatedAt) / 86_400)
             let recency = exp(-ageDays / 365)
             let sourcePriority: Double = switch (candidate.documentType, candidate.chunkKind) {
-            case (.memory, _): 0.16
-            case (.chat, "summary"): 0.12
-            default: 0.03
+            case (.memory, _): 0.22
+            case (.chat, "user_transcript"): 0.12
+            case (.chat, "summary"): 0.05
+            case (.chat, "assistant_transcript"): -0.18
+            default: -0.06
             }
             let score = candidate.lexical * 0.38
                 + candidate.vector * 0.34
@@ -321,7 +345,8 @@ actor NexMemoryIndex {
                 relativePath: candidate.relativePath,
                 score: score,
                 updatedAt: candidate.updatedAt,
-                storedEvidence: true
+                storedEvidence: storedEvidence,
+                sourceRole: sourceRole
             )
         }
         results.sort {

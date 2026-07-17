@@ -83,6 +83,54 @@ struct NexConversationSnapshot: Codable, Equatable, Identifiable, Sendable {
     }
 }
 
+enum NexResponseMode: String, Equatable, Sendable {
+    case prose
+    case code
+
+    static func infer(from turns: [NexConversationTurn]) -> NexResponseMode {
+        guard let currentIndex = turns.lastIndex(where: { $0.role == .user }) else { return .prose }
+        let current = turns[currentIndex].text
+        if explicitlyRequestsCode(current) { return .code }
+
+        let followUps: Set<String> = [
+            "continue", "keep going", "do that", "do it", "finish it", "yes", "go ahead"
+        ]
+        let normalized = normalize(current)
+        guard followUps.contains(normalized) else { return .prose }
+        let previousUser = turns[..<currentIndex].last(where: { $0.role == .user })?.text ?? ""
+        return explicitlyRequestsCode(previousUser) ? .code : .prose
+    }
+
+    var instruction: String {
+        switch self {
+        case .prose:
+            "Current response mode: PROSE. The current request does not ask for code. Do not output source code, pseudocode, fenced code blocks, programming boilerplate, or a phrase claiming code was created."
+        case .code:
+            "Current response mode: CODE. The current request asks for implementation or continues an active coding task. Provide only the amount of explanation and code needed to satisfy it."
+        }
+    }
+
+    private static func explicitlyRequestsCode(_ prompt: String) -> Bool {
+        let normalized = prompt.lowercased().replacingOccurrences(of: "’", with: "'")
+        if normalized.contains("```") { return true }
+        let directPhrases = [
+            "write code", "write the code", "give me the code", "show me the code",
+            "generate code", "code this", "code it", "implement this", "implement it",
+            "write a function", "write a class", "write a script", "create a function",
+            "debug this", "fix this code", "fix the bug", "refactor this", "patch this",
+            "complete this code", "modify this code", "build this app", "build the app",
+            "build this website", "create an api endpoint", "write an sql query"
+        ]
+        if directPhrases.contains(where: normalized.contains) { return true }
+        let languageRequest = #"\b(write|implement|build|create|debug|fix|refactor)\b.{0,32}\b(swift|python|javascript|typescript|rust|java|kotlin|c\+\+|html|css|sql)\b"#
+        return normalized.range(of: languageRequest, options: .regularExpression) != nil
+    }
+
+    private static func normalize(_ prompt: String) -> String {
+        prompt.lowercased().split { !$0.isLetter && !$0.isNumber }.joined(separator: " ")
+    }
+}
+
 /// Owns only the live conversation. Nothing in this actor is durable until the
 /// user explicitly asks the Obsidian service to save a snapshot.
 actor NexConversationSession {
@@ -133,10 +181,20 @@ actor NexConversationSession {
         )
     }
 
-    func contextMessages(retrievedContext: String? = nil) -> [NexusChatMessage] {
-        let snapshot = snapshot()
+    func contextMessages(
+        retrievedContext: String? = nil,
+        memoryLookupPerformed: Bool = false
+    ) -> [NexusChatMessage] {
+        let continuityTurns = memoryLookupPerformed ? turns.filter { $0.role == .user } : turns
+        let snapshot = Self.makeSnapshot(
+            id: conversationID,
+            createdAt: createdAt,
+            updatedAt: updatedAt,
+            turns: continuityTurns,
+            isActive: true
+        )
         var messages: [NexusChatMessage] = []
-        let olderCount = max(0, turns.count - Self.recentTurnLimit)
+        let olderCount = max(0, continuityTurns.count - Self.recentTurnLimit)
         if olderCount > 0 || !snapshot.openThreads.isEmpty || snapshot.currentTask != nil {
             var context = "Active conversation continuity:\n"
             if olderCount > 0, !snapshot.summary.isEmpty {
@@ -154,13 +212,56 @@ actor NexConversationSession {
             context += "Resolve short follow-ups, pronouns, ‘why’, ‘continue’, and ‘do that’ against this active conversation."
             messages.append(.init(role: "system", content: context))
         }
-        if let retrievedContext, !retrievedContext.isEmpty {
-            messages.append(.init(role: "system", content: retrievedContext))
-        }
-        messages += turns.suffix(Self.recentTurnLimit).map {
-            .init(role: $0.role.rawValue, content: $0.text)
+        let recentTurns = Array(turns.suffix(Self.recentTurnLimit))
+        if let currentIndex = recentTurns.lastIndex(where: { $0.role == .user }) {
+            let priorTurns = recentTurns[..<currentIndex].filter {
+                !memoryLookupPerformed || $0.role == .user
+            }
+            messages += priorTurns.map {
+                .init(role: $0.role.rawValue, content: $0.text)
+            }
+            appendMemoryAuthority(
+                retrievedContext: retrievedContext,
+                memoryLookupPerformed: memoryLookupPerformed,
+                to: &messages
+            )
+            messages.append(.init(
+                role: "system",
+                content: NexResponseMode.infer(from: turns).instruction
+            ))
+            messages += recentTurns[currentIndex...].map {
+                .init(role: $0.role.rawValue, content: $0.text)
+            }
+        } else {
+            appendMemoryAuthority(
+                retrievedContext: retrievedContext,
+                memoryLookupPerformed: memoryLookupPerformed,
+                to: &messages
+            )
+            messages += recentTurns.map { .init(role: $0.role.rawValue, content: $0.text) }
         }
         return messages
+    }
+
+    private func appendMemoryAuthority(
+        retrievedContext: String?,
+        memoryLookupPerformed: Bool,
+        to messages: inout [NexusChatMessage]
+    ) {
+        if let retrievedContext, !retrievedContext.isEmpty {
+            messages.append(.init(
+                role: "system",
+                content: """
+                \(retrievedContext)
+                Factual authority for the current request: use the stored evidence above. It overrides any conflicting factual claim made by an earlier assistant turn. Never repeat the conflicting assistant claim. For any requested personal detail absent from the evidence, explicitly say it is not in memory; do not state, infer, or invent it.
+                """
+            ))
+        } else if memoryLookupPerformed {
+            messages.append(.init(
+                role: "system",
+                content: "Nex checked durable memory and found no relevant user-supported evidence. Do not guess a personal fact or reuse an unsupported claim from an earlier assistant response; say that the information is not in memory."
+            ))
+        }
     }
 
     func resume(_ snapshot: NexConversationSnapshot) throws {

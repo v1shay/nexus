@@ -156,7 +156,8 @@ final class NexMemoryController: ObservableObject {
             arguments: [
                 "query": .string(prompt),
                 "limit": .number(6),
-                "include_transcript_excerpts": .bool(true)
+                "include_transcript_excerpts": .bool(true),
+                "evidence_only": .bool(true)
             ],
             invocation: .modelReadOnly
         )
@@ -169,6 +170,7 @@ final class NexMemoryController: ObservableObject {
         ]
         for value in results.prefix(6) {
             guard case .object(let result) = value,
+                  result["stored_evidence"] == .bool(true),
                   let sourceID = result["source_id"]?.string,
                   let title = result["title"]?.string,
                   let excerpt = result["excerpt"]?.string else { continue }
