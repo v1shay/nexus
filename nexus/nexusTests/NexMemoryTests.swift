@@ -284,6 +284,7 @@ extension NexusGeometryTests {
 
         XCTAssertEqual(graph.nodes.count, 2)
         XCTAssertEqual(Set(graph.nodes.map(\.title)), ["Atlas model", "Atlas OCR"])
+        XCTAssertTrue(graph.nodes.allSatisfy { !$0.relativePath.isEmpty })
         XCTAssertEqual(graph.edges.count, 1)
         XCTAssertGreaterThan(graph.edges[0].strength, 0.5)
     }

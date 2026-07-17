@@ -111,7 +111,10 @@ private struct ModelSceneCard: View {
     let accent: Color
 
     var body: some View {
-        SpinningUSDZView(assetName: asset)
+        SpinningUSDZView(
+            assetName: asset,
+            cameraDistance: asset == "Computer" ? 2.72 : 2.88
+        )
             .background(
                 RadialGradient(
                     colors: [accent.opacity(0.17), .clear],
@@ -309,7 +312,7 @@ private struct DeviceCard: View {
 
     var body: some View {
         VStack(spacing: 8) {
-            SpinningUSDZView(assetName: device.asset)
+            SpinningUSDZView(assetName: device.asset, cameraDistance: 3.7)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             Text(device.name).font(.headline).lineLimit(1)
             HStack(spacing: 6) {
@@ -357,7 +360,7 @@ private struct NexusMemoryPage: View {
             }
             .frame(width: 390)
             MemoryCard(title: "Obsidian") {
-                NexMemoryPhysicsGraphView(graph: memory.memoryGraph)
+                NexMemoryPhysicsGraphView(graph: memory.memoryGraph, vaultURL: memory.vaultURL)
             }
         }
         .padding(14)
@@ -417,6 +420,7 @@ private struct SavedConversationList: View {
 
 private struct SpinningUSDZView: NSViewRepresentable {
     let assetName: String
+    var cameraDistance: Float = 3.1
 
     func makeNSView(context: Context) -> SCNView {
         let view = SCNView()
@@ -430,12 +434,12 @@ private struct SpinningUSDZView: NSViewRepresentable {
     }
 
     func updateNSView(_ view: SCNView, context: Context) {
-        guard view.accessibilityIdentifier() != assetName else { return }
+        guard view.accessibilityIdentifier() != viewIdentifier else { return }
         loadScene(into: view)
     }
 
     private func loadScene(into view: SCNView) {
-        view.setAccessibilityIdentifier(assetName)
+        view.setAccessibilityIdentifier(viewIdentifier)
         guard let url = Bundle.main.url(
             forResource: assetName,
             withExtension: "usdz",
@@ -477,7 +481,7 @@ private struct SpinningUSDZView: NSViewRepresentable {
         // geometry remains visible regardless of the asset's authored scale.
         camera.camera?.zNear = Double(max(radius * 0.01, 0.01))
         camera.camera?.zFar = Double(max(radius * 10, 1_000))
-        camera.position = SCNVector3(0, radius * 0.15, radius * 3.1)
+        camera.position = SCNVector3(0, radius * 0.15, radius * cameraDistance)
         camera.constraints = [SCNLookAtConstraint(target: spinner)]
         scene.rootNode.addChildNode(camera)
         view.pointOfView = camera
@@ -497,6 +501,8 @@ private struct SpinningUSDZView: NSViewRepresentable {
         scene.rootNode.addChildNode(key)
         view.scene = scene
     }
+
+    private var viewIdentifier: String { "\(assetName):\(cameraDistance)" }
 
     private static func bounds(of root: SCNNode) -> (center: SCNVector3, radius: Float) {
         var minimum = SCNVector3(Float.greatestFiniteMagnitude, Float.greatestFiniteMagnitude, Float.greatestFiniteMagnitude)
