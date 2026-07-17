@@ -297,6 +297,20 @@ final class NotchController: ObservableObject {
         responseTask = Task { [weak self] in
             guard let self else { return }
             guard !Task.isCancelled, responseGeneration == generation else { return }
+            if let identityAnswer = NexAssistantIdentityIntent.answer(for: prompt) {
+                responseSpeaker.beginStreaming()
+                responseIsStreaming = true
+                _ = responseSpeechCursor.consume(delta: identityAnswer, accumulated: identityAnswer)
+                interaction.receiveAnswer(identityAnswer)
+                await conversationSession.appendAssistant(identityAnswer)
+                await memory.conversationDidChange()
+                responseSpeaker.append(identityAnswer)
+                responseSpeaker.finishStreaming()
+                responseIsStreaming = false
+                automaticRevealIsWaitingForNotchVisit = true
+                if let screen { resize(to: expandedSize(for: screen), animated: true) }
+                return
+            }
             let acknowledgement = PromptAcknowledgement.text(for: prompt, avoiding: previousThinkingPhrase)
             previousThinkingPhrase = acknowledgement
             responseSpeaker.beginStreaming()

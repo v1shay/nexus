@@ -111,6 +111,34 @@ extension NexusGeometryTests {
         XCTAssertTrue(unrelated.isEmpty)
     }
 
+    func testUserNameQuestionRetrievesTheStoredUserIdentity() async throws {
+        let fixture = try NexMemoryFixture()
+        let session = NexConversationSession()
+        await session.appendUser("My full name is Vishay Agarwal")
+        let snapshot = await session.snapshot()
+        let evidence = try XCTUnwrap(snapshot.turns.last?.id)
+        let write = try await fixture.vault.saveMemory(
+            .init(
+                idempotencyKey: "user-full-name",
+                kind: .personalContext,
+                title: "User identity",
+                statement: "The user's full name is Vishay Agarwal.",
+                topics: ["identity", "name"],
+                entities: ["Vishay Agarwal"],
+                evidenceMessageIDs: [evidence],
+                importance: 1,
+                confidence: 1
+            ),
+            supportedBy: snapshot
+        )
+        try await fixture.index.index(write.document)
+
+        let results = try await fixture.index.search(query: "What's my name?")
+
+        XCTAssertEqual(results.first?.sourceID, write.document.id)
+        XCTAssertTrue(results.first?.excerpt.contains("Vishay Agarwal") == true)
+    }
+
     func testDirectObsidianEditReindexesAndForgottenDocumentIsExcluded() async throws {
         let fixture = try NexMemoryFixture()
         let session = NexConversationSession()
@@ -282,6 +310,23 @@ extension NexusGeometryTests {
         XCTAssertEqual(split?.memoryQuestion, "have I used one in my projects?")
         XCTAssertNil(NexCompoundMemoryQuery.split("Why?"))
         XCTAssertNil(NexCompoundMemoryQuery.split("Explain neural networks"))
+    }
+
+    func testPersonalQuestionsTriggerMemoryWhileOrdinaryQuestionsDoNot() {
+        let personalPrompts = [
+            "What's my name?",
+            "Who am I?",
+            "What is my GitHub handle?",
+            "Where do I go to high school?",
+            "What are my current research roles?",
+            "How do I prefer answers to be written?",
+            "Check your memory: what is Moonshot Robotics?"
+        ]
+
+        XCTAssertTrue(personalPrompts.allSatisfy(NexMemoryRetrievalIntent.shouldSearch))
+        XCTAssertFalse(NexMemoryRetrievalIntent.shouldSearch(prompt: "What's the weather?"))
+        XCTAssertFalse(NexMemoryRetrievalIntent.shouldSearch(prompt: "Why?"))
+        XCTAssertFalse(NexMemoryRetrievalIntent.shouldSearch(prompt: "Continue"))
     }
 
     func testStreamingCursorPreservesOrderedTwoPhaseAnswer() {

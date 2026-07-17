@@ -397,7 +397,13 @@ enum NexMemoryRetrievalIntent {
         let activeOnly = ["why", "why?", "continue", "continue.", "do that", "do it", "yes", "no"]
         if activeOnly.contains(normalized) { return false }
         let signals = [
-            "remember", "memory", "have i", "did i", "was i", "my project", "my preference",
+            "check your memory", "check memory", "from your memory", "according to your memory",
+            "remember", "memory", "have i", "did i", "was i", "who am i", "about me",
+            "what's my", "what is my", "what are my", "what were my",
+            "where do i", "where did i", "which of my",
+            "how do i prefer", "how should you answer me", "my project", "my preference",
+            "my name", "my github", "my school", "my career", "my research", "my role",
+            "my background", "my education", "my interests", "my skills", "my nonprofit",
             "i told you", "we discussed", "we decided", "last time", "previous conversation",
             "before", "what do you know about me", "resume", "saved chat"
         ]
