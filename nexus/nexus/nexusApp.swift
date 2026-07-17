@@ -421,23 +421,37 @@ final class NotchController: ObservableObject {
     }
 
     private func planWebSearch(for prompt: String) async -> NexWebSearchPlan {
-        if NexWebSearchPlanner.obviousWebNeed(prompt) {
-            return .init(shouldSearch: true, query: NexWebSearchPlanner.fallbackQuery(prompt))
-        }
         do {
             let raw = try await modelDownloadViewModel.response(
                 messages: NexWebSearchPlanner.planningMessages(for: prompt),
                 temperature: 0,
-                maximumTokens: 100,
+                maximumTokens: 220,
                 onDelta: { _, _ in }
             )
-            return NexWebSearchPlanner.parse(raw, originalPrompt: prompt)
+            let plan = NexWebSearchPlanner.parse(raw, originalPrompt: prompt)
+            guard plan.queryOrigin == .fallback else { return plan }
+
+            let repairedRaw = try await modelDownloadViewModel.response(
+                messages: NexWebSearchPlanner.repairMessages(
+                    for: prompt,
+                    rejectedOutput: raw
+                ),
+                temperature: 0,
+                maximumTokens: 220,
+                onDelta: { _, _ in }
+            )
+            let repairedPlan = NexWebSearchPlanner.parse(
+                repairedRaw,
+                originalPrompt: prompt
+            )
+            return repairedPlan.queryOrigin == .modelExtraction ? repairedPlan : plan
         } catch {
             return .init(
                 shouldSearch: NexWebSearchPlanner.obviousWebNeed(prompt),
                 query: NexWebSearchPlanner.obviousWebNeed(prompt)
                     ? NexWebSearchPlanner.fallbackQuery(prompt)
-                    : nil
+                    : nil,
+                queryOrigin: NexWebSearchPlanner.obviousWebNeed(prompt) ? .fallback : .none
             )
         }
     }

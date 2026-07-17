@@ -28,13 +28,13 @@ final class NexWebSearchTests: XCTestCase {
     }
 
     func testPlannerRequestsCurrentInformationAndCreatesCleanQuery() {
-        let raw = #"{"use_web":true,"query":"Chikungunya outbreak latest July 2026"}"#
-        let plan = NexWebSearchPlanner.parse(raw, originalPrompt: "what's that new virus spreading")
+        let raw = #"{"use_web":true,"topic":"cyclosporiasis outbreak","topic_basis":"cypolcersa virus","information_need":"current US spread and public health guidance","time_scope":"July 2026","query":"cyclosporiasis outbreak current US spread public health guidance July 2026"}"#
+        let plan = NexWebSearchPlanner.parse(raw, originalPrompt: "what's that new cypolcersa virus spreading")
 
         XCTAssertTrue(plan.shouldSearch)
-        XCTAssertFalse(plan.query?.contains("chikungunya") == true)
-        XCTAssertTrue(plan.query?.contains("virus") == true)
-        XCTAssertTrue(plan.query?.contains("spreading") == true)
+        XCTAssertEqual(plan.queryOrigin, .modelExtraction)
+        XCTAssertTrue(plan.query?.contains("cyclosporiasis outbreak") == true)
+        XCTAssertTrue(plan.query?.contains("public health guidance") == true)
         XCTAssertTrue(NexWebSearchPlanner.obviousWebNeed("What changed in the newest version?"))
     }
 
@@ -77,17 +77,62 @@ final class NexWebSearchTests: XCTestCase {
         }
     }
 
-    func testModelCanDecideToSearchButCannotChooseTheQueryText() {
+    func testStructuredModelExtractionCreatesTheSearchQuery() {
         let prompt = "What changed in the newest Swift release?"
         let plan = NexWebSearchPlanner.parse(
-            #"{"use_web":true,"query":"based changes random"}"#,
+            #"{"use_web":true,"topic":"Apple Swift programming language","topic_basis":"newest Swift release","information_need":"changes introduced in the newest stable release","time_scope":"current","query":"Apple Swift programming language newest stable release changes current"}"#,
             originalPrompt: prompt
         )
 
         XCTAssertTrue(plan.shouldSearch)
-        XCTAssertTrue(plan.query?.hasPrefix("swift programming language release") == true)
-        XCTAssertFalse(plan.query?.contains("based") == true)
-        XCTAssertFalse(plan.query?.contains("random") == true)
+        XCTAssertEqual(plan.queryOrigin, .modelExtraction)
+        XCTAssertEqual(
+            plan.query,
+            "apple swift programming language newest stable release changes current"
+        )
+    }
+
+    func testStructuredFieldsRepairAOneWordModelQuery() {
+        let plan = NexWebSearchPlanner.parse(
+            #"{"use_web":true,"topic":"Apple Swift programming language","topic_basis":"newest Swift release","information_need":"changes in the newest stable release","time_scope":"current","query":"you"}"#,
+            originalPrompt: "Can you tell me what changed in the newest Swift release?"
+        )
+
+        XCTAssertEqual(plan.queryOrigin, .modelExtraction)
+        XCTAssertTrue(plan.query?.contains("swift programming language") == true)
+        XCTAssertTrue(plan.query?.contains("newest stable release") == true)
+        XCTAssertFalse(plan.query?.split(separator: " ").contains("you") == true)
+        XCTAssertGreaterThanOrEqual(plan.query?.split(separator: " ").count ?? 0, 5)
+    }
+
+    func testPronounOnlyExtractionIsRejectedForWholePromptFallback() {
+        let plan = NexWebSearchPlanner.parse(
+            #"{"use_web":true,"topic":"you","topic_basis":"you","information_need":"what changed","time_scope":"today","query":"you"}"#,
+            originalPrompt: "Can you find the newest Apple Swift release changes today?"
+        )
+
+        XCTAssertEqual(plan.queryOrigin, .fallback)
+        XCTAssertTrue(plan.query?.contains("apple") == true)
+        XCTAssertTrue(plan.query?.contains("swift") == true)
+        XCTAssertFalse(plan.query?.split(separator: " ") == ["you"])
+    }
+
+    func testCurrentExtractionRejectsAStaleYearFromTheModel() {
+        let now = Date(timeIntervalSince1970: 1_784_236_800)
+        let query = NexWebSearchQueryBuilder.query(
+            fromTopic: "Apple WWDC",
+            topicBasis: "Apple announced at WWDC",
+            informationNeed: "announcements made at this year's conference",
+            timeScope: "current",
+            proposedQuery: "Apple WWDC conference announcements from 2024",
+            originalPrompt: "What has Apple announced at WWDC this year?",
+            now: now
+        )
+
+        XCTAssertFalse(query?.contains("2024") == true)
+        XCTAssertTrue(query?.contains("2026") == true)
+        XCTAssertTrue(query?.contains("apple") == true)
+        XCTAssertTrue(query?.contains("announcements") == true)
     }
 
     func testSpeechTranscriptionTyposAreNormalizedInFallbackQueries() {
@@ -177,7 +222,7 @@ final class NexWebSearchTests: XCTestCase {
         let callCount = await counter.value
         XCTAssertEqual(callCount, 1)
         let messages = await stages.values
-        XCTAssertTrue(messages.contains("Searching the web…"))
+        XCTAssertTrue(messages.contains("Searching “newest Swift release”…"))
         XCTAssertTrue(messages.contains("Reviewing results…"))
         XCTAssertTrue(messages.contains("Reading sources…"))
         XCTAssertTrue(messages.contains("Synthesizing findings…"))

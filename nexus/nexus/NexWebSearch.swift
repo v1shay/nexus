@@ -236,7 +236,7 @@ actor NexWebSearchService {
         progress: @escaping Progress
     ) async throws -> NexWebSearchResponse {
         try Task.checkCancellation()
-        await progress("Searching the web…", 0.08)
+        await progress("Searching “\(String(query.prefix(90)))”…", 0.08)
         var rawResults: [NexWebSearchResult] = []
         var usedProviders: [String] = []
         var lastError: Error?
@@ -316,8 +316,21 @@ actor NexWebSearchService {
 }
 
 struct NexWebSearchPlan: Equatable, Sendable {
+    enum QueryOrigin: Equatable, Sendable {
+        case modelExtraction
+        case fallback
+        case none
+    }
+
     let shouldSearch: Bool
     let query: String?
+    let queryOrigin: QueryOrigin
+
+    init(shouldSearch: Bool, query: String?, queryOrigin: QueryOrigin = .none) {
+        self.shouldSearch = shouldSearch
+        self.query = query
+        self.queryOrigin = queryOrigin
+    }
 }
 
 enum NexWebSearchPlanner {
@@ -325,10 +338,40 @@ enum NexWebSearchPlanner {
         let date = ISO8601DateFormatter().string(from: now)
         return [
             .init(role: "system", content: """
-            Decide whether this request needs live web evidence. Search for recent or changing facts, news, current events, prices, versions, documentation, products, research, named webpages, explicit lookup/verification, or facts you are not confident are stable. Do not search for casual conversation, transformations, creative writing, user-provided text, personal memory, or stable facts you confidently know. If searching, create one concise query that preserves important names and corrects likely spelling mistakes. Today is \(date).
-            Return only JSON: {"use_web":true,"query":"..."} or {"use_web":false,"query":null}.
+            Analyze the user's complete request and decide whether live web evidence is needed. Search for changing facts, current events, prices, versions, recent research, named webpages, explicit lookup, or external facts that may be stale. Do not search for casual conversation, creative work, user-provided text, personal memory, or stable facts.
+
+            When searching, semantically extract all four fields:
+            - topic: the specific real-world subject, entity, product, event, or corrected name.
+            - topic_basis: an exact quote from the user's request that supports the topic.
+            - information_need: precisely what must be learned to answer the request.
+            - time_scope: the requested date/current/latest scope, or "none".
+            - query: one natural, self-contained search query containing the topic and information need.
+
+            Read the whole sentence. The topic must be at least two words and include a disambiguating category (for example, "Apple Swift programming language," not "Swift"). Never guess or invent a person, product, disease, version, event, or proper name the user did not state. If an identity is unknown, use a grounded category such as "public health emerging disease outbreak." Do not narrow the topic beyond what the user asked. Never use a pronoun, question word, generic adjective, or verb alone as a topic or query. A query must be 5–24 words. Correct likely speech-recognition misspellings only when topic_basis contains the original words. Today is \(date).
+
+            Examples:
+            User: "What changed in the newest Swift release?"
+            {"use_web":true,"topic":"Apple Swift programming language","topic_basis":"newest Swift release","information_need":"changes in the newest stable release","time_scope":"current","query":"Apple Swift programming language newest stable release changes"}
+            User: "What is the biggest AI news today?"
+            {"use_web":true,"topic":"artificial intelligence industry","topic_basis":"AI news today","information_need":"most significant current news and developments","time_scope":"today","query":"artificial intelligence industry biggest news and developments today"}
+            User: "What is that new virus spreading right now?"
+            {"use_web":true,"topic":"public health emerging disease outbreak","topic_basis":"new virus spreading right now","information_need":"identify the disease and report its current spread","time_scope":"current","query":"public health emerging disease outbreak currently spreading"}
+
+            Return only JSON:
+            {"use_web":true,"topic":"...","topic_basis":"exact user quote","information_need":"...","time_scope":"...","query":"..."}
+            or {"use_web":false,"topic":null,"topic_basis":null,"information_need":null,"time_scope":null,"query":null}.
             """),
             .init(role: "user", content: prompt)
+        ]
+    }
+
+    static func repairMessages(for prompt: String, rejectedOutput: String, now: Date = Date()) -> [NexusChatMessage] {
+        let date = ISO8601DateFormatter().string(from: now)
+        return [
+            .init(role: "system", content: """
+            Repair a rejected web-search extraction. Analyze the entire user request. Return only one JSON object with use_web, topic, topic_basis, information_need, time_scope, and query. If use_web is true, topic must be at least two words with a disambiguating category; topic_basis must be an exact quote from the request; information_need must be specific; and query must be self-contained and 5–24 words. Never invent an unstated proper name or narrow the user's topic. If the identity is unknown, use a grounded general category. Never return a one-word query or use "I", "me", "you", "what", "big", "changes", or another generic fragment as the query. Today is \(date).
+            """),
+            .init(role: "user", content: "User request:\n\(prompt)\n\nRejected extraction:\n\(rejectedOutput)")
         ]
     }
 
@@ -341,23 +384,46 @@ enum NexWebSearchPlanner {
            let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
            let useWeb = object["use_web"] as? Bool {
             if useWeb {
-                // The model may decide whether current evidence is needed,
-                // but it never controls the actual query. Small local models
-                // frequently returned generic fragments such as "what",
-                // "changes", or "big". The application always derives a
-                // complete topic-preserving query from the user's own words.
+                let topic = object["topic"] as? String ?? ""
+                let topicBasis = object["topic_basis"] as? String ?? ""
+                let informationNeed = object["information_need"] as? String ?? ""
+                let timeScope = object["time_scope"] as? String ?? ""
+                let proposedQuery = object["query"] as? String ?? ""
+                if let query = NexWebSearchQueryBuilder.query(
+                    fromTopic: topic,
+                    topicBasis: topicBasis,
+                    informationNeed: informationNeed,
+                    timeScope: timeScope,
+                    proposedQuery: proposedQuery,
+                    originalPrompt: originalPrompt
+                ) {
+                    return .init(
+                        shouldSearch: true,
+                        query: query,
+                        queryOrigin: .modelExtraction
+                    )
+                }
                 return .init(
                     shouldSearch: true,
-                    query: NexWebSearchQueryBuilder.query(for: originalPrompt)
+                    query: fallbackQuery(originalPrompt),
+                    queryOrigin: .fallback
                 )
             }
             if obviousWebNeed(originalPrompt) {
-                return .init(shouldSearch: true, query: fallbackQuery(originalPrompt))
+                return .init(
+                    shouldSearch: true,
+                    query: fallbackQuery(originalPrompt),
+                    queryOrigin: .fallback
+                )
             }
             return .init(shouldSearch: false, query: nil)
         }
         if obviousWebNeed(originalPrompt) {
-            return .init(shouldSearch: true, query: fallbackQuery(originalPrompt))
+            return .init(
+                shouldSearch: true,
+                query: fallbackQuery(originalPrompt),
+                queryOrigin: .fallback
+            )
         }
         return .init(shouldSearch: false, query: nil)
     }
@@ -393,6 +459,71 @@ enum NexWebSearchQueryBuilder {
         "big", "biggest", "change", "changed", "changes", "current", "currently", "latest",
         "new", "newest", "now", "recent", "right", "spreading", "today"
     ]
+
+    static func query(
+        fromTopic topic: String,
+        topicBasis: String,
+        informationNeed: String,
+        timeScope: String,
+        proposedQuery: String,
+        originalPrompt: String,
+        now: Date = Date()
+    ) -> String? {
+        let topicWords = meaningfulTokens(topic)
+        let needWords = meaningfulTokens(informationNeed)
+        guard topicWords.count >= 2,
+              needWords.count >= 2,
+              topicBasisIsGrounded(topicBasis, in: originalPrompt) else { return nil }
+
+        let proposedWords = tokens(proposedQuery)
+        let topicAnchors = Set(topicWords.map(stem))
+        let needAnchors = Set(needWords.map(stem))
+        let proposedAnchors = Set(proposedWords.map(stem))
+        let currentYear = Calendar(identifier: .gregorian).component(.year, from: now)
+        let proposedYears = proposedWords.compactMap(Int.init).filter { (1900...2200).contains($0) }
+        let scopeWords = meaningfulTokens(timeScope).filter { $0 != "none" }
+        let scopeAnchors = Set(scopeWords.map(stem))
+        let currentScope = !scopeWords.isEmpty
+        let hasStaleYear = currentScope && proposedYears.contains { $0 != currentYear }
+        if (5...24).contains(proposedWords.count),
+           !topicAnchors.isDisjoint(with: proposedAnchors),
+           !needAnchors.isDisjoint(with: proposedAnchors),
+           (!currentScope || !scopeAnchors.isDisjoint(with: proposedAnchors)),
+           !hasStaleYear {
+            return deduplicated(proposedWords).joined(separator: " ")
+        }
+
+        var expandedScope = scopeWords
+        if currentScope {
+            let formatter = DateFormatter()
+            formatter.locale = Locale(identifier: "en_US_POSIX")
+            formatter.dateFormat = "MMMM yyyy"
+            expandedScope += formatter.string(from: now).lowercased().split(separator: " ").map(String.init)
+        }
+        let composed = Array(deduplicated(topicWords + needWords + expandedScope).prefix(18))
+        guard composed.count >= 5 else { return nil }
+        return composed.joined(separator: " ")
+    }
+
+    private static func topicBasisIsGrounded(_ basis: String, in prompt: String) -> Bool {
+        let normalizedPrompt = normalizedEvidence(prompt)
+        let normalizedBasis = normalizedEvidence(basis)
+        if normalizedBasis.count >= 3, normalizedPrompt.contains(normalizedBasis) { return true }
+
+        let quotePattern = #"[\"'‘’“”]([^\"'‘’“”]{3,})[\"'‘’“”]"#
+        guard let regex = try? NSRegularExpression(pattern: quotePattern) else { return false }
+        let range = NSRange(basis.startIndex..., in: basis)
+        return regex.matches(in: basis, range: range).contains { match in
+            guard let quoteRange = Range(match.range(at: 1), in: basis) else { return false }
+            return normalizedPrompt.contains(normalizedEvidence(String(basis[quoteRange])))
+        }
+    }
+
+    private static func normalizedEvidence(_ value: String) -> String {
+        value.lowercased()
+            .split { !$0.isLetter && !$0.isNumber }
+            .joined(separator: " ")
+    }
 
     static func query(for prompt: String, now: Date = Date()) -> String {
         var words = tokens(prompt).filter { !stopWords.contains($0) }
@@ -446,6 +577,23 @@ enum NexWebSearchQueryBuilder {
             .split { !$0.isLetter && !$0.isNumber && $0 != "." && $0 != ":" && $0 != "/" }
             .map(String.init)
             .map { corrections[$0] ?? $0 }
+    }
+
+    private static func meaningfulTokens(_ value: String) -> [String] {
+        tokens(value).filter { !stopWords.contains($0) && $0.count > 1 }
+    }
+
+    private static func deduplicated(_ words: [String]) -> [String] {
+        var seen = Set<String>()
+        return words.filter { seen.insert($0).inserted }
+    }
+
+    private static func stem(_ word: String) -> String {
+        if word.hasSuffix("us") || word.hasSuffix("ss") { return word }
+        if word.count > 4, word.hasSuffix("ies") { return String(word.dropLast(3)) + "y" }
+        if word.count > 4, word.hasSuffix("es") { return String(word.dropLast(2)) }
+        if word.count > 3, word.hasSuffix("s") { return String(word.dropLast()) }
+        return word
     }
 
 }
