@@ -353,7 +353,7 @@ private struct ToolUsageReceiptView: View {
                 .popover(isPresented: $showsSources, arrowEdge: .top) {
                     ToolReceiptSourcesView(activity: activity)
                 }
-                .help("Show Obsidian sources")
+                .help("Show sources")
         }
     }
 
@@ -380,7 +380,7 @@ private struct ToolReceiptSourcesView: View {
         VStack(alignment: .leading, spacing: 12) {
             HStack(spacing: 8) {
                 ToolIconView(source: activity.icon, size: 18)
-                Text("Obsidian sources")
+                Text(activity.toolName == "Web Search" ? "Web sources" : "Obsidian sources")
                     .font(.system(size: 14, weight: .semibold, design: .rounded))
             }
 
@@ -394,10 +394,19 @@ private struct ToolReceiptSourcesView: View {
                                 .font(.system(size: 11, weight: .regular, design: .rounded))
                                 .foregroundStyle(.secondary)
                                 .lineLimit(5)
-                            Text(source.sourceID)
-                                .font(.system(size: 9, weight: .medium, design: .monospaced))
-                                .foregroundStyle(.tertiary)
-                                .textSelection(.enabled)
+                            if let url = URL(string: source.sourceID),
+                               let scheme = url.scheme?.lowercased(), ["http", "https"].contains(scheme) {
+                                Link(destination: url) {
+                                    Label(url.host ?? source.sourceID, systemImage: "arrow.up.right")
+                                        .font(.system(size: 10, weight: .medium, design: .rounded))
+                                }
+                                .foregroundStyle(.cyan.opacity(0.9))
+                            } else {
+                                Text(source.sourceID)
+                                    .font(.system(size: 9, weight: .medium, design: .monospaced))
+                                    .foregroundStyle(.tertiary)
+                                    .textSelection(.enabled)
+                            }
                         }
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .padding(10)
@@ -410,7 +419,7 @@ private struct ToolReceiptSourcesView: View {
         .padding(15)
         .frame(width: 380)
         .accessibilityElement(children: .contain)
-        .accessibilityLabel("Obsidian sources used for this response")
+        .accessibilityLabel("Sources used for this response")
     }
 }
 

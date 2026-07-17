@@ -183,7 +183,8 @@ actor NexConversationSession {
 
     func contextMessages(
         retrievedContext: String? = nil,
-        memoryLookupPerformed: Bool = false
+        memoryLookupPerformed: Bool = false,
+        webContext: String? = nil
     ) -> [NexusChatMessage] {
         let continuityTurns = memoryLookupPerformed ? turns.filter { $0.role == .user } : turns
         let snapshot = Self.makeSnapshot(
@@ -223,6 +224,7 @@ actor NexConversationSession {
             appendMemoryAuthority(
                 retrievedContext: retrievedContext,
                 memoryLookupPerformed: memoryLookupPerformed,
+                webContext: webContext,
                 to: &messages
             )
             messages.append(.init(
@@ -236,6 +238,7 @@ actor NexConversationSession {
             appendMemoryAuthority(
                 retrievedContext: retrievedContext,
                 memoryLookupPerformed: memoryLookupPerformed,
+                webContext: webContext,
                 to: &messages
             )
             messages += recentTurns.map { .init(role: $0.role.rawValue, content: $0.text) }
@@ -246,6 +249,7 @@ actor NexConversationSession {
     private func appendMemoryAuthority(
         retrievedContext: String?,
         memoryLookupPerformed: Bool,
+        webContext: String?,
         to messages: inout [NexusChatMessage]
     ) {
         if let retrievedContext, !retrievedContext.isEmpty {
@@ -261,6 +265,9 @@ actor NexConversationSession {
                 role: "system",
                 content: "Nex checked durable memory and found no relevant user-supported evidence. Do not guess a personal fact or reuse an unsupported claim from an earlier assistant response; say that the information is not in memory."
             ))
+        }
+        if let webContext, !webContext.isEmpty {
+            messages.append(.init(role: "system", content: webContext))
         }
     }
 

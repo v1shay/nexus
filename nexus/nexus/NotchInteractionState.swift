@@ -42,19 +42,47 @@ struct ToolActivity: Equatable, Sendable {
 
     static func lifecycle(_ event: NexToolLifecycleEvent) -> ToolActivity {
         let isMemory = event.toolName.hasPrefix("memory_") || event.toolName == "conversation_recall"
-        let title = isMemory ? "Nex Memory" : event.toolName.replacingOccurrences(of: "_", with: " ").capitalized
-        let icon: ToolIconSource = isMemory
-            ? .asset(name: "Obsidian", fallbackSystemName: "diamond.fill")
-            : .systemSymbol("wrench.and.screwdriver")
+        let isWebSearch = event.toolName == "web_search"
+        let title = isMemory
+            ? "Nex Memory"
+            : (isWebSearch ? "Web Search" : event.toolName.replacingOccurrences(of: "_", with: " ").capitalized)
+        let icon: ToolIconSource
+        if isMemory {
+            icon = .asset(name: "Obsidian", fallbackSystemName: "diamond.fill")
+        } else if isWebSearch {
+            icon = .asset(name: "Chrome", fallbackSystemName: "globe")
+        } else {
+            icon = .systemSymbol("wrench.and.screwdriver")
+        }
         return ToolActivity(
             toolName: title,
             status: event.message,
-            spokenStatus: isMemory ? "Checking memory." : event.message,
+            spokenStatus: isMemory ? "Checking memory." : (isWebSearch ? "Searching the web." : event.message),
             icon: icon,
             phase: event.phase,
             progress: event.progress,
-            sources: isMemory ? memorySources(from: event.result) : []
+            sources: isMemory ? memorySources(from: event.result) : (isWebSearch ? webSources(from: event.result) : [])
         )
+    }
+
+    private static func webSources(from result: NexJSONValue?) -> [ToolReceiptSource] {
+        guard case .object(let object) = result,
+              case .array(let values) = object["results"] else { return [] }
+        var seen = Set<String>()
+        return values.compactMap { value in
+            guard case .object(let source) = value,
+                  let url = source["url"]?.string,
+                  let title = source["title"]?.string else { return nil }
+            guard seen.insert(url).inserted else { return nil }
+            let extracted = source["extracted_text"]?.string
+            let snippet = source["snippet"]?.string ?? ""
+            return ToolReceiptSource(
+                id: url,
+                sourceID: url,
+                title: title,
+                excerpt: extracted?.isEmpty == false ? extracted! : snippet
+            )
+        }
     }
 
     private static func memorySources(from result: NexJSONValue?) -> [ToolReceiptSource] {

@@ -151,6 +151,7 @@ final class NotchController: ObservableObject {
     private var responseSpeechCursor = StreamedSpeechCursor()
     private let conversationSession: NexConversationSession
     let memory: NexMemoryController
+    private lazy var webSearch = NexWebSearchController(registry: memory.registry)
     private var memoryObservation: AnyCancellable?
     private var toolEventTask: Task<Void, Never>?
     private var responseIsStreaming = false
@@ -319,6 +320,7 @@ final class NotchController: ObservableObject {
             }
             let acknowledgement = PromptAcknowledgement.text(for: prompt, avoiding: previousThinkingPhrase)
             previousThinkingPhrase = acknowledgement
+            async let plannedWebSearch = planWebSearch(for: prompt)
             responseSpeaker.beginStreaming()
             responseIsStreaming = true
             interaction.acknowledge(acknowledgement)
@@ -326,13 +328,16 @@ final class NotchController: ObservableObject {
             await responseSpeaker.speakImmediatelyAndWait(acknowledgement)
             guard !Task.isCancelled, responseGeneration == generation else { return }
             do {
+                let webPlan = await plannedWebSearch
+                let webContext = await retrieveWebContext(plan: webPlan, generation: generation)
+                guard !Task.isCancelled, responseGeneration == generation else { return }
                 if let compound = NexCompoundMemoryQuery.split(prompt) {
                     // Answer the independent portion first, then visibly check
                     // memory and stream the personal-history portion as a
                     // second segment. This avoids one long silent retrieval.
                     interaction.beginThinking()
                     if let screen { resize(to: listeningSize(for: screen), animated: true) }
-                    var immediateMessages = await conversationSession.contextMessages()
+                    var immediateMessages = await conversationSession.contextMessages(webContext: webContext)
                     immediateMessages.append(.init(
                         role: "system",
                         content: "For this first response segment, answer only this independent question: \(compound.immediateQuestion). Do not answer the memory-dependent part yet."
@@ -356,7 +361,8 @@ final class NotchController: ObservableObject {
                     responseSpeechCursor.beginSegment()
                     var memoryMessages = await conversationSession.contextMessages(
                         retrievedContext: retrievedContext,
-                        memoryLookupPerformed: true
+                        memoryLookupPerformed: true,
+                        webContext: webContext
                     )
                     memoryMessages.append(.init(role: "assistant", content: immediateRenderedAnswer))
                     memoryMessages.append(.init(
@@ -374,7 +380,8 @@ final class NotchController: ObservableObject {
                     if let screen { resize(to: listeningSize(for: screen), animated: true) }
                     let messages = await conversationSession.contextMessages(
                         retrievedContext: retrievedContext,
-                        memoryLookupPerformed: memoryLookupPerformed
+                        memoryLookupPerformed: memoryLookupPerformed,
+                        webContext: webContext
                     )
                     let answer = try await streamModelResponse(messages: messages, generation: generation)
                     let finalSpeechDelta = responseSpeechCursor.consume(delta: "", accumulated: answer)
@@ -402,6 +409,39 @@ final class NotchController: ObservableObject {
                 automaticRevealIsWaitingForNotchVisit = reveal
                 if reveal, let screen { resize(to: expandedSize(for: screen), animated: true) }
             }
+        }
+    }
+
+    private func planWebSearch(for prompt: String) async -> NexWebSearchPlan {
+        do {
+            let raw = try await modelDownloadViewModel.response(
+                messages: NexWebSearchPlanner.planningMessages(for: prompt),
+                temperature: 0,
+                maximumTokens: 100,
+                onDelta: { _, _ in }
+            )
+            return NexWebSearchPlanner.parse(raw, originalPrompt: prompt)
+        } catch {
+            return .init(
+                shouldSearch: NexWebSearchPlanner.obviousWebNeed(prompt),
+                query: NexWebSearchPlanner.obviousWebNeed(prompt)
+                    ? NexWebSearchPlanner.fallbackQuery(prompt)
+                    : nil
+            )
+        }
+    }
+
+    private func retrieveWebContext(plan: NexWebSearchPlan, generation: UUID) async -> String? {
+        guard plan.shouldSearch, let query = plan.query, !query.isEmpty else { return nil }
+        do {
+            let response = try await webSearch.search(query: query)
+            return response.modelContext()
+        } catch is CancellationError {
+            return nil
+        } catch {
+            guard !Task.isCancelled, responseGeneration == generation else { return nil }
+            try? await Task.sleep(for: .milliseconds(500))
+            return "Live web search was required for this request but failed: \(error.localizedDescription). Do not present changing facts as verified or fabricate sources; briefly explain that live lookup failed."
         }
     }
 
