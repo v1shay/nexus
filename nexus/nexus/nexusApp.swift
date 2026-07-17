@@ -655,14 +655,19 @@ final class NotchController: ObservableObject {
         }
 
         let panel = NSPanel(
-            contentRect: NSRect(x: 0, y: 0, width: 700, height: 540),
-            styleMask: [.titled, .closable, .utilityWindow],
+            contentRect: NSRect(x: 0, y: 0, width: 1_080, height: 760),
+            styleMask: [.titled, .closable, .resizable, .miniaturizable],
             backing: .buffered,
             defer: false
         )
-        panel.title = "Models"
+        panel.title = "Nexus"
         panel.isReleasedWhenClosed = false
-        panel.contentView = NSHostingView(rootView: ModelAggregatorView(viewModel: modelDownloadViewModel))
+        panel.minSize = NSSize(width: 900, height: 620)
+        panel.contentView = NSHostingView(rootView: ModelAggregatorView(
+            viewModel: modelDownloadViewModel,
+            connect: connectController,
+            memory: memory
+        ))
         panel.center()
         panel.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)

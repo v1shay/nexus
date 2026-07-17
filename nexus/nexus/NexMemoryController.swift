@@ -55,6 +55,7 @@ final class NexMemoryController: ObservableObject {
     @Published private(set) var syncState: SyncState = .starting
     @Published private(set) var savedConversations: [NexSavedConversationSummary] = []
     @Published private(set) var hasValuableUnsavedConversation = false
+    @Published private(set) var activeConversation: NexConversationSnapshot?
 
     let conversation: NexConversationSession
     let registry: NexToolRegistry
@@ -90,6 +91,7 @@ final class NexMemoryController: ObservableObject {
 
     func start() {
         guard syncTask == nil, let service else { return }
+        Task { activeConversation = await conversation.snapshot() }
         syncTask = Task { [weak self] in
             guard let self else { return }
             while !Task.isCancelled {
@@ -105,6 +107,7 @@ final class NexMemoryController: ObservableObject {
     }
 
     func conversationDidChange() async {
+        activeConversation = await conversation.snapshot()
         hasValuableUnsavedConversation = await conversation.hasValuableUnsavedConversation()
         guard await conversation.hasUnsavedChanges() else {
             saveState = .saved
@@ -142,6 +145,7 @@ final class NexMemoryController: ObservableObject {
     func resume(id: UUID) async throws -> NexConversationSnapshot {
         guard let service else { throw NexToolError.executionFailed(code: "memory_unavailable", message: "Memory is unavailable.") }
         let snapshot = try await service.resumeConversation(id: id)
+        activeConversation = snapshot
         saveState = .saved
         hasValuableUnsavedConversation = false
         return snapshot

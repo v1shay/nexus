@@ -15,6 +15,7 @@ final class ModelDownloadViewModel: ObservableObject {
     @Published var backend: ModelBackend = .ollama
     @Published var selectedModelID: String?
     @Published private(set) var catalog: [LocalModel] = []
+    @Published private(set) var catalogs: [ModelBackend: [LocalModel]] = [:]
     @Published private(set) var states: [String: ModelDownloadState] = [:]
     @Published private(set) var catalogMessage = "Loading the model registry…"
     @Published var pendingOllamaInstall: LocalModel?
@@ -95,7 +96,8 @@ final class ModelDownloadViewModel: ObservableObject {
         Task {
             await discoverInstalledRuntimeModels()
             await discoverInstalledStudioModels()
-            await refreshCatalog()
+            await refreshCatalog(for: .ollama)
+            await refreshCatalog(for: .lmStudio)
         }
     }
 
@@ -120,16 +122,42 @@ final class ModelDownloadViewModel: ObservableObject {
     }
 
     func refreshCatalog() async {
+        await refreshCatalog(for: backend, query: query)
+    }
+
+    func refreshCatalog(for backend: ModelBackend, query: String = "") async {
         catalogMessage = "Searching the full \(backend.title) registry…"
         do {
-            let fetched = try await catalogService.models(for: backend, query: query.trimmingCharacters(in: .whitespacesAndNewlines))
-            catalog = fetched
+            let fetched = try await catalogService.models(
+                for: backend,
+                query: query.trimmingCharacters(in: .whitespacesAndNewlines)
+            )
+            catalogs[backend] = fetched
+            if backend == self.backend { catalog = fetched }
             catalogMessage = fetched.isEmpty ? "No registry matches. You can still download the exact identifier above." : "\(fetched.count) registry models found."
             if selectedModelID == nil { selectedModelID = recommended.first?.id ?? fetched.first?.id }
         } catch {
-            catalog = ModelCatalog.starterModels.filter { $0.backend == backend }
+            let fallback = ModelCatalog.starterModels.filter { $0.backend == backend }
+            catalogs[backend] = fallback
+            if backend == self.backend { catalog = fallback }
             catalogMessage = error.localizedDescription
         }
+    }
+
+    func models(for backend: ModelBackend, matching query: String) -> [LocalModel] {
+        let source = catalogs[backend] ?? ModelCatalog.starterModels.filter { $0.backend == backend }
+        let installed = installedModels.filter { $0.backend == backend }
+        let all = Array(Set(source + installed)).sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+        let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return all }
+        let matches = all.filter {
+            $0.name.localizedCaseInsensitiveContains(trimmed) ||
+            $0.identifier.localizedCaseInsensitiveContains(trimmed)
+        }
+        if matches.contains(where: { $0.identifier.caseInsensitiveCompare(trimmed) == .orderedSame }) {
+            return matches
+        }
+        return [LocalModel(customIdentifier: trimmed, backend: backend)] + matches
     }
 
     func backendChanged() {

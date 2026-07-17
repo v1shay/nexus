@@ -22,6 +22,7 @@
 		E100000130075C29006660E4 /* KaTeX in Resources */ = {isa = PBXBuildFile; fileRef = E100000230075C29006660E4 /* KaTeX */; };
 		F100000130075C29006660E4 /* PetAssets.swift in Sources */ = {isa = PBXBuildFile; fileRef = F100000230075C29006660E4 /* PetAssets.swift */; };
 		F100000330075C29006660E4 /* Pets in Resources */ = {isa = PBXBuildFile; fileRef = F100000430075C29006660E4 /* Pets */; };
+		U100000130075C29006660E4 /* Nexus3D in Resources */ = {isa = PBXBuildFile; fileRef = U100000230075C29006660E4 /* Nexus3D */; };
 		G100000130075C29006660E4 /* NexusConnectModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = G100000230075C29006660E4 /* NexusConnectModels.swift */; };
 		M100000130075C29006660E4 /* NexusPairedNode.swift in Sources */ = {isa = PBXBuildFile; fileRef = M100000230075C29006660E4 /* NexusPairedNode.swift */; };
 		N100000130075C29006660E4 /* NexusConnectHostManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = N100000230075C29006660E4 /* NexusConnectHostManager.swift */; };
@@ -92,6 +93,7 @@
 		E100000230075C29006660E4 /* KaTeX */ = {isa = PBXFileReference; explicitFileType = folder; path = KaTeX; sourceTree = "<group>"; };
 		F100000230075C29006660E4 /* PetAssets.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PetAssets.swift; sourceTree = "<group>"; };
 		F100000430075C29006660E4 /* Pets */ = {isa = PBXFileReference; explicitFileType = folder; path = Pets; sourceTree = "<group>"; };
+		U100000230075C29006660E4 /* Nexus3D */ = {isa = PBXFileReference; explicitFileType = folder; path = Nexus3D; sourceTree = "<group>"; };
 		G100000230075C29006660E4 /* NexusConnectModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NexusConnectModels.swift; sourceTree = "<group>"; };
 		M100000230075C29006660E4 /* NexusPairedNode.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NexusPairedNode.swift; sourceTree = "<group>"; };
 		N100000230075C29006660E4 /* NexusConnectHostManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NexusConnectHostManager.swift; sourceTree = "<group>"; };
@@ -215,6 +217,7 @@
 				E100000230075C29006660E4 /* KaTeX */,
 				F100000230075C29006660E4 /* PetAssets.swift */,
 				F100000430075C29006660E4 /* Pets */,
+				U100000230075C29006660E4 /* Nexus3D */,
 				156AB6BF30075C2A006660E4 /* Assets.xcassets */,
 				156AB6C130075C2A006660E4 /* nexus.entitlements */,
 				156AB6C230075C2A006660E4 /* Preview Content */,
@@ -361,6 +364,7 @@
 			files = (
 				E100000130075C29006660E4 /* KaTeX in Resources */,
 				F100000330075C29006660E4 /* Pets in Resources */,
+				U100000130075C29006660E4 /* Nexus3D in Resources */,
 				156AB6C430075C2A006660E4 /* Preview Assets.xcassets in Resources */,
 				156AB6C030075C2A006660E4 /* Assets.xcassets in Resources */,
 			);
