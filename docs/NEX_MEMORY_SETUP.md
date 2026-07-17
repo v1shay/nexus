@@ -1,53 +1,47 @@
-# Obsidian and iCloud setup
+# Set up Nex Memory on another Mac
 
-## Default location
+Setup is one-time. Nex selects the same vault on every launch and automatically creates or ingests its local retrieval index. Do not repeat pairing or setup after restarting Nex.
 
-Nex selects the first available root in this order:
-
-1. `~/Library/Mobile Documents/iCloud~md~obsidian/Documents/Nex`
-2. `~/Library/Mobile Documents/com~apple~CloudDocs/Nex`
-3. `~/Documents/Nex`
-
-On this Mac, if Obsidian has already created its iCloud container, option 1 is automatic. No SQLite file is placed in that folder.
-
-## First-time setup
-
-1. Enable iCloud Drive on every Mac using the same Apple ID.
-2. In Obsidian, enable **Store in iCloud** or create/open a vault from iCloud Drive.
-3. Build and run Nexus normally:
-
-   ```bash
-   ./scripts/build-nexus.sh --run
-   ```
-
-4. Complete a Nex conversation and hover the notch.
-5. Press **Save to Obsidian**. The state changes through **Saving…** to **Saved**. A later turn changes it to **Save New Changes** and updates the same file when pressed.
-6. In Obsidian, use **Open folder as vault** and choose the `Nex` folder above if it is not already visible as a vault.
-
-The first save creates the complete folder structure and `90 System/README.md`. Nexus needs no Obsidian plugin.
-
-## Another Mac
-
-1. Install/run a compatible Nexus build and sign into the same iCloud Drive account.
-2. Confirm the same `Nex` folder becomes available locally.
-3. Start Nexus. It detects downloaded Markdown, builds that Mac’s local SQLite index, and changes its status to **Vault changes ingested** only after ingestion completes.
-4. Hover the notch and press the clock-arrow button.
-5. Choose **Resume**. Nex restores the stable conversation ID, summary, recent transcript, decisions, open threads, and current task, then continues the same chat.
-
-An unsaved chat never appears on the other Mac. Sleeping/offline Macs naturally cannot receive iCloud changes until they reconnect. “Waiting for iCloud files” means placeholders exist but their contents are not available yet; it is not a synchronized state.
-
-## Editing in Obsidian
-
-You may edit generated Markdown directly. Keep the YAML block, stable `id`, `nex_schema`, and message comments intact. Nex detects the content hash change within the next scan and reindexes it. Removing a note directly removes it from local retrieval after the next complete scan. Application-driven forget operations additionally create a tombstone so deletion propagates safely.
-
-If a note has invalid or unsupported frontmatter, Nexus leaves it untouched, excludes it from retrieval, and reports that the vault was not fully ingested. Fix the note rather than deleting the local index.
-
-## Rebuilding
-
-Canonical content is safe even if a local index is corrupt. Quit Nexus, remove only:
+Give Codex on the other Mac these exact instructions:
 
 ```text
-~/Library/Application Support/Nexus/Memory/index.sqlite*
+Work in my existing Nexus repository without discarding local changes.
+
+1. Verify that Obsidian is installed and that this directory exists:
+   ~/Library/Mobile Documents/iCloud~md~obsidian/Documents
+
+2. If it does not exist, stop and ask me to open Obsidian once, enable its
+   iCloud vault option, and sign into the same Apple ID used by my other Macs.
+   Do not silently create a different local vault.
+
+3. Make sure the Nexus checkout includes commit 8a31dd3 or a newer compatible
+   origin/main. Preserve any existing work before updating.
+
+4. Confirm iCloud has delivered this canonical vault:
+   ~/Library/Mobile Documents/iCloud~md~obsidian/Documents/Nex
+
+   If it has not arrived yet, wait for iCloud. Do not copy the vault manually
+   and do not use ~/Documents/Nex as a substitute.
+
+5. Build and run Nexus from the repository:
+   ./scripts/build-nexus.sh --run
+
+6. Verify all of the following:
+   - The Nex vault contains 00 Inbox, 10 Profile, 20 Projects, 30 Goals,
+     40 People, 50 Organizations, 60 Decisions, 70 Knowledge, 80 Chats,
+     90 System, and .nex.
+   - The local retrieval database exists at:
+     ~/Library/Application Support/Nexus/Memory/index.sqlite
+   - No index.sqlite file exists anywhere inside the iCloud Nex vault.
+   - Nex reports "Vault changes ingested" rather than claiming synchronization
+     while iCloud placeholder files are still pending.
+
+7. Run the Nexus unit/integration test target and report the result, the exact
+   vault path selected, and whether existing saved conversations are visible
+   from the clock button in the notch.
+
+Never synchronize or copy the SQLite database. Obsidian Markdown, .nex events,
+and tombstones are the only cross-device canonical data.
 ```
 
-Restart Nexus to rebuild from Markdown. Never put this database inside iCloud or the Obsidian vault.
+After that, nothing else is required. Unsaved chats remain only in the current session. Press **Save to Obsidian** when a conversation should become searchable and available on the other Macs.
