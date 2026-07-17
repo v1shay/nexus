@@ -247,10 +247,16 @@ private struct TranscriptContents: View {
                     close: notch.dismissOverlay
                 )
                 Button { notch.saveConversation() } label: {
-                    Label(notch.memory.saveState.label, systemImage: notch.memory.saveState.systemImage)
+                    HStack(spacing: 6) {
+                        Image("Obsidian")
+                            .resizable()
+                            .scaledToFit()
+                            .frame(width: 13, height: 15)
+                        Text("Save")
+                    }
                         .font(.system(size: 11, weight: .semibold, design: .rounded))
                         .lineLimit(1)
-                        .padding(.horizontal, 10)
+                        .padding(.horizontal, 9)
                         .frame(height: 30)
                         .background(.white.opacity(0.09), in: Capsule())
                 }
@@ -258,6 +264,7 @@ private struct TranscriptContents: View {
                 .foregroundStyle(saveButtonColor)
                 .disabled(notch.memory.saveState == .saving || notch.memory.saveState == .saved)
                 .help(saveHelp)
+                .accessibilityLabel(notch.memory.saveState.label)
                 Spacer()
                 HStack(spacing: 7) {
                     Button { notch.openSavedChats() } label: {
