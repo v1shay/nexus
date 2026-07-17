@@ -56,6 +56,7 @@ final class NexMemoryController: ObservableObject {
     @Published private(set) var savedConversations: [NexSavedConversationSummary] = []
     @Published private(set) var hasValuableUnsavedConversation = false
     @Published private(set) var activeConversation: NexConversationSnapshot?
+    @Published private(set) var memoryGraph: NexMemoryGraphSnapshot = .empty
 
     let conversation: NexConversationSession
     let registry: NexToolRegistry
@@ -288,6 +289,7 @@ final class NexMemoryController: ObservableObject {
         do {
             let report = try await service.prepare()
             savedConversations = try await service.savedConversations()
+            memoryGraph = try await service.memoryGraph()
             if !report.conflicts.isEmpty {
                 syncState = .conflicts(report.conflicts.count)
             } else if !report.ingestionFailures.isEmpty {

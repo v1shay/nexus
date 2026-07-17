@@ -102,10 +102,18 @@ final class ModelDownloadViewModel: ObservableObject {
     }
 
     var recommended: [LocalModel] {
+        recommended(for: backend)
+    }
+
+    func recommended(for backend: ModelBackend) -> [LocalModel] {
         let budget = max(4, Int(Double(memoryGB) * 0.72))
         return ModelCatalog.starterModels.filter {
             $0.backend == backend && $0.minimumRAMGB > 0 && $0.minimumRAMGB <= budget
         }
+    }
+
+    func isRecommended(_ model: LocalModel) -> Bool {
+        recommended(for: model.backend).contains { $0.identifier == model.identifier }
     }
 
     var visibleCatalog: [LocalModel] {
@@ -147,7 +155,9 @@ final class ModelDownloadViewModel: ObservableObject {
     func models(for backend: ModelBackend, matching query: String) -> [LocalModel] {
         let source = catalogs[backend] ?? ModelCatalog.starterModels.filter { $0.backend == backend }
         let installed = installedModels.filter { $0.backend == backend }
-        let all = Array(Set(source + installed)).sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+        let all = Array(Set(recommended(for: backend) + source + installed)).sorted {
+            $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending
+        }
         let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return all }
         let matches = all.filter {

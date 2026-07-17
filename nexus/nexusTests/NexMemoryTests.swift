@@ -245,6 +245,49 @@ extension NexusGeometryTests {
         XCTAssertTrue(unrelated.isEmpty)
     }
 
+    func testMemoryGraphUsesDurableVaultMemoryAndExcludesChatFiles() async throws {
+        let fixture = try NexMemoryFixture()
+        let session = NexConversationSession()
+        let appendedFirst = await session.appendUser("Project Atlas uses a neural network.")
+        let first = try XCTUnwrap(appendedFirst)
+        let appendedSecond = await session.appendUser("Project Atlas also uses OCR.")
+        let second = try XCTUnwrap(appendedSecond)
+        await session.appendAssistant("Those are durable project details.")
+        let snapshot = await session.snapshot()
+        _ = try await fixture.vault.saveConversation(snapshot)
+        _ = try await fixture.vault.saveMemory(
+            .init(
+                idempotencyKey: "atlas-neural-model",
+                kind: .project,
+                title: "Atlas model",
+                statement: "Project Atlas uses a neural network.",
+                topics: ["machine learning"],
+                projects: ["Project Atlas"],
+                evidenceMessageIDs: [first.id]
+            ),
+            supportedBy: snapshot
+        )
+        _ = try await fixture.vault.saveMemory(
+            .init(
+                idempotencyKey: "atlas-ocr",
+                kind: .knowledge,
+                title: "Atlas OCR",
+                statement: "Project Atlas uses OCR.",
+                topics: ["document processing"],
+                projects: ["Project Atlas"],
+                evidenceMessageIDs: [second.id]
+            ),
+            supportedBy: snapshot
+        )
+
+        let graph = NexMemoryGraphSnapshot(documents: try await fixture.vault.scan().documents)
+
+        XCTAssertEqual(graph.nodes.count, 2)
+        XCTAssertEqual(Set(graph.nodes.map(\.title)), ["Atlas model", "Atlas OCR"])
+        XCTAssertEqual(graph.edges.count, 1)
+        XCTAssertGreaterThan(graph.edges[0].strength, 0.5)
+    }
+
     func testUserNameQuestionRetrievesTheStoredUserIdentity() async throws {
         let fixture = try NexMemoryFixture()
         let session = NexConversationSession()

@@ -11,7 +11,6 @@ struct ModelAggregatorView: View {
     var body: some View {
         HStack(spacing: 0) {
             NexusAppRail(page: $page)
-            Divider().opacity(0.25)
             Group {
                 switch page {
                 case .models:
@@ -90,19 +89,19 @@ private struct NexusModelsPage: View {
     var body: some View {
         GeometryReader { proxy in
             let rowHeight = max(260, (proxy.size.height - 42) / 2)
-            VStack(spacing: 14) {
-                HStack(spacing: 14) {
+            VStack(spacing: 0) {
+                HStack(spacing: 0) {
                     ModelSceneCard(asset: "Computer", accent: .cyan)
                     ModelLibraryCard(backend: .ollama, viewModel: viewModel)
                 }
                 .frame(height: rowHeight)
-                HStack(spacing: 14) {
+                HStack(spacing: 0) {
                     ModelLibraryCard(backend: .lmStudio, viewModel: viewModel)
                     ModelSceneCard(asset: "Moon_Globe", accent: .indigo)
                 }
                 .frame(height: rowHeight)
             }
-            .padding(14)
+            .padding(.horizontal, 18)
         }
     }
 }
@@ -121,8 +120,6 @@ private struct ModelSceneCard: View {
                     endRadius: 220
                 )
             )
-            .clipShape(RoundedRectangle(cornerRadius: 18))
-            .overlay(RoundedRectangle(cornerRadius: 18).stroke(.white.opacity(0.08)))
             .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 }
@@ -141,7 +138,7 @@ private struct ModelLibraryCard: View {
                     .textFieldStyle(.plain)
                     .padding(.horizontal, 10)
                     .frame(width: 150, height: 28)
-                    .background(.white.opacity(0.07), in: RoundedRectangle(cornerRadius: 9))
+                    .overlay(alignment: .bottom) { Rectangle().fill(.white.opacity(0.14)).frame(height: 1) }
                     .onSubmit { Task { await viewModel.refreshCatalog(for: backend, query: query) } }
             }
             ScrollView {
@@ -152,9 +149,7 @@ private struct ModelLibraryCard: View {
                 }
             }
         }
-        .padding(14)
-        .background(.white.opacity(0.035), in: RoundedRectangle(cornerRadius: 18))
-        .overlay(RoundedRectangle(cornerRadius: 18).stroke(.white.opacity(0.08)))
+        .padding(16)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 }
@@ -170,11 +165,26 @@ private struct NexusModelRow: View {
                 Text(model.identifier).font(.caption2).foregroundStyle(.secondary).lineLimit(1)
             }
             Spacer(minLength: 8)
+            HStack(spacing: 7) {
+                if viewModel.isRecommended(model) {
+                    Image(systemName: "sparkles").foregroundStyle(.yellow.opacity(0.85)).help("Recommended for available memory")
+                }
+                if model.supportsImageInput {
+                    Image(systemName: "photo").foregroundStyle(.cyan.opacity(0.85)).help("Supports image input")
+                }
+                if case .installed = viewModel.states[model.id] ?? .idle {
+                    Image(systemName: "arrow.down.circle.fill").foregroundStyle(.secondary).help("Downloaded")
+                }
+                if viewModel.activeModel?.id == model.id {
+                    Image(systemName: "bolt.circle.fill").foregroundStyle(.green).help("In use")
+                }
+            }
+            .font(.caption)
             action
         }
         .padding(.horizontal, 8)
         .frame(height: 43)
-        .background(viewModel.activeModel?.id == model.id ? .white.opacity(0.065) : .clear, in: RoundedRectangle(cornerRadius: 9))
+        .foregroundStyle(viewModel.activeModel?.id == model.id ? .white : .white.opacity(0.82))
     }
 
     @ViewBuilder private var action: some View {
@@ -184,7 +194,7 @@ private struct NexusModelRow: View {
                 .buttonStyle(.plain).help("Cancel")
         case .installed:
             if viewModel.activeModel?.id == model.id {
-                Image(systemName: "checkmark.circle.fill").foregroundStyle(.green)
+                EmptyView()
             } else if viewModel.isUsable(model) {
                 Button("Use") { viewModel.use(model) }.controlSize(.small)
             } else {
@@ -221,7 +231,7 @@ private struct NexusConnectPage: View {
                     .textFieldStyle(.plain)
                     .padding(.horizontal, 11)
                     .frame(height: 32)
-                    .background(.white.opacity(0.07), in: RoundedRectangle(cornerRadius: 10))
+                    .overlay(alignment: .bottom) { Rectangle().fill(.white.opacity(0.14)).frame(height: 1) }
                 Button("Pair") { controller.applyPairingCode() }
                     .disabled(controller.pairingCode.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                 if !controller.setupMessage.isEmpty {
@@ -229,7 +239,8 @@ private struct NexusConnectPage: View {
                 }
             }
         }
-        .padding(18)
+        .padding(.horizontal, 28)
+        .padding(.vertical, 18)
     }
 
     private var localDevice: NexusDeviceCardModel {
@@ -312,8 +323,11 @@ private struct DeviceCard: View {
             }
         }
         .padding(14)
-        .background(device.isSelected ? .white.opacity(0.08) : .white.opacity(0.035), in: RoundedRectangle(cornerRadius: 18))
-        .overlay(RoundedRectangle(cornerRadius: 18).stroke(device.isSelected ? .cyan.opacity(0.55) : .white.opacity(0.08)))
+        .background {
+            if device.isSelected {
+                RadialGradient(colors: [.cyan.opacity(0.08), .clear], center: .center, startRadius: 30, endRadius: 320)
+            }
+        }
         .contentShape(RoundedRectangle(cornerRadius: 18))
         .onTapGesture {
             guard device.isOnline else { return }
@@ -343,7 +357,7 @@ private struct NexusMemoryPage: View {
             }
             .frame(width: 390)
             MemoryCard(title: "Obsidian") {
-                ObsidianGraphView(conversations: memory.savedConversations)
+                NexMemoryPhysicsGraphView(graph: memory.memoryGraph)
             }
         }
         .padding(14)
@@ -361,8 +375,6 @@ private struct MemoryCard<Content: View>: View {
             content.frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         }
         .padding(14)
-        .background(.white.opacity(0.035), in: RoundedRectangle(cornerRadius: 18))
-        .overlay(RoundedRectangle(cornerRadius: 18).stroke(.white.opacity(0.08)))
     }
 }
 
@@ -397,37 +409,8 @@ private struct SavedConversationList: View {
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(8)
-                    .background(.white.opacity(0.04), in: RoundedRectangle(cornerRadius: 9))
                 }
             }
-        }
-    }
-}
-
-private struct ObsidianGraphView: View {
-    let conversations: [NexSavedConversationSummary]
-
-    var body: some View {
-        Canvas { context, size in
-            let center = CGPoint(x: size.width / 2, y: size.height / 2)
-            let chats = Array(conversations.prefix(18))
-            let radius = min(size.width, size.height) * 0.34
-            for (index, chat) in chats.enumerated() {
-                let fraction = Double(index) / Double(max(1, chats.count))
-                let angle = fraction * Double.pi * 2 - Double.pi / 2
-                let pointX = center.x + CGFloat(cos(angle)) * radius
-                let pointY = center.y + CGFloat(sin(angle)) * radius
-                let point = CGPoint(x: pointX, y: pointY)
-                var path = Path()
-                path.move(to: center)
-                path.addLine(to: point)
-                context.stroke(path, with: .color(.purple.opacity(0.35)), lineWidth: 1)
-                let dot = Path(ellipseIn: CGRect(x: point.x - 5, y: point.y - 5, width: 10, height: 10))
-                context.fill(dot, with: .color(.purple.opacity(0.85)))
-                let label = Text(chat.title).font(.caption2).foregroundStyle(.secondary)
-                context.draw(label, at: CGPoint(x: point.x, y: point.y + 14))
-            }
-            context.fill(Path(ellipseIn: CGRect(x: center.x - 12, y: center.y - 12, width: 24, height: 24)), with: .color(.purple))
         }
     }
 }

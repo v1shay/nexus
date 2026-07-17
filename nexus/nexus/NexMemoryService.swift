@@ -121,6 +121,11 @@ actor NexMemoryService {
         try await index.savedConversations()
     }
 
+    func memoryGraph() async throws -> NexMemoryGraphSnapshot {
+        let scan = try await vault.scan()
+        return NexMemoryGraphSnapshot(documents: scan.documents)
+    }
+
     func resumeConversation(id: UUID) async throws -> NexConversationSnapshot {
         let snapshot = try await vault.conversation(id: id)
         try await conversation.resume(snapshot)

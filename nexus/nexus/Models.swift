@@ -18,6 +18,16 @@ struct LocalModel: Identifiable, Hashable, Codable, Sendable {
 
     var id: String { "\(backend.rawValue):\(identifier):\(quantization ?? "default")" }
 
+    var supportsImageInput: Bool {
+        let value = "\(name) \(identifier) \(family)".lowercased()
+        let knownVisionFamilies = [
+            "llava", "bakllava", "moondream", "minicpm-v", "minicpmv",
+            "qwen2-vl", "qwen2.5-vl", "qwen3-vl", "qwen-vl", "vision",
+            "llama3.2-vision", "llama 3.2 vision", "gemma3", "gemma 3"
+        ]
+        return knownVisionFamilies.contains(where: value.contains)
+    }
+
     init(name: String, identifier: String, family: String, backend: ModelBackend, minimumRAMGB: Int, quantization: String? = nil) {
         self.name = name
         self.identifier = identifier

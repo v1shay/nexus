@@ -23,17 +23,18 @@ final class NexusAppDelegate: NSObject, NSApplicationDelegate {
     private var launchTask: Task<Void, Never>?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-        NSApp.setActivationPolicy(.accessory)
         // Unit tests inject XCTest into the app process. They construct every
         // controller explicitly and must not initialize the real Keychain,
         // global hotkey, notch panel, or LaunchAgent as a side effect.
         if NSClassFromString("XCTestCase") != nil { return }
         if NexusConnectHostProcess.isCurrentProcess {
+            NSApp.setActivationPolicy(.prohibited)
             let host = NexusConnectHostDaemon()
             connectHost = host
             launchTask = Task { @MainActor in await host.start() }
             return
         }
+        NSApp.setActivationPolicy(.regular)
         if CommandLine.arguments.contains("--nexus-ui-testing") {
             let notch = NotchController()
             self.notch = notch
@@ -57,6 +58,11 @@ final class NexusAppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
         notch?.confirmDiscardBeforeQuit() == false ? .terminateCancel : .terminateNow
+    }
+
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        notch?.openModelAggregator()
+        return true
     }
 
     /// Xcode can launch a new debug build while the previous accessory app is
@@ -668,7 +674,12 @@ final class NotchController: ObservableObject {
             connect: connectController,
             memory: memory
         ))
-        panel.center()
+        panel.collectionBehavior.insert(.fullScreenPrimary)
+        if let screen = NSScreen.main ?? NSScreen.screens.first {
+            panel.setFrame(screen.visibleFrame, display: true)
+        } else {
+            panel.center()
+        }
         panel.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
         modelPanel = panel
