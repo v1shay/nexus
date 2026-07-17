@@ -491,6 +491,8 @@ final class NexusConnectController: ObservableObject {
     func response(
         model: LocalModel,
         messages: [NexusChatMessage],
+        temperature: Double? = nil,
+        maximumTokens: Int? = nil,
         onDelta: @escaping @Sendable (String, String) async -> Void
     ) async throws -> String {
         let request = try NexusWorkloadRequest(
@@ -501,8 +503,8 @@ final class NexusConnectController: ObservableObject {
                 runtime: model.backend == .ollama ? .ollama : .lmStudio,
                 model: model.identifier,
                 messages: messages,
-                temperature: nil,
-                maximumTokens: nil
+                temperature: temperature,
+                maximumTokens: maximumTokens
             )
         )
         let stream = try await workloads.events(for: request)

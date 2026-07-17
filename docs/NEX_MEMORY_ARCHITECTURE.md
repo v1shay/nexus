@@ -8,11 +8,13 @@ Unified Memory is additive to the existing notch, streaming model adapters, TTS 
 | --- | --- | --- |
 | Active conversation | Current app session | `NexConversationSession` actor, recent verbatim turns, rolling summary, entities, current task, decisions, and open threads |
 | Saved chats | Explicit **Save to Obsidian** only | Stable conversation UUID and deterministic `80 Chats/YYYY/MM/chat-<uuid>.md` file |
-| Durable memory | Explicit supported memory proposals | Typed Obsidian notes in profile/project/goal/person/organization/decision/knowledge folders |
+| Durable memory | Conservative post-turn inference or explicit supported proposals | Typed Obsidian notes in profile/project/goal/person/organization/decision/knowledge folders |
 | Local retrieval index | Rebuildable per Mac | SQLite schema v1, FTS5 lexical search, replaceable local embeddings stored as chunk blobs |
 | Tool execution | Process lifetime | `NexToolRegistry`, strict schemas, permission checks, structured errors, and lifecycle event bus |
 
 The active context is never replaced by RAG. Every generation receives recent ordered turns. Long sessions additionally receive a rolling earlier-turn summary, active entities, unresolved threads, and the current task. One-word follow-ups and pronouns therefore resolve from the live conversation even when no memory search runs.
+
+After a completed assistant turn, a non-UI background classification pass evaluates the finalized exchange at temperature zero with a bounded output. It runs on every exchange without a keyword prefilter, but writes only proposals above the confidence and importance thresholds. The app then independently requires exact quotes from finalized user messages, rejects assistant evidence and sensitive content, compares related canonical memories, and invokes `memory_propose` through a silent app-authorized boundary. A new dictation preempts this nonessential work. Corrections update the supplied stable source ID in place; unchanged duplicates are skipped by the classifier and retain a stable conceptual idempotency key.
 
 ## Canonical vault
 

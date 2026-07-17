@@ -40,9 +40,9 @@ Returns one canonical item. Arbitrary filenames are not accepted.
 
 ## `memory_propose`
 
-Permission: `write_memory`. A model invocation is rejected unless the user authorized a durable write.
+Permission: `write_memory`. A raw model invocation is always rejected unless the app grants write authorization. The automatic writer is app-mediated: a separate inference pass can only produce a proposal, then deterministic validation checks finalized user evidence, exact supporting quotes, confidence, importance, sensitive content, and any replacement source ID before the app invokes this tool silently.
 
-Required fields are `idempotency_key`, `kind`, `title`, `statement`, and `evidence_message_ids`. Optional typed metadata includes summary, topics, projects, entities, importance, and confidence. Evidence IDs must refer to finalized messages in the active conversation. The service normalizes content identity, prevents exact duplicate facts, chooses the folder/filename, writes YAML, and updates the index.
+Required fields are `idempotency_key`, `kind`, `title`, `statement`, and `evidence_message_ids`. Optional typed metadata includes summary, topics, projects, entities, importance, confidence, and `supersedes_source_id`. Evidence IDs must refer to finalized messages in the active conversation. A valid replacement ID updates that canonical memory file rather than creating a second note. The service chooses the folder/filename, writes YAML, and updates the index; the model never supplies a path.
 
 Supported kinds are:
 
@@ -51,7 +51,7 @@ preference, personal_context, project, goal, person,
 organization, decision, knowledge
 ```
 
-Saying “remember that …” is treated as an explicit authorized proposal and runs asynchronously so it cannot delay response streaming.
+Explicit “remember” requests remain supported. Ordinary durable statements can also be inferred after the response without requiring special wording. Both paths run asynchronously so they cannot delay response streaming or TTS.
 
 ## `memory_forget`
 

@@ -136,9 +136,18 @@ enum NexToolInvocationSource: String, Codable, Sendable {
 struct NexToolInvocation: Sendable {
     let source: NexToolInvocationSource
     let userAuthorizedWrite: Bool
+    let reportsActivity: Bool
 
-    static let app = NexToolInvocation(source: .app, userAuthorizedWrite: true)
-    static let modelReadOnly = NexToolInvocation(source: .model, userAuthorizedWrite: false)
+    static let app = NexToolInvocation(source: .app, userAuthorizedWrite: true, reportsActivity: true)
+    static let modelReadOnly = NexToolInvocation(source: .model, userAuthorizedWrite: false, reportsActivity: true)
+    /// Used only after the app has independently validated a model-generated
+    /// proposal against finalized user evidence. Background writes must never
+    /// take over the live notch tool indicator.
+    static let validatedBackgroundMemoryWrite = NexToolInvocation(
+        source: .app,
+        userAuthorizedWrite: true,
+        reportsActivity: false
+    )
 }
 
 enum NexToolLifecyclePhase: String, Codable, Equatable, Sendable {
@@ -339,17 +348,21 @@ actor NexToolRegistry {
             throw NexToolError.permissionDenied(tool.permission)
         }
         let executionID = UUID()
-        await events.emit(.init(
-            executionID: executionID,
-            toolName: name,
-            phase: .started,
-            message: tool.statusLabel,
-            progress: nil,
-            errorCode: nil,
-            occurredAt: Date()
-        ))
+        if invocation.reportsActivity {
+            await events.emit(.init(
+                executionID: executionID,
+                toolName: name,
+                phase: .started,
+                message: tool.statusLabel,
+                progress: nil,
+                errorCode: nil,
+                occurredAt: Date()
+            ))
+        }
         let eventBus = events
+        let reportsActivity = invocation.reportsActivity
         let context = NexToolExecutionContext(executionID: executionID) { message, progress in
+            guard reportsActivity else { return }
             await eventBus.emit(.init(
                 executionID: executionID,
                 toolName: name,
@@ -362,28 +375,32 @@ actor NexToolRegistry {
         }
         do {
             let result = try await tool.handler(arguments, context)
-            await events.emit(.init(
-                executionID: executionID,
-                toolName: name,
-                phase: .completed,
-                message: Self.completionMessage(label: tool.completionLabel, result: result),
-                progress: 1,
-                errorCode: nil,
-                occurredAt: Date(),
-                result: result
-            ))
+            if invocation.reportsActivity {
+                await events.emit(.init(
+                    executionID: executionID,
+                    toolName: name,
+                    phase: .completed,
+                    message: Self.completionMessage(label: tool.completionLabel, result: result),
+                    progress: 1,
+                    errorCode: nil,
+                    occurredAt: Date(),
+                    result: result
+                ))
+            }
             return result
         } catch {
             let toolError = error as? NexToolError
-            await events.emit(.init(
-                executionID: executionID,
-                toolName: name,
-                phase: .failed,
-                message: error.localizedDescription,
-                progress: nil,
-                errorCode: toolError?.code ?? "tool_execution_failed",
-                occurredAt: Date()
-            ))
+            if invocation.reportsActivity {
+                await events.emit(.init(
+                    executionID: executionID,
+                    toolName: name,
+                    phase: .failed,
+                    message: error.localizedDescription,
+                    progress: nil,
+                    errorCode: toolError?.code ?? "tool_execution_failed",
+                    occurredAt: Date()
+                ))
+            }
             throw error
         }
     }

@@ -2,6 +2,137 @@ import XCTest
 @testable import nexus
 
 extension NexusGeometryTests {
+    @MainActor
+    func testAutomaticMemoryInferenceRunsForImplicitDurableInformationWithoutKeywords() async throws {
+        let fixture = try NexMemoryFixture()
+        let session = NexConversationSession()
+        await session.appendUser("I'm building Driftglass, a local Swift app that indexes research PDFs with SQLite.")
+        let appendedAssistant = await session.appendAssistant("That sounds like a focused offline research tool.")
+        let assistant = try XCTUnwrap(appendedAssistant)
+        let controller = NexMemoryController(
+            conversation: session,
+            vaultURL: fixture.vaultURL,
+            databaseURL: fixture.root.appendingPathComponent("controller.sqlite"),
+            embeddingProvider: NexTestEmbeddingProvider()
+        )
+
+        let request = try await controller.automaticMemoryInferenceRequest(after: assistant.id)
+
+        XCTAssertNotNil(request)
+        XCTAssertTrue(request?.messages.contains(where: {
+            $0.content.contains("Infer meaning; do not look for trigger phrases")
+        }) == true)
+        XCTAssertTrue(request?.messages.last?.content.contains("Driftglass") == true)
+    }
+
+    func testAutomaticMemoryInferenceAcceptsSupportedImplicitFact() throws {
+        let user = NexConversationTurn(
+            role: .user,
+            text: "I'm building Driftglass, a local Swift app that indexes research PDFs with SQLite."
+        )
+        let assistant = NexConversationTurn(role: .assistant, text: "That architecture fits an offline app.")
+        let request = automaticInferenceRequest(user: user, assistant: assistant)
+        let json = """
+        {"proposals":[{"idempotency_key":"stable-concept-key","kind":"project","title":"Driftglass","statement":"Driftglass is a local Swift app that indexes research PDFs with SQLite.","summary":"User is building the local research-PDF indexer Driftglass in Swift with SQLite.","topics":["PDF indexing","local software"],"projects":["Driftglass"],"entities":["Driftglass","Swift","SQLite"],"evidence":[{"message_id":"\(user.id.uuidString)","quote":"I'm building Driftglass, a local Swift app that indexes research PDFs with SQLite."}],"importance":0.91,"confidence":0.97,"supersedes_source_id":null}]}
+        """
+
+        let proposals = try NexAutomaticMemoryInferenceParser.proposals(from: json, request: request)
+
+        XCTAssertEqual(proposals.count, 1)
+        XCTAssertEqual(proposals.first?.kind, .project)
+        XCTAssertEqual(proposals.first?.idempotencyKey, "project-driftglass")
+        XCTAssertEqual(proposals.first?.projects, ["Driftglass"])
+        XCTAssertEqual(proposals.first?.evidenceMessageIDs, [user.id])
+    }
+
+    func testAutomaticMemoryInferenceRejectsLowConfidenceUnsupportedAndSensitiveProposals() throws {
+        let user = NexConversationTurn(role: .user, text: "I'm tired today; my fake API key is sk-exampleexampleexample.")
+        let assistant = NexConversationTurn(role: .assistant, text: "Your permanent favorite color is probably blue.")
+        let request = automaticInferenceRequest(user: user, assistant: assistant)
+        let lowConfidence = """
+        {"proposals":[{"idempotency_key":"temporary-mood","kind":"personal_context","title":"Mood","statement":"The user is tired.","summary":"Temporary mood","topics":[],"projects":[],"entities":[],"evidence":[{"message_id":"\(user.id.uuidString)","quote":"I'm tired today"}],"importance":0.4,"confidence":0.7,"supersedes_source_id":null}]}
+        """
+        XCTAssertTrue(try NexAutomaticMemoryInferenceParser.proposals(from: lowConfidence, request: request).isEmpty)
+
+        let assistantGuess = """
+        {"proposals":[{"idempotency_key":"favorite-color","kind":"preference","title":"Favorite color","statement":"The user's favorite color is blue.","summary":"Favorite color","topics":[],"projects":[],"entities":[],"evidence":[{"message_id":"\(assistant.id.uuidString)","quote":"favorite color is probably blue"}],"importance":0.9,"confidence":0.95,"supersedes_source_id":null}]}
+        """
+        XCTAssertThrowsError(try NexAutomaticMemoryInferenceParser.proposals(from: assistantGuess, request: request))
+
+        let sensitive = """
+        {"proposals":[{"idempotency_key":"credential","kind":"knowledge","title":"Credential","statement":"The user supplied a credential.","summary":"Credential","topics":[],"projects":[],"entities":[],"evidence":[{"message_id":"\(user.id.uuidString)","quote":"my fake API key is sk-exampleexampleexample"}],"importance":0.95,"confidence":0.99,"supersedes_source_id":null}]}
+        """
+        XCTAssertThrowsError(try NexAutomaticMemoryInferenceParser.proposals(from: sensitive, request: request)) { error in
+            XCTAssertEqual(error as? NexAutomaticMemoryInferenceError, .unsafeContent)
+        }
+    }
+
+    @MainActor
+    func testAutomaticMemoryCorrectionUpdatesOneObsidianFileInsteadOfDuplicating() async throws {
+        let fixture = try NexMemoryFixture()
+        let session = NexConversationSession()
+        let appendedFirstUser = await session.appendUser("My research app is called Driftglass.")
+        let firstUser = try XCTUnwrap(appendedFirstUser)
+        let appendedFirstAssistant = await session.appendAssistant("Got it.")
+        let firstAssistant = try XCTUnwrap(appendedFirstAssistant)
+        let controller = NexMemoryController(
+            conversation: session,
+            vaultURL: fixture.vaultURL,
+            databaseURL: fixture.root.appendingPathComponent("writer.sqlite"),
+            embeddingProvider: NexTestEmbeddingProvider()
+        )
+        let firstRequest = automaticInferenceRequest(user: firstUser, assistant: firstAssistant)
+        let firstJSON = """
+        {"proposals":[{"idempotency_key":"research-app-name","kind":"project","title":"Driftglass","statement":"The user's research app is called Driftglass.","summary":"Research app name","topics":[],"projects":["Driftglass"],"entities":["Driftglass"],"evidence":[{"message_id":"\(firstUser.id.uuidString)","quote":"My research app is called Driftglass."}],"importance":0.85,"confidence":0.99,"supersedes_source_id":null}]}
+        """
+        let initialWriteCount = try await controller.persistAutomaticMemoryInference(firstJSON, request: firstRequest)
+        XCTAssertEqual(initialWriteCount, 1)
+        let initialScan = try await fixture.vault.scan()
+        let original = try XCTUnwrap(initialScan.documents.first)
+
+        let appendedCorrectedUser = await session.appendUser("I renamed my research app from Driftglass to Glasswork.")
+        let correctedUser = try XCTUnwrap(appendedCorrectedUser)
+        let appendedCorrectedAssistant = await session.appendAssistant("Glasswork it is.")
+        let correctedAssistant = try XCTUnwrap(appendedCorrectedAssistant)
+        let correctedSnapshot = await session.snapshot()
+        let correctedRequest = NexAutomaticMemoryInferenceRequest(
+            conversationID: correctedSnapshot.id,
+            assistantMessageID: correctedAssistant.id,
+            turns: [correctedUser, correctedAssistant],
+            supportedUserTurns: [correctedUser],
+            candidates: [.init(
+                sourceID: original.id,
+                kind: .project,
+                title: original.title,
+                excerpt: original.summary
+            )]
+        )
+        let correctedJSON = """
+        {"proposals":[{"idempotency_key":"research-app-name","kind":"project","title":"Glasswork","statement":"The user's research app is called Glasswork, formerly Driftglass.","summary":"Current research app name","topics":[],"projects":["Glasswork"],"entities":["Glasswork","Driftglass"],"evidence":[{"message_id":"\(correctedUser.id.uuidString)","quote":"I renamed my research app from Driftglass to Glasswork."}],"importance":0.9,"confidence":0.99,"supersedes_source_id":"\(original.id.uuidString)"}]}
+        """
+
+        let correctedWriteCount = try await controller.persistAutomaticMemoryInference(correctedJSON, request: correctedRequest)
+        XCTAssertEqual(correctedWriteCount, 1)
+        let scan = try await fixture.vault.scan()
+        XCTAssertEqual(scan.documents.count, 1)
+        XCTAssertEqual(scan.documents.first?.id, original.id)
+        XCTAssertEqual(scan.documents.first?.revision, 2)
+        XCTAssertTrue(scan.documents.first?.body.contains("Glasswork") == true)
+    }
+
+    private func automaticInferenceRequest(
+        user: NexConversationTurn,
+        assistant: NexConversationTurn
+    ) -> NexAutomaticMemoryInferenceRequest {
+        NexAutomaticMemoryInferenceRequest(
+            conversationID: UUID(),
+            assistantMessageID: assistant.id,
+            turns: [user, assistant],
+            supportedUserTurns: [user],
+            candidates: []
+        )
+    }
+
     func testUnsavedConversationStaysInSessionAndNeverEntersVault() async throws {
         let fixture = try NexMemoryFixture()
         let session = NexConversationSession()

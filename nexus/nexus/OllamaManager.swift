@@ -159,6 +159,8 @@ final class OllamaManager: @unchecked Sendable {
     func streamChat(
         model: String,
         messages: [NexusChatMessage],
+        temperature: Double? = nil,
+        maximumTokens: Int? = nil,
         onDelta: @escaping @Sendable (_ delta: String, _ accumulated: String) async -> Void
     ) async throws -> String {
         try await ensureServerRunning()
@@ -170,7 +172,8 @@ final class OllamaManager: @unchecked Sendable {
                 model: model,
                 messages: [.init(role: "system", content: NexusResponseInstructions.conciseSystemPrompt)]
                     + messages.map { .init(role: $0.role, content: $0.content) },
-                stream: true
+                stream: true,
+                options: .init(temperature: temperature, numPredict: maximumTokens)
             )
         )
         let (bytes, response) = try await session.bytes(for: request)
@@ -249,9 +252,19 @@ private struct OllamaTagsResponse: Decodable {
 }
 private struct OllamaChatRequest: Encodable {
     struct Message: Encodable { let role: String; let content: String }
+    struct Options: Encodable {
+        let temperature: Double?
+        let numPredict: Int?
+
+        enum CodingKeys: String, CodingKey {
+            case temperature
+            case numPredict = "num_predict"
+        }
+    }
     let model: String
     let messages: [Message]
     let stream: Bool
+    let options: Options
 }
 private struct OllamaChatStreamEvent: Decodable {
     struct Message: Decodable { let content: String }
@@ -401,6 +414,8 @@ final class LMStudioManager: @unchecked Sendable {
     func streamChat(
         model: String,
         messages: [NexusChatMessage],
+        temperature: Double? = nil,
+        maximumTokens: Int? = nil,
         onDelta: @escaping @Sendable (_ delta: String, _ accumulated: String) async -> Void
     ) async throws -> String {
         try await ensureServerRunning()
@@ -413,7 +428,9 @@ final class LMStudioManager: @unchecked Sendable {
                 model: resolvedModel,
                 messages: [.init(role: "system", content: NexusResponseInstructions.conciseSystemPrompt)]
                     + messages.map { .init(role: $0.role, content: $0.content) },
-                stream: true
+                stream: true,
+                temperature: temperature,
+                maxTokens: maximumTokens
             )
         )
         let (bytes, response) = try await session.bytes(for: request)
@@ -542,6 +559,13 @@ private struct OpenAIChatRequest: Encodable {
     let model: String
     let messages: [Message]
     let stream: Bool
+    let temperature: Double?
+    let maxTokens: Int?
+
+    enum CodingKeys: String, CodingKey {
+        case model, messages, stream, temperature
+        case maxTokens = "max_tokens"
+    }
 }
 private struct OpenAIChatStreamResponse: Decodable {
     struct Choice: Decodable {

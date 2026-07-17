@@ -243,6 +243,8 @@ private actor NexusSessionModelStub: NexusHostModelServing {
         runtime: NexusRuntimeKind,
         model: String,
         prompt: String,
+        temperature: Double?,
+        maximumTokens: Int?,
         onDelta: @escaping @Sendable (String, String) async -> Void
     ) async throws -> String {
         await onDelta("remote ", "remote ")

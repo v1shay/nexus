@@ -187,6 +187,98 @@ final class NexMemoryController: ObservableObject {
         }
     }
 
+    /// Builds a post-turn classification request for every completed exchange.
+    /// There is intentionally no phrase or keyword gate here: the selected
+    /// model decides durability from meaning, then deterministic app policy
+    /// validates whatever it proposes.
+    func automaticMemoryInferenceRequest(
+        after assistantMessageID: UUID
+    ) async throws -> NexAutomaticMemoryInferenceRequest? {
+        guard let service else { return nil }
+        let snapshot = await conversation.snapshot()
+        guard let assistantIndex = snapshot.turns.firstIndex(where: {
+            $0.id == assistantMessageID && $0.role == .assistant && $0.state == .finalized
+        }) else { return nil }
+
+        let start = max(0, assistantIndex - 9)
+        let relevantTurns = Array(snapshot.turns[start...assistantIndex])
+        let supportedUserTurns = relevantTurns.filter {
+            $0.role == .user && $0.state == .finalized && !$0.text.isEmpty
+        }
+        guard !supportedUserTurns.isEmpty else { return nil }
+
+        let query = supportedUserTurns.suffix(3).map(\.text).joined(separator: " ")
+        let searchResults = try await service.search(
+            query,
+            options: .init(
+                limit: 10,
+                documentTypes: [.memory],
+                includeTranscriptExcerpts: false,
+                evidenceOnly: true
+            )
+        )
+        var seenCandidates = Set<UUID>()
+        let candidates = searchResults.compactMap { result -> NexAutomaticMemoryCandidate? in
+            guard seenCandidates.insert(result.sourceID).inserted,
+                  let kind = result.memoryKind else { return nil }
+            return .init(
+                sourceID: result.sourceID,
+                kind: kind,
+                title: result.title,
+                excerpt: String(result.excerpt.prefix(700))
+            )
+        }
+        return NexAutomaticMemoryInferenceRequest(
+            conversationID: snapshot.id,
+            assistantMessageID: assistantMessageID,
+            turns: relevantTurns,
+            supportedUserTurns: supportedUserTurns,
+            candidates: candidates
+        )
+    }
+
+    @discardableResult
+    func persistAutomaticMemoryInference(
+        _ rawResponse: String,
+        request: NexAutomaticMemoryInferenceRequest
+    ) async throws -> Int {
+        guard service != nil else { return 0 }
+        let proposals = try NexAutomaticMemoryInferenceParser.proposals(
+            from: rawResponse,
+            request: request
+        )
+        guard !proposals.isEmpty else { return 0 }
+        try await service?.ensureToolsRegistered()
+        var stored = 0
+        for proposal in proposals {
+            var arguments: [String: NexJSONValue] = [
+                "idempotency_key": .string(proposal.idempotencyKey),
+                "kind": .string(proposal.kind.rawValue),
+                "title": .string(proposal.title),
+                "statement": .string(proposal.statement),
+                "summary": .string(proposal.summary),
+                "topics": .array(proposal.topics.map(NexJSONValue.string)),
+                "projects": .array(proposal.projects.map(NexJSONValue.string)),
+                "entities": .array(proposal.entities.map(NexJSONValue.string)),
+                "evidence_message_ids": .array(
+                    proposal.evidenceMessageIDs.map { .string($0.uuidString.lowercased()) }
+                ),
+                "importance": .number(proposal.importance),
+                "confidence": .number(proposal.confidence)
+            ]
+            if let supersedesSourceID = proposal.supersedesSourceID {
+                arguments["supersedes_source_id"] = .string(supersedesSourceID.uuidString.lowercased())
+            }
+            _ = try await registry.execute(
+                name: "memory_propose",
+                arguments: arguments,
+                invocation: .validatedBackgroundMemoryWrite
+            )
+            stored += 1
+        }
+        return stored
+    }
+
     private func synchronize(using service: NexMemoryService) async {
         syncState = .syncing
         do {
@@ -230,6 +322,267 @@ final class NexMemoryController: ObservableObject {
             importance: 0.75,
             confidence: 1
         )
+    }
+}
+
+struct NexAutomaticMemoryCandidate: Equatable, Sendable {
+    let sourceID: UUID
+    let kind: NexMemoryKind
+    let title: String
+    let excerpt: String
+}
+
+struct NexAutomaticMemoryInferenceRequest: Equatable, Sendable {
+    let conversationID: UUID
+    let assistantMessageID: UUID
+    let turns: [NexConversationTurn]
+    let supportedUserTurns: [NexConversationTurn]
+    let candidates: [NexAutomaticMemoryCandidate]
+
+    var messages: [NexusChatMessage] {
+        let transcript = turns.map { turn in
+            let evidence = turn.role == .user && turn.state == .finalized
+                ? " evidence_message_id=\(turn.id.uuidString.lowercased())"
+                : ""
+            return "[\(turn.role.rawValue)\(evidence)] \(turn.text)"
+        }.joined(separator: "\n")
+        let existing = candidates.isEmpty ? "(none found)" : candidates.map {
+            "- source_id=\($0.sourceID.uuidString.lowercased()) kind=\($0.kind.rawValue) title=\($0.title) evidence=\($0.excerpt)"
+        }.joined(separator: "\n")
+        return [
+            .init(role: "system", content: Self.classifierInstructions),
+            .init(role: "user", content: """
+            Finalized conversation excerpt:
+            \(transcript)
+
+            Potentially related existing durable memories:
+            \(existing)
+
+            Classify the exchange now. Return only the JSON object.
+            """)
+        ]
+    }
+
+    static let classifierInstructions = """
+    You are Nex's conservative durable-memory classifier, not the conversational assistant. For this internal call, these classification and JSON-output rules override the normal Nex persona and response-format instructions.
+    Infer meaning; do not look for trigger phrases. Evaluate every finalized exchange.
+
+    Propose a memory only when the user has directly supplied stable information likely to remain useful weeks or months later: a preference, personal context, project, goal, person, organization, decision, or important reusable knowledge. Ordinary wording is enough; the user never needs to say “remember.”
+
+    Never propose questions, requests, commands, temporary moods or plans for today, jokes, hypotheticals, uncertain claims, assistant statements, assistant deductions, generated answers, credentials, passwords, API keys, tokens, private keys, or incomplete/interrupted speech. Do not turn the assistant's response into a fact about the user. Return no proposal when support or future value is doubtful.
+
+    Compare against the supplied existing memories. Skip an unchanged duplicate. For a correction or meaningful update, set supersedes_source_id to the exact supplied source_id and retain one conceptual idempotency_key. Never invent a source ID.
+
+    Every proposal needs confidence >= 0.88 and importance >= 0.70. Cite one or more finalized USER evidence messages and copy a verbatim supporting quote from each. Maximum 3 proposals.
+
+    Return exactly this JSON shape and no Markdown:
+    {"proposals":[{"idempotency_key":"stable-concept-key","kind":"preference|personal_context|project|goal|person|organization|decision|knowledge","title":"short title","statement":"one supported standalone fact","summary":"short retrieval summary","topics":["..."],"projects":["..."],"entities":["..."],"evidence":[{"message_id":"uuid","quote":"verbatim user quote"}],"importance":0.85,"confidence":0.95,"supersedes_source_id":null}]}
+    If nothing qualifies, return {"proposals":[]}.
+    """
+}
+
+enum NexAutomaticMemoryInferenceError: LocalizedError, Equatable {
+    case invalidJSON
+    case invalidShape(String)
+    case unsupportedEvidence(UUID)
+    case unsupportedQuote(UUID)
+    case unsafeContent
+
+    var errorDescription: String? {
+        switch self {
+        case .invalidJSON: "The memory classifier did not return valid JSON."
+        case .invalidShape(let detail): "The memory classifier returned an invalid proposal: \(detail)"
+        case .unsupportedEvidence(let id): "Memory evidence \(id.uuidString) was not a finalized user message."
+        case .unsupportedQuote(let id): "Memory evidence did not quote user message \(id.uuidString)."
+        case .unsafeContent: "Sensitive content cannot be written to durable memory automatically."
+        }
+    }
+}
+
+enum NexAutomaticMemoryInferenceParser {
+    private struct Envelope: Decodable {
+        let proposals: [RawProposal]
+    }
+
+    private struct RawProposal: Decodable {
+        let idempotencyKey: String
+        let kind: String
+        let title: String
+        let statement: String
+        let summary: String
+        let topics: [String]
+        let projects: [String]
+        let entities: [String]
+        let evidence: [RawEvidence]
+        let importance: Double
+        let confidence: Double
+        let supersedesSourceID: String?
+
+        enum CodingKeys: String, CodingKey {
+            case idempotencyKey = "idempotency_key"
+            case kind, title, statement, summary, topics, projects, entities, evidence, importance, confidence
+            case supersedesSourceID = "supersedes_source_id"
+        }
+    }
+
+    private struct RawEvidence: Decodable {
+        let messageID: String
+        let quote: String
+
+        enum CodingKeys: String, CodingKey {
+            case messageID = "message_id"
+            case quote
+        }
+    }
+
+    static func proposals(
+        from rawResponse: String,
+        request: NexAutomaticMemoryInferenceRequest
+    ) throws -> [NexMemoryProposal] {
+        let data = try jsonData(from: rawResponse)
+        try validateKnownFields(in: data)
+        guard let envelope = try? JSONDecoder().decode(Envelope.self, from: data),
+              envelope.proposals.count <= 3 else {
+            throw NexAutomaticMemoryInferenceError.invalidShape("expected at most three proposals")
+        }
+        let userEvidence = Dictionary(uniqueKeysWithValues: request.supportedUserTurns.map { ($0.id, $0.text) })
+        let candidateIDs = Set(request.candidates.map(\.sourceID))
+        var seenKeys = Set<String>()
+        return try envelope.proposals.compactMap { raw -> NexMemoryProposal? in
+            guard (0.88...1).contains(raw.confidence), (0.70...1).contains(raw.importance) else { return nil }
+            guard let kind = NexMemoryKind(rawValue: raw.kind) else {
+                throw NexAutomaticMemoryInferenceError.invalidShape("unknown memory kind")
+            }
+            let title = trimmed(raw.title, maximum: 100)
+            let statement = trimmed(raw.statement, maximum: 1_000)
+            let summary = trimmed(raw.summary, maximum: 500)
+            let suppliedKey = canonicalKey(raw.idempotencyKey)
+            let key = genericKeys.contains(suppliedKey)
+                ? derivedKey(kind: kind, title: title, projects: raw.projects, entities: raw.entities)
+                : suppliedKey
+            guard key.count >= 3, !title.isEmpty, statement.count >= 3,
+                  raw.evidence.count > 0, raw.evidence.count <= 4 else {
+                throw NexAutomaticMemoryInferenceError.invalidShape("required content is missing")
+            }
+            guard seenKeys.insert("\(kind.rawValue):\(key)").inserted else { return nil }
+            var evidenceIDs: [UUID] = []
+            for evidence in raw.evidence {
+                guard let id = UUID(uuidString: evidence.messageID), let userText = userEvidence[id] else {
+                    throw NexAutomaticMemoryInferenceError.unsupportedEvidence(
+                        UUID(uuidString: evidence.messageID) ?? UUID()
+                    )
+                }
+                let quote = normalizeEvidence(evidence.quote)
+                guard quote.count >= 8, normalizeEvidence(userText).contains(quote) else {
+                    throw NexAutomaticMemoryInferenceError.unsupportedQuote(id)
+                }
+                evidenceIDs.append(id)
+            }
+            let safetyText = (
+                evidenceIDs.compactMap { userEvidence[$0] }
+                + [title, statement, summary]
+                + raw.topics + raw.projects + raw.entities
+            ).joined(separator: " ")
+            guard !containsSensitiveContent(safetyText) else {
+                throw NexAutomaticMemoryInferenceError.unsafeContent
+            }
+            let supersedesID: UUID?
+            if let rawID = raw.supersedesSourceID {
+                guard let id = UUID(uuidString: rawID), candidateIDs.contains(id) else {
+                    throw NexAutomaticMemoryInferenceError.invalidShape("unknown supersedes_source_id")
+                }
+                supersedesID = id
+            } else {
+                supersedesID = nil
+            }
+            var seenEvidence = Set<UUID>()
+            let orderedEvidenceIDs = evidenceIDs.filter { seenEvidence.insert($0).inserted }
+            return NexMemoryProposal(
+                idempotencyKey: key,
+                kind: kind,
+                title: title,
+                statement: statement,
+                summary: summary,
+                topics: bounded(raw.topics),
+                projects: bounded(raw.projects),
+                entities: bounded(raw.entities),
+                evidenceMessageIDs: orderedEvidenceIDs,
+                importance: min(1, raw.importance),
+                confidence: min(1, raw.confidence),
+                supersedesSourceID: supersedesID
+            )
+        }
+    }
+
+    private static func jsonData(from response: String) throws -> Data {
+        guard let start = response.firstIndex(of: "{"), let end = response.lastIndex(of: "}"), start <= end,
+              let data = String(response[start...end]).data(using: .utf8) else {
+            throw NexAutomaticMemoryInferenceError.invalidJSON
+        }
+        return data
+    }
+
+    private static func validateKnownFields(in data: Data) throws {
+        guard let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              Set(root.keys) == ["proposals"], let proposals = root["proposals"] as? [[String: Any]] else {
+            throw NexAutomaticMemoryInferenceError.invalidJSON
+        }
+        let proposalFields: Set<String> = [
+            "idempotency_key", "kind", "title", "statement", "summary", "topics", "projects",
+            "entities", "evidence", "importance", "confidence", "supersedes_source_id"
+        ]
+        for proposal in proposals {
+            guard Set(proposal.keys).isSubset(of: proposalFields),
+                  let evidence = proposal["evidence"] as? [[String: Any]],
+                  evidence.allSatisfy({ Set($0.keys).isSubset(of: ["message_id", "quote"]) }) else {
+                throw NexAutomaticMemoryInferenceError.invalidShape("unknown fields are not allowed")
+            }
+        }
+    }
+
+    private static func canonicalKey(_ value: String) -> String {
+        value.lowercased().split { !$0.isLetter && !$0.isNumber }.prefix(24).joined(separator: "-")
+    }
+
+    private static let genericKeys: Set<String> = [
+        "stable-concept-key", "stable-key", "concept-key", "memory-key", "idempotency-key"
+    ]
+
+    private static func derivedKey(
+        kind: NexMemoryKind,
+        title: String,
+        projects: [String],
+        entities: [String]
+    ) -> String {
+        let identity = projects.first ?? entities.first ?? title
+        let suffix = canonicalKey(identity)
+        return suffix.isEmpty ? "\(kind.rawValue)-durable-memory" : "\(kind.rawValue)-\(suffix)"
+    }
+
+    private static func trimmed(_ value: String, maximum: Int) -> String {
+        String(value.trimmingCharacters(in: .whitespacesAndNewlines).prefix(maximum))
+    }
+
+    private static func bounded(_ values: [String]) -> [String] {
+        Array(values.prefix(10)).map { trimmed($0, maximum: 80) }.filter { !$0.isEmpty }
+    }
+
+    private static func normalizeEvidence(_ value: String) -> String {
+        value.lowercased()
+            .replacingOccurrences(of: "’", with: "'")
+            .replacingOccurrences(of: "‘", with: "'")
+            .replacingOccurrences(of: "“", with: "\"")
+            .replacingOccurrences(of: "”", with: "\"")
+            .split(whereSeparator: \.isWhitespace)
+            .joined(separator: " ")
+    }
+
+    private static func containsSensitiveContent(_ value: String) -> Bool {
+        let lower = value.lowercased()
+        let labels = ["password", "passcode", "api key", "private key", "access token", "secret key", "bearer token"]
+        if labels.contains(where: lower.contains) { return true }
+        let patterns = [#"sk-[a-z0-9_-]{16,}"#, #"-----begin [a-z ]*private key-----"#]
+        return patterns.contains { lower.range(of: $0, options: .regularExpression) != nil }
     }
 }
 

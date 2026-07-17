@@ -15,6 +15,8 @@ protocol NexusHostModelServing: Sendable {
         runtime: NexusRuntimeKind,
         model: String,
         prompt: String,
+        temperature: Double?,
+        maximumTokens: Int?,
         onDelta: @escaping @Sendable (String, String) async -> Void
     ) async throws -> String
     func runtimeInventory() async throws -> NexusRuntimeInventoryPayload
@@ -94,13 +96,27 @@ final class NexusLocalModelService: NexusHostModelServing, @unchecked Sendable {
         runtime: NexusRuntimeKind,
         model: String,
         prompt: String,
+        temperature: Double?,
+        maximumTokens: Int?,
         onDelta: @escaping @Sendable (String, String) async -> Void
     ) async throws -> String {
         switch runtime {
         case .ollama:
-            try await ollama.streamChat(model: model, prompt: prompt, onDelta: onDelta)
+            try await ollama.streamChat(
+                model: model,
+                messages: [.init(role: "user", content: prompt)],
+                temperature: temperature,
+                maximumTokens: maximumTokens,
+                onDelta: onDelta
+            )
         case .lmStudio:
-            try await lmStudio.streamChat(model: model, prompt: prompt, onDelta: onDelta)
+            try await lmStudio.streamChat(
+                model: model,
+                messages: [.init(role: "user", content: prompt)],
+                temperature: temperature,
+                maximumTokens: maximumTokens,
+                onDelta: onDelta
+            )
         }
     }
 
@@ -223,11 +239,27 @@ actor NexusHostRuntimeManager: NexusHostModelServing {
         runtime: NexusRuntimeKind,
         model: String,
         prompt: String,
+        temperature: Double?,
+        maximumTokens: Int?,
         onDelta: @escaping @Sendable (String, String) async -> Void
     ) async throws -> String {
         switch runtime {
-        case .ollama: try await ollama.streamChat(model: model, prompt: prompt, onDelta: onDelta)
-        case .lmStudio: try await lmStudio.streamChat(model: model, prompt: prompt, onDelta: onDelta)
+        case .ollama:
+            try await ollama.streamChat(
+                model: model,
+                messages: [.init(role: "user", content: prompt)],
+                temperature: temperature,
+                maximumTokens: maximumTokens,
+                onDelta: onDelta
+            )
+        case .lmStudio:
+            try await lmStudio.streamChat(
+                model: model,
+                messages: [.init(role: "user", content: prompt)],
+                temperature: temperature,
+                maximumTokens: maximumTokens,
+                onDelta: onDelta
+            )
         }
     }
 }
@@ -527,7 +559,13 @@ actor NexusHostServiceExecutor {
 
     private func inference(_ payload: NexusInferencePayload, emitter: NexusWorkloadEmitter) async throws {
         let prompt = payload.messages.map { "\($0.role): \($0.content)" }.joined(separator: "\n\n")
-        let answer = try await models.streamChat(runtime: payload.runtime, model: payload.model, prompt: prompt) { delta, accumulated in
+        let answer = try await models.streamChat(
+            runtime: payload.runtime,
+            model: payload.model,
+            prompt: prompt,
+            temperature: payload.temperature,
+            maximumTokens: payload.maximumTokens
+        ) { delta, accumulated in
             await emitter.emit(kind: .token, payload: NexusTextDeltaPayload(delta: delta, accumulated: accumulated))
         }
         await emitter.emit(kind: .result, payload: NexusTextDeltaPayload(delta: "", accumulated: answer))
@@ -545,7 +583,13 @@ actor NexusHostServiceExecutor {
         Context:
         \(context)
         """
-        let answer = try await models.streamChat(runtime: payload.runtime, model: payload.model, prompt: prompt) { delta, accumulated in
+        let answer = try await models.streamChat(
+            runtime: payload.runtime,
+            model: payload.model,
+            prompt: prompt,
+            temperature: nil,
+            maximumTokens: nil
+        ) { delta, accumulated in
             await emitter.emit(kind: .token, payload: NexusTextDeltaPayload(delta: delta, accumulated: accumulated))
         }
         await emitter.emit(kind: .result, payload: NexusTextDeltaPayload(delta: "", accumulated: answer))

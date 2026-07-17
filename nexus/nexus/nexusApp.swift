@@ -146,6 +146,7 @@ final class NotchController: ObservableObject {
     private var automaticRevealIsWaitingForNotchVisit = false
     private let responseSpeaker = ResponseSpeaker()
     private var responseTask: Task<Void, Never>?
+    private var memoryWriterTask: Task<Void, Never>?
     private var responseGeneration = UUID()
     private var responseSpeechCursor = StreamedSpeechCursor()
     private let conversationSession: NexConversationSession
@@ -254,6 +255,9 @@ final class NotchController: ObservableObject {
 
     private func startGlobalDictation() async {
         closeTask?.cancel()
+        // Foreground speech always wins model capacity. If a prior background
+        // classification is cancelled, the next pass still sees recent turns.
+        memoryWriterTask?.cancel()
         if responseIsStreaming, !responseSpeechCursor.text.isEmpty {
             await conversationSession.appendAssistant(responseSpeechCursor.text, interrupted: true)
             await memory.conversationDidChange()
@@ -303,10 +307,11 @@ final class NotchController: ObservableObject {
                 responseIsStreaming = true
                 _ = responseSpeechCursor.consume(delta: identityAnswer, accumulated: identityAnswer)
                 interaction.receiveAnswer(identityAnswer)
-                await conversationSession.appendAssistant(identityAnswer)
+                let assistantTurn = await conversationSession.appendAssistant(identityAnswer)
                 await memory.conversationDidChange()
                 responseSpeaker.append(identityAnswer)
                 responseSpeaker.finishStreaming()
+                if let assistantTurn { scheduleAutomaticMemoryInference(after: assistantTurn.id) }
                 responseIsStreaming = false
                 automaticRevealIsWaitingForNotchVisit = true
                 if let screen { resize(to: expandedSize(for: screen), animated: true) }
@@ -378,12 +383,13 @@ final class NotchController: ObservableObject {
                 guard !Task.isCancelled, responseGeneration == generation else { return }
                 let reveal = !suppressAutomaticResponseReveal
                 interaction.receiveAnswer(responseSpeechCursor.text, reveal: reveal)
-                await conversationSession.appendAssistant(responseSpeechCursor.text)
+                let assistantTurn = await conversationSession.appendAssistant(responseSpeechCursor.text)
                 await memory.conversationDidChange()
                 responseIsStreaming = false
                 automaticRevealIsWaitingForNotchVisit = reveal
                 if reveal, let screen { resize(to: expandedSize(for: screen), animated: true) }
                 responseSpeaker.finishStreaming()
+                if let assistantTurn { scheduleAutomaticMemoryInference(after: assistantTurn.id) }
             } catch {
                 guard !Task.isCancelled, responseGeneration == generation else { return }
                 responseSpeaker.stop()
@@ -395,6 +401,36 @@ final class NotchController: ObservableObject {
                 )
                 automaticRevealIsWaitingForNotchVisit = reveal
                 if reveal, let screen { resize(to: expandedSize(for: screen), animated: true) }
+            }
+        }
+    }
+
+    private func scheduleAutomaticMemoryInference(after assistantMessageID: UUID) {
+        memoryWriterTask?.cancel()
+        memoryWriterTask = Task { [weak self] in
+            guard let self else { return }
+            do {
+                guard let request = try await memory.automaticMemoryInferenceRequest(
+                    after: assistantMessageID
+                ) else { return }
+                try Task.checkCancellation()
+                let raw = try await modelDownloadViewModel.response(
+                    messages: request.messages,
+                    temperature: 0,
+                    maximumTokens: 750,
+                    onDelta: { _, _ in }
+                )
+                try Task.checkCancellation()
+                let stored = try await memory.persistAutomaticMemoryInference(raw, request: request)
+                if stored > 0 {
+                    NSLog("Nex background memory writer stored %d validated proposal(s)", stored)
+                }
+            } catch is CancellationError {
+                // A new dictation intentionally preempts nonessential writing.
+            } catch {
+                // Memory writing is best-effort and must never affect the
+                // response, streaming, TTS, or the next dictation session.
+                NSLog("Nex background memory writer skipped: %@", error.localizedDescription)
             }
         }
     }
@@ -555,6 +591,7 @@ final class NotchController: ObservableObject {
     func shutdown() {
         speechTranscriber.stop()
         responseTask?.cancel()
+        memoryWriterTask?.cancel()
         responseSpeaker.stop()
         toolEventTask?.cancel()
         memory.stop()

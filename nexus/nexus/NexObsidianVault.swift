@@ -48,6 +48,7 @@ struct NexMemoryProposal: Codable, Equatable, Sendable {
     let evidenceMessageIDs: [UUID]
     let importance: Double
     let confidence: Double
+    let supersedesSourceID: UUID?
 
     init(
         idempotencyKey: String,
@@ -60,7 +61,8 @@ struct NexMemoryProposal: Codable, Equatable, Sendable {
         entities: [String] = [],
         evidenceMessageIDs: [UUID],
         importance: Double = 0.6,
-        confidence: Double = 0.8
+        confidence: Double = 0.8,
+        supersedesSourceID: UUID? = nil
     ) {
         self.idempotencyKey = idempotencyKey
         self.kind = kind
@@ -73,6 +75,7 @@ struct NexMemoryProposal: Codable, Equatable, Sendable {
         self.evidenceMessageIDs = evidenceMessageIDs
         self.importance = importance
         self.confidence = confidence
+        self.supersedesSourceID = supersedesSourceID
     }
 }
 
@@ -279,15 +282,18 @@ actor NexObsidianVault {
 
     func saveMemory(
         _ proposal: NexMemoryProposal,
-        supportedBy conversation: NexConversationSnapshot
+        supportedBy conversation: NexConversationSnapshot,
+        replacing documentID: UUID? = nil
     ) throws -> NexVaultWriteResult {
         try prepare()
-        let finalizedIDs = Set(conversation.turns.filter { $0.state == .finalized }.map(\.id))
+        let finalizedIDs = Set(conversation.turns.filter {
+            $0.role == .user && $0.state == .finalized
+        }.map(\.id))
         guard !proposal.evidenceMessageIDs.isEmpty,
               Set(proposal.evidenceMessageIDs).isSubset(of: finalizedIDs) else {
             throw NexObsidianVaultError.unsupportedEvidence
         }
-        let documentID = Self.stableUUID(for: proposal.idempotencyKey)
+        let documentID = documentID ?? Self.stableUUID(for: proposal.idempotencyKey)
         let preferred = "\(proposal.kind.folder)/\(proposal.kind.rawValue)-\(documentID.uuidString.lowercased()).md"
         let relativePath = try existingRelativePath(for: documentID) ?? preferred
         let fileURL = try safeURL(for: relativePath)

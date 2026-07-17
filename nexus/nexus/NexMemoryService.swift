@@ -151,9 +151,20 @@ actor NexMemoryService {
         guard !proposal.evidenceMessageIDs.isEmpty else {
             throw NexMemoryServiceError.noFinalizedEvidence
         }
-        let normalizedStatement = statement.lowercased().split { !$0.isLetter && !$0.isNumber }.joined(separator: "-")
+        let normalizedKey = proposal.idempotencyKey.lowercased()
+            .split { !$0.isLetter && !$0.isNumber }
+            .joined(separator: "-")
+        guard !normalizedKey.isEmpty else {
+            throw NexMemoryServiceError.invalidProposal("idempotency key must contain letters or numbers")
+        }
+        if let supersededID = proposal.supersedesSourceID {
+            let existing = try await document(id: supersededID)
+            guard existing.type == .memory, existing.memoryKind == proposal.kind else {
+                throw NexMemoryServiceError.invalidProposal("a replacement must target an existing memory of the same kind")
+            }
+        }
         let canonicalProposal = NexMemoryProposal(
-            idempotencyKey: "\(proposal.kind.rawValue):\(normalizedStatement)",
+            idempotencyKey: "\(proposal.kind.rawValue):\(String(normalizedKey.prefix(180)))",
             kind: proposal.kind,
             title: title,
             statement: statement,
@@ -163,10 +174,15 @@ actor NexMemoryService {
             entities: proposal.entities,
             evidenceMessageIDs: proposal.evidenceMessageIDs,
             importance: proposal.importance,
-            confidence: proposal.confidence
+            confidence: proposal.confidence,
+            supersedesSourceID: proposal.supersedesSourceID
         )
         let snapshot = await conversation.snapshot()
-        let write = try await vault.saveMemory(canonicalProposal, supportedBy: snapshot)
+        let write = try await vault.saveMemory(
+            canonicalProposal,
+            supportedBy: snapshot,
+            replacing: proposal.supersedesSourceID
+        )
         try await index.index(write.document)
         return write
     }
@@ -279,7 +295,8 @@ extension NexMemoryService {
                 "entities": .init(.stringArray),
                 "evidence_message_ids": .init(.stringArray, required: true),
                 "importance": .init(.number, minimum: 0, maximum: 1),
-                "confidence": .init(.number, minimum: 0, maximum: 1)
+                "confidence": .init(.number, minimum: 0, maximum: 1),
+                "supersedes_source_id": .init(.string)
             ]),
             handler: { arguments, _ in
                 guard let kind = arguments["kind"]?.string.flatMap(NexMemoryKind.init) else {
@@ -294,6 +311,13 @@ extension NexMemoryService {
                     if case .number(let value) = arguments[key] { return value }
                     return fallback
                 }
+                let supersedesSourceID: UUID?
+                if let raw = arguments["supersedes_source_id"]?.string {
+                    guard let id = UUID(uuidString: raw) else { throw NexToolError.invalidStableID(raw) }
+                    supersedesSourceID = id
+                } else {
+                    supersedesSourceID = nil
+                }
                 let proposal = NexMemoryProposal(
                     idempotencyKey: arguments["idempotency_key"]?.string ?? "",
                     kind: kind,
@@ -305,7 +329,8 @@ extension NexMemoryService {
                     entities: arguments["entities"]?.strings ?? [],
                     evidenceMessageIDs: evidence,
                     importance: number("importance", 0.6),
-                    confidence: number("confidence", 0.8)
+                    confidence: number("confidence", 0.8),
+                    supersedesSourceID: supersedesSourceID
                 )
                 let write = try await service.store(proposal)
                 return .object([

@@ -256,19 +256,39 @@ final class ModelDownloadViewModel: ObservableObject {
 
     func response(
         messages: [NexusChatMessage],
+        temperature: Double? = nil,
+        maximumTokens: Int? = nil,
         onDelta: @escaping @Sendable (_ delta: String, _ accumulated: String) async -> Void
     ) async throws -> String {
         guard let activeModel else {
             throw LocalModelError.invalidResponse("Choose an installed model in the model window first")
         }
         if let connect, connect.modelRoute != .thisMac {
-            return try await connect.response(model: activeModel, messages: messages, onDelta: onDelta)
+            return try await connect.response(
+                model: activeModel,
+                messages: messages,
+                temperature: temperature,
+                maximumTokens: maximumTokens,
+                onDelta: onDelta
+            )
         }
         switch activeModel.backend {
         case .ollama:
-            return try await ollama.streamChat(model: activeModel.identifier, messages: messages, onDelta: onDelta)
+            return try await ollama.streamChat(
+                model: activeModel.identifier,
+                messages: messages,
+                temperature: temperature,
+                maximumTokens: maximumTokens,
+                onDelta: onDelta
+            )
         case .lmStudio:
-            return try await lmStudio.streamChat(model: activeModel.identifier, messages: messages, onDelta: onDelta)
+            return try await lmStudio.streamChat(
+                model: activeModel.identifier,
+                messages: messages,
+                temperature: temperature,
+                maximumTokens: maximumTokens,
+                onDelta: onDelta
+            )
         }
     }
 
