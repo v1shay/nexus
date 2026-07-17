@@ -37,3 +37,12 @@ Then open the model window from the notch and expand **Nexus Connect**. Follow t
 - [Unified workload API](docs/NEXUS_CONNECT_API.md)
 - [Migration and rollback](docs/NEXUS_CONNECT_MIGRATION.md)
 - [Voice setup](VOICE_SETUP.md)
+
+### Unified Memory
+
+Nex now keeps unsaved active-chat continuity in memory, saves chats only when you press **Save to Obsidian**, and uses a human-readable Obsidian vault as the canonical long-term store. Each Mac builds its own replaceable SQLite/FTS/vector index outside iCloud; the live database is never synchronized. A clock button in the notch opens saved chats and resumes the original conversation ID on another Mac after iCloud has delivered and Nex has ingested the Markdown.
+
+- [Memory architecture](docs/NEX_MEMORY_ARCHITECTURE.md)
+- [Obsidian and iCloud setup](docs/NEX_MEMORY_SETUP.md)
+- [Memory tool contracts](docs/NEX_MEMORY_TOOLS.md)
+- [Migration, rollback, and limitations](docs/NEX_MEMORY_MIGRATION.md)

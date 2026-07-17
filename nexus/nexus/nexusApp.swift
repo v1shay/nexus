@@ -34,6 +34,12 @@ final class NexusAppDelegate: NSObject, NSApplicationDelegate {
             launchTask = Task { @MainActor in await host.start() }
             return
         }
+        if CommandLine.arguments.contains("--nexus-ui-testing") {
+            let notch = NotchController()
+            self.notch = notch
+            notch.install(startServices: false)
+            return
+        }
         launchTask = Task { @MainActor [weak self] in
             await Self.retireOlderInstances()
             guard !Task.isCancelled else { return }
@@ -168,9 +174,9 @@ final class NotchController: ObservableObject {
         return controller
     }()
 
-    func install() {
+    func install(startServices: Bool = true) {
         guard panel == nil else { return }
-        connectController.start()
+        if startServices { connectController.start() }
         let screen = NSScreen.main ?? NSScreen.screens[0]
         self.screen = screen
         currentSize = closedSize(for: screen)
@@ -189,10 +195,12 @@ final class NotchController: ObservableObject {
         hostingView.autoresizingMask = [.width, .height]
         panel.contentView = hostingView
         self.panel = panel
-        startToolEventListener()
-        memory.start()
-        installCommandHoldMonitor()
-        installPointerMonitor()
+        if startServices {
+            startToolEventListener()
+            memory.start()
+            installCommandHoldMonitor()
+            installPointerMonitor()
+        }
         panel.orderFrontRegardless()
         NSLog("Nexus installed its panel, pointer monitor, and global hotkey")
 

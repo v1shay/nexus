@@ -19,6 +19,7 @@ final class nexusUITestsLaunchTests: XCTestCase {
 
     func testLaunch() throws {
         let app = XCUIApplication()
+        app.launchArguments = ["--nexus-ui-testing"]
         app.launch()
 
         // Insert steps here to perform after app launch but before taking a screenshot,
