@@ -1,5 +1,6 @@
 import SwiftUI
 import AppKit
+import Combine
 import Darwin
 
 @main
@@ -46,6 +47,10 @@ final class NexusAppDelegate: NSObject, NSApplicationDelegate {
         launchTask?.cancel()
         notch?.shutdown()
         connectHost?.stop()
+    }
+
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        notch?.confirmDiscardBeforeQuit() == false ? .terminateCancel : .terminateNow
     }
 
     /// Xcode can launch a new debug build while the previous accessory app is
@@ -127,6 +132,7 @@ final class NotchController: ObservableObject {
     private var commandHoldMonitor: NexusCommandHoldMonitor?
     private var pointerMonitor: PointerProximityMonitor?
     private var modelPanel: NSPanel?
+    private var savedChatsPanel: NSPanel?
     private let speechTranscriber = SpeechTranscriber()
     private let connectController: NexusConnectController
     private let modelDownloadViewModel: ModelDownloadViewModel
@@ -135,7 +141,10 @@ final class NotchController: ObservableObject {
     private var responseTask: Task<Void, Never>?
     private var responseGeneration = UUID()
     private var responseSpeechCursor = StreamedSpeechCursor()
-    private let conversationSession = NexConversationSession()
+    private let conversationSession: NexConversationSession
+    let memory: NexMemoryController
+    private var memoryObservation: AnyCancellable?
+    private var toolEventTask: Task<Void, Never>?
     private var responseIsStreaming = false
     private var previousThinkingPhrase: String?
     private var hoverSession = NotchHoverSession()
@@ -143,8 +152,14 @@ final class NotchController: ObservableObject {
 
     init(connectController: NexusConnectController? = nil) {
         let resolvedConnectController = connectController ?? .shared
+        let conversationSession = NexConversationSession()
         self.connectController = resolvedConnectController
+        self.conversationSession = conversationSession
         modelDownloadViewModel = ModelDownloadViewModel(connect: resolvedConnectController)
+        memory = NexMemoryController(conversation: conversationSession)
+        memoryObservation = memory.objectWillChange.sink { [weak self] _ in
+            self?.objectWillChange.send()
+        }
     }
 
     static let preview: NotchController = {
@@ -174,6 +189,8 @@ final class NotchController: ObservableObject {
         hostingView.autoresizingMask = [.width, .height]
         panel.contentView = hostingView
         self.panel = panel
+        startToolEventListener()
+        memory.start()
         installCommandHoldMonitor()
         installPointerMonitor()
         panel.orderFrontRegardless()
@@ -230,6 +247,7 @@ final class NotchController: ObservableObject {
         closeTask?.cancel()
         if responseIsStreaming, !responseSpeechCursor.text.isEmpty {
             await conversationSession.appendAssistant(responseSpeechCursor.text, interrupted: true)
+            await memory.conversationDidChange()
         }
         responseIsStreaming = false
         responseTask?.cancel()
@@ -250,8 +268,9 @@ final class NotchController: ObservableObject {
         speechTranscriber.stop()
         interaction.finishDictation()
         let finalizedPrompt = transcript.trimmingCharacters(in: .whitespacesAndNewlines)
-        if !finalizedPrompt.isEmpty {
-            await conversationSession.appendUser(finalizedPrompt)
+        if !finalizedPrompt.isEmpty, let turn = await conversationSession.appendUser(finalizedPrompt) {
+            await memory.conversationDidChange()
+            memory.storeExplicitRememberRequest(prompt: finalizedPrompt, evidenceMessageID: turn.id)
         }
         automaticRevealIsWaitingForNotchVisit = true
         if let screen {
@@ -278,20 +297,59 @@ final class NotchController: ObservableObject {
             if let screen { resize(to: expandedSize(for: screen), animated: true) }
             await responseSpeaker.speakImmediatelyAndWait(acknowledgement)
             guard !Task.isCancelled, responseGeneration == generation else { return }
-            interaction.beginThinking()
-            if let screen { resize(to: listeningSize(for: screen), animated: true) }
             do {
-                let messages = await conversationSession.contextMessages()
-                let answer = try await modelDownloadViewModel.response(messages: messages) { [weak self] delta, accumulated in
-                    guard let self else { return }
-                    await self.receiveResponseDelta(delta, accumulated: accumulated, generation: generation)
+                if let compound = NexCompoundMemoryQuery.split(prompt) {
+                    // Answer the independent portion first, then visibly check
+                    // memory and stream the personal-history portion as a
+                    // second segment. This avoids one long silent retrieval.
+                    interaction.beginThinking()
+                    if let screen { resize(to: listeningSize(for: screen), animated: true) }
+                    var immediateMessages = await conversationSession.contextMessages()
+                    immediateMessages.append(.init(
+                        role: "system",
+                        content: "For this first response segment, answer only this independent question: \(compound.immediateQuestion). Do not answer the memory-dependent part yet."
+                    ))
+                    let immediateAnswer = try await streamModelResponse(
+                        messages: immediateMessages,
+                        generation: generation
+                    )
+                    let immediateDelta = responseSpeechCursor.consume(delta: "", accumulated: immediateAnswer)
+                    if !immediateDelta.isEmpty { responseSpeaker.append(immediateDelta) }
+                    let immediateRenderedAnswer = responseSpeechCursor.text
+                    try? await Task.sleep(for: .milliseconds(180))
+
+                    let retrievedContext = await retrieveMemoryContext(
+                        prompt: compound.memoryQuestion,
+                        generation: generation
+                    )
+                    guard !Task.isCancelled, responseGeneration == generation else { return }
+                    interaction.beginThinking()
+                    if let screen { resize(to: listeningSize(for: screen), animated: true) }
+                    responseSpeechCursor.beginSegment()
+                    var memoryMessages = await conversationSession.contextMessages(retrievedContext: retrievedContext)
+                    memoryMessages.append(.init(role: "assistant", content: immediateRenderedAnswer))
+                    memoryMessages.append(.init(
+                        role: "system",
+                        content: "Continue without repeating the first segment. Answer only this memory-dependent question using stored evidence when available: \(compound.memoryQuestion). If no evidence was retrieved, say that clearly."
+                    ))
+                    let memoryAnswer = try await streamModelResponse(messages: memoryMessages, generation: generation)
+                    let finalDelta = responseSpeechCursor.consume(delta: "", accumulated: memoryAnswer)
+                    if !finalDelta.isEmpty { responseSpeaker.append(finalDelta) }
+                } else {
+                    let retrievedContext = await retrieveMemoryContext(prompt: prompt, generation: generation)
+                    guard !Task.isCancelled, responseGeneration == generation else { return }
+                    interaction.beginThinking()
+                    if let screen { resize(to: listeningSize(for: screen), animated: true) }
+                    let messages = await conversationSession.contextMessages(retrievedContext: retrievedContext)
+                    let answer = try await streamModelResponse(messages: messages, generation: generation)
+                    let finalSpeechDelta = responseSpeechCursor.consume(delta: "", accumulated: answer)
+                    if !finalSpeechDelta.isEmpty { responseSpeaker.append(finalSpeechDelta) }
                 }
                 guard !Task.isCancelled, responseGeneration == generation else { return }
-                let finalSpeechDelta = responseSpeechCursor.consume(delta: "", accumulated: answer)
-                if !finalSpeechDelta.isEmpty { responseSpeaker.append(finalSpeechDelta) }
                 let reveal = !suppressAutomaticResponseReveal
                 interaction.receiveAnswer(responseSpeechCursor.text, reveal: reveal)
                 await conversationSession.appendAssistant(responseSpeechCursor.text)
+                await memory.conversationDidChange()
                 responseIsStreaming = false
                 automaticRevealIsWaitingForNotchVisit = reveal
                 if reveal, let screen { resize(to: expandedSize(for: screen), animated: true) }
@@ -308,6 +366,28 @@ final class NotchController: ObservableObject {
                 automaticRevealIsWaitingForNotchVisit = reveal
                 if reveal, let screen { resize(to: expandedSize(for: screen), animated: true) }
             }
+        }
+    }
+
+    private func retrieveMemoryContext(prompt: String, generation: UUID) async -> String? {
+        do {
+            return try await memory.retrievalContext(for: prompt)
+        } catch {
+            guard !Task.isCancelled, responseGeneration == generation else { return nil }
+            // Preserve the failed indicator long enough to be legible, then
+            // continue honestly without retrieved evidence.
+            try? await Task.sleep(for: .milliseconds(650))
+            return nil
+        }
+    }
+
+    private func streamModelResponse(
+        messages: [NexusChatMessage],
+        generation: UUID
+    ) async throws -> String {
+        try await modelDownloadViewModel.response(messages: messages) { [weak self] delta, accumulated in
+            guard let self else { return }
+            await self.receiveResponseDelta(delta, accumulated: accumulated, generation: generation)
         }
     }
 
@@ -338,7 +418,10 @@ final class NotchController: ObservableObject {
     func dismissOverlay() {
         if responseIsStreaming, !responseSpeechCursor.text.isEmpty {
             let interrupted = responseSpeechCursor.text
-            Task { await conversationSession.appendAssistant(interrupted, interrupted: true) }
+            Task {
+                await conversationSession.appendAssistant(interrupted, interrupted: true)
+                await memory.conversationDidChange()
+            }
         }
         responseIsStreaming = false
         responseTask?.cancel()
@@ -382,6 +465,33 @@ final class NotchController: ObservableObject {
         if let screen { resize(to: listeningSize(for: screen), animated: true) }
     }
 
+    func saveConversation() {
+        Task { await memory.save() }
+    }
+
+    func openSavedChats() {
+        if let savedChatsPanel {
+            savedChatsPanel.makeKeyAndOrderFront(nil)
+            NSApp.activate(ignoringOtherApps: true)
+            return
+        }
+        let panel = NSPanel(
+            contentRect: NSRect(x: 0, y: 0, width: 650, height: 460),
+            styleMask: [.titled, .closable, .resizable, .utilityWindow],
+            backing: .buffered,
+            defer: false
+        )
+        panel.title = "Nex Memory"
+        panel.isReleasedWhenClosed = false
+        panel.contentView = NSHostingView(rootView: NexSavedChatsView(memory: memory) { [weak self] id in
+            Task { @MainActor in await self?.resumeSavedConversation(id: id) }
+        })
+        panel.center()
+        panel.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
+        savedChatsPanel = panel
+    }
+
     func openModelAggregator() {
         if let modelPanel {
             modelPanel.makeKeyAndOrderFront(nil)
@@ -408,9 +518,73 @@ final class NotchController: ObservableObject {
         speechTranscriber.stop()
         responseTask?.cancel()
         responseSpeaker.stop()
+        toolEventTask?.cancel()
+        memory.stop()
         commandHoldMonitor = nil
         modelDownloadViewModel.shutdown()
         connectController.shutdown()
+    }
+
+    func confirmDiscardBeforeQuit() -> Bool {
+        guard memory.hasValuableUnsavedConversation else { return true }
+        let alert = NSAlert()
+        alert.messageText = "This conversation is not saved"
+        alert.informativeText = "Quit and discard it, or cancel and use Save to Obsidian first."
+        alert.alertStyle = .warning
+        alert.addButton(withTitle: "Cancel")
+        alert.addButton(withTitle: "Quit Without Saving")
+        return alert.runModal() == .alertSecondButtonReturn
+    }
+
+    private func startToolEventListener() {
+        guard toolEventTask == nil else { return }
+        toolEventTask = Task { [weak self] in
+            guard let self else { return }
+            let bus = memory.registry.events
+            let stream = await bus.events()
+            for await event in stream {
+                guard !Task.isCancelled else { return }
+                handleToolEvent(event)
+            }
+        }
+    }
+
+    private func handleToolEvent(_ event: NexToolLifecycleEvent) {
+        switch event.phase {
+        case .started, .progress:
+            interaction.beginToolActivity(.lifecycle(event))
+            if let screen { resize(to: toolActivitySize(for: screen), animated: true) }
+        case .completed:
+            interaction.beginThinking()
+            if let screen { resize(to: listeningSize(for: screen), animated: true) }
+        case .failed:
+            interaction.beginToolActivity(.lifecycle(event))
+            if let screen { resize(to: toolActivitySize(for: screen), animated: true) }
+        }
+    }
+
+    private func resumeSavedConversation(id: UUID) async {
+        if memory.hasValuableUnsavedConversation {
+            let alert = NSAlert()
+            alert.messageText = "Replace this unsaved conversation?"
+            alert.informativeText = "Save it to Obsidian first, or explicitly discard it before resuming another chat."
+            alert.alertStyle = .warning
+            alert.addButton(withTitle: "Cancel")
+            alert.addButton(withTitle: "Discard and Resume")
+            guard alert.runModal() == .alertSecondButtonReturn else { return }
+        }
+        do {
+            let snapshot = try await memory.resume(id: id)
+            let latestUser = snapshot.turns.last(where: { $0.role == .user })?.text ?? snapshot.title
+            let latestAnswer = snapshot.turns.last(where: { $0.role == .assistant })?.text ?? snapshot.summary
+            interaction.restoreConversation(transcript: latestUser, answer: latestAnswer)
+            savedChatsPanel?.orderOut(nil)
+            automaticRevealIsWaitingForNotchVisit = true
+            if let screen { resize(to: expandedSize(for: screen), animated: true) }
+        } catch {
+            interaction.failResponse("Nex couldn’t resume that conversation. \(error.localizedDescription)")
+            if let screen { resize(to: expandedSize(for: screen), animated: true) }
+        }
     }
 
     private func updateHover(_ hovering: Bool) {

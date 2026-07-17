@@ -132,6 +132,7 @@ struct NexVaultScanResult: Sendable {
     let tombstonedIDs: Set<UUID>
     let conflicts: [NexVaultConflict]
     let pendingUbiquitousFiles: Int
+    let ingestionFailures: [String]
 }
 
 struct NexVaultEvent: Codable, Equatable, Identifiable, Sendable {
@@ -203,21 +204,19 @@ actor NexObsidianVault {
 
     let rootURL: URL
     let deviceID: UUID
-    private let fileManager: FileManager
+    private let fileManager = FileManager.default
     private let encoder: JSONEncoder
     private let decoder: JSONDecoder
 
     init(
         rootURL: URL = NexVaultLocation.defaultURL(),
-        deviceID: UUID = NexDeviceIdentifier.current,
-        fileManager: FileManager = .default
+        deviceID: UUID = NexDeviceIdentifier.current
     ) {
         // FileManager may enumerate `/var/...` as `/private/var/...`. Resolve
         // that alias once so a valid file never looks like an absolute path
         // outside the vault when we derive its relative location.
         self.rootURL = rootURL.standardizedFileURL.resolvingSymlinksInPath()
         self.deviceID = deviceID
-        self.fileManager = fileManager
         encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
         encoder.dateEncodingStrategy = .iso8601
@@ -370,6 +369,7 @@ actor NexObsidianVault {
         let tombstonedIDs = Set(tombstones.map(\.id))
         var documents: [NexCanonicalDocument] = []
         var pending = 0
+        var ingestionFailures: [String] = []
         let keys: [URLResourceKey] = [
             .isRegularFileKey, .isUbiquitousItemKey, .ubiquitousItemDownloadingStatusKey
         ]
@@ -388,14 +388,20 @@ actor NexObsidianVault {
                 pending += 1
                 continue
             }
-            guard let document = try? parseDocument(at: url), !tombstonedIDs.contains(document.id) else { continue }
-            documents.append(document)
+            do {
+                let document = try parseDocument(at: url)
+                if !tombstonedIDs.contains(document.id) { documents.append(document) }
+            } catch {
+                let relative = (try? relativePathWithinVault(for: url)) ?? url.lastPathComponent
+                ingestionFailures.append("\(relative): \(error.localizedDescription)")
+            }
         }
         return .init(
             documents: documents,
             tombstonedIDs: tombstonedIDs,
             conflicts: try detectConflicts(),
-            pendingUbiquitousFiles: pending
+            pendingUbiquitousFiles: pending,
+            ingestionFailures: ingestionFailures.sorted()
         )
     }
 

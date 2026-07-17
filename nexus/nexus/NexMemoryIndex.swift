@@ -178,6 +178,17 @@ actor NexMemoryIndex {
         return text(statement, column: 0)
     }
 
+    func indexedDocumentIDs() throws -> Set<UUID> {
+        try ensureMigrated()
+        let statement = try prepare("SELECT id FROM documents WHERE deleted = 0")
+        defer { sqlite3_finalize(statement) }
+        var ids = Set<UUID>()
+        while sqlite3_step(statement) == SQLITE_ROW {
+            if let id = UUID(uuidString: text(statement, column: 0)) { ids.insert(id) }
+        }
+        return ids
+    }
+
     func index(_ document: NexCanonicalDocument) throws {
         try ensureMigrated()
         guard document.status == .active else {

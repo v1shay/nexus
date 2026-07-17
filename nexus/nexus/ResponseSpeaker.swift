@@ -358,8 +358,15 @@ struct SpeechSentenceChunker: Equatable {
 /// once. Duplicate or stale network events can no longer repeat or reorder TTS.
 struct StreamedSpeechCursor: Equatable {
     private(set) var text = ""
+    private var segmentPrefix = ""
+
+    mutating func beginSegment(separator: String = "\n\n") {
+        if !text.isEmpty { text += separator }
+        segmentPrefix = text
+    }
 
     mutating func consume(delta: String, accumulated snapshot: String) -> String {
+        let snapshot = segmentPrefix + snapshot
         if snapshot.hasPrefix(text) {
             let suffix = String(snapshot.dropFirst(text.count))
             text = snapshot

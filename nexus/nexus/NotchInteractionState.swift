@@ -18,13 +18,32 @@ struct ToolActivity: Equatable, Sendable {
     let status: String
     let spokenStatus: String
     let icon: ToolIconSource
+    var phase: NexToolLifecyclePhase = .started
+    var progress: Double?
 
     static func googleSearch(query: String) -> ToolActivity {
         ToolActivity(
             toolName: "Google Search",
             status: "Researching \(query) with Google",
             spokenStatus: "Searching Google for \(query).",
-            icon: .svg(data: Data(chromeSVG.utf8), fallbackSystemName: "globe")
+            icon: .svg(data: Data(chromeSVG.utf8), fallbackSystemName: "globe"),
+            progress: nil
+        )
+    }
+
+    static func lifecycle(_ event: NexToolLifecycleEvent) -> ToolActivity {
+        let isMemory = event.toolName.hasPrefix("memory_") || event.toolName == "conversation_recall"
+        let title = isMemory ? "Nex Memory" : event.toolName.replacingOccurrences(of: "_", with: " ").capitalized
+        let icon: ToolIconSource = isMemory
+            ? .svg(data: Data(memorySVG.utf8), fallbackSystemName: "brain.head.profile")
+            : .systemSymbol("wrench.and.screwdriver")
+        return ToolActivity(
+            toolName: title,
+            status: event.message,
+            spokenStatus: isMemory ? "Checking memory." : event.message,
+            icon: icon,
+            phase: event.phase,
+            progress: event.progress
         )
     }
 
@@ -34,6 +53,14 @@ struct ToolActivity: Equatable, Sendable {
       <path fill="#FBBC04" d="M11.8 11 24 32a14 14 0 0 0 12.1 13.4L28 59.8A28 28 0 0 1 11.8 11Z"/>
       <path fill="#34A853" d="M28 59.8 40.1 39A14 14 0 0 0 44.1 25h12.2A28 28 0 0 1 28 59.8Z"/>
       <circle cx="32" cy="32" r="11" fill="#4285F4" stroke="white" stroke-width="2"/>
+    </svg>
+    """
+
+    private static let memorySVG = """
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+      <path fill="none" stroke="white" stroke-width="4" stroke-linecap="round" stroke-linejoin="round" d="M27 10c-8 0-13 5-13 12 0 2 .5 4 1.6 5.6C12 30 10 34 10 38c0 7 5 12 12 12h5V10Zm10 0c8 0 13 5 13 12 0 2-.5 4-1.6 5.6C52 30 54 34 54 38c0 7-5 12-12 12h-5V10Z"/>
+      <path fill="none" stroke="#67E8F9" stroke-width="3" stroke-linecap="round" d="M20 23h7m-9 12h9m10-12h7m-7 12h9"/>
+      <circle cx="32" cy="53" r="5" fill="#67E8F9" opacity=".9"/>
     </svg>
     """
 }
@@ -91,6 +118,13 @@ struct NotchInteractionState: Equatable {
         toolActivity = nil
         answer = message
         presentation = reveal ? .overlay : .idle
+    }
+
+    mutating func restoreConversation(transcript: String, answer: String) {
+        self.transcript = transcript
+        self.answer = answer
+        toolActivity = nil
+        presentation = .overlay
     }
 
     mutating func showOverlay() {

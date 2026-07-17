@@ -11,7 +11,7 @@ struct ContentView: View {
     var body: some View {
         ZStack(alignment: .top) {
             if notch.isUsingTool, let activity = notch.toolActivity {
-                ToolActivityNotch(activity: activity)
+                ToolActivityIndicator(activity: activity)
                     .transition(.opacity.combined(with: .scale(scale: 0.94, anchor: .top)))
             } else if notch.isListening || notch.isThinking {
                 ListeningWings(isThinking: notch.isThinking)
@@ -36,7 +36,7 @@ struct ContentView: View {
     }
 }
 
-private struct ToolActivityNotch: View {
+private struct ToolActivityIndicator: View {
     @EnvironmentObject private var notch: NotchController
     let activity: ToolActivity
 
@@ -47,17 +47,41 @@ private struct ToolActivityNotch: View {
                 NexusPetView(pet: notch.selectedPet, activity: .tool, height: 31)
                     .frame(width: NotchGeometry.wingWidth)
                 Color.clear.frame(maxWidth: .infinity)
-                ToolIconView(source: activity.icon)
+                AnimatedToolIcon(source: activity.icon, isFailure: activity.phase == .failed)
                     .frame(width: NotchGeometry.wingWidth)
             }
             .frame(height: 34)
 
-            ShimmeringStatusText(text: activity.status)
+            ShimmeringStatusText(text: activity.status, isFailure: activity.phase == .failed)
                 .padding(.horizontal, 24)
                 .padding(.top, 45)
         }
         .accessibilityElement(children: .combine)
         .accessibilityLabel("\(activity.toolName). \(activity.status)")
+    }
+}
+
+private struct AnimatedToolIcon: View {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    let source: ToolIconSource
+    let isFailure: Bool
+
+    @ViewBuilder
+    var body: some View {
+        if reduceMotion || isFailure {
+            ToolIconView(source: source)
+                .foregroundStyle(isFailure ? .red.opacity(0.9) : .white.opacity(0.82))
+        } else {
+            TimelineView(.animation(minimumInterval: 1 / 30)) { timeline in
+                let phase = timeline.date.timeIntervalSinceReferenceDate
+                    .truncatingRemainder(dividingBy: 1.8) / 1.8
+                let glow = (sin(phase * .pi * 2) + 1) / 2
+                ToolIconView(source: source)
+                    .foregroundStyle(.white.opacity(0.6 + glow * 0.4))
+                    .shadow(color: .cyan.opacity(glow * 0.8), radius: 4 + glow * 4)
+                    .scaleEffect(0.96 + glow * 0.04)
+            }
+        }
     }
 }
 
@@ -78,30 +102,40 @@ private struct ToolIconView: View {
             }
         }
         .frame(width: 24, height: 24)
-        .foregroundStyle(.white.opacity(0.88))
     }
 }
 
 private struct ShimmeringStatusText: View {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     let text: String
+    let isFailure: Bool
 
+    @ViewBuilder
     var body: some View {
-        TimelineView(.animation(minimumInterval: 1 / 30)) { timeline in
-            let phase = timeline.date.timeIntervalSinceReferenceDate
-                .truncatingRemainder(dividingBy: 1.8) / 1.8
-            ZStack {
-                Text(text).foregroundStyle(.white.opacity(0.42))
-                LinearGradient(
-                    colors: [.clear, .cyan.opacity(0.7), .white, .cyan.opacity(0.7), .clear],
-                    startPoint: UnitPoint(x: phase - 0.38, y: 0.5),
-                    endPoint: UnitPoint(x: phase + 0.38, y: 0.5)
-                )
-                .mask(Text(text))
-                .shadow(color: .cyan.opacity(0.65), radius: 7)
+        if reduceMotion || isFailure {
+            Text(text)
+                .foregroundStyle(isFailure ? .red.opacity(0.9) : .white.opacity(0.78))
+                .font(.system(size: 13, weight: .medium, design: .rounded))
+                .lineLimit(1)
+                .frame(maxWidth: .infinity)
+        } else {
+            TimelineView(.animation(minimumInterval: 1 / 30)) { timeline in
+                let phase = timeline.date.timeIntervalSinceReferenceDate
+                    .truncatingRemainder(dividingBy: 1.8) / 1.8
+                ZStack {
+                    Text(text).foregroundStyle(.white.opacity(0.42))
+                    LinearGradient(
+                        colors: [.clear, .cyan.opacity(0.7), .white, .cyan.opacity(0.7), .clear],
+                        startPoint: UnitPoint(x: phase - 0.38, y: 0.5),
+                        endPoint: UnitPoint(x: phase + 0.38, y: 0.5)
+                    )
+                    .mask(Text(text))
+                    .shadow(color: .cyan.opacity(0.65), radius: 7)
+                }
+                .font(.system(size: 13, weight: .medium, design: .rounded))
+                .lineLimit(1)
+                .frame(maxWidth: .infinity)
             }
-            .font(.system(size: 13, weight: .medium, design: .rounded))
-            .lineLimit(1)
-            .frame(maxWidth: .infinity)
         }
     }
 }
@@ -205,8 +239,30 @@ private struct TranscriptContents: View {
                     cycle: notch.cyclePet,
                     close: notch.dismissOverlay
                 )
+                Button { notch.saveConversation() } label: {
+                    Label(notch.memory.saveState.label, systemImage: notch.memory.saveState.systemImage)
+                        .font(.system(size: 11, weight: .semibold, design: .rounded))
+                        .lineLimit(1)
+                        .padding(.horizontal, 10)
+                        .frame(height: 30)
+                        .background(.white.opacity(0.09), in: Capsule())
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(saveButtonColor)
+                .disabled(notch.memory.saveState == .saving || notch.memory.saveState == .saved)
+                .help(saveHelp)
                 Spacer()
                 HStack(spacing: 7) {
+                    Button { notch.openSavedChats() } label: {
+                        Image(systemName: "clock.arrow.circlepath")
+                            .font(.system(size: 14, weight: .medium))
+                            .frame(width: 30, height: 30)
+                            .background(.white.opacity(0.09), in: Circle())
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(.white.opacity(0.72))
+                    .help("Saved conversations · \(notch.memory.syncState.label)")
+
                     BatteryPercentageView()
 
                     Button { notch.openModelAggregator() } label: {
@@ -256,6 +312,19 @@ private struct TranscriptContents: View {
         .padding(.horizontal, 27)
         .padding(.top, 20)
         .padding(.bottom, 20)
+    }
+
+    private var saveButtonColor: Color {
+        switch notch.memory.saveState {
+        case .saved: .green.opacity(0.9)
+        case .failed: .red.opacity(0.9)
+        default: .white.opacity(0.76)
+        }
+    }
+
+    private var saveHelp: String {
+        if case .failed(let message) = notch.memory.saveState { return message }
+        return "Save this conversation to the iCloud-synced Obsidian vault"
     }
 }
 

@@ -28,6 +28,9 @@
 		O100000130075C29006660E4 /* NexConversation.swift in Sources */ = {isa = PBXBuildFile; fileRef = O100000230075C29006660E4 /* NexConversation.swift */; };
 		P100000130075C29006660E4 /* NexObsidianVault.swift in Sources */ = {isa = PBXBuildFile; fileRef = P100000230075C29006660E4 /* NexObsidianVault.swift */; };
 		Q100000130075C29006660E4 /* NexMemoryIndex.swift in Sources */ = {isa = PBXBuildFile; fileRef = Q100000230075C29006660E4 /* NexMemoryIndex.swift */; };
+		R100000130075C29006660E4 /* NexToolSystem.swift in Sources */ = {isa = PBXBuildFile; fileRef = R100000230075C29006660E4 /* NexToolSystem.swift */; };
+		R100000330075C29006660E4 /* NexMemoryService.swift in Sources */ = {isa = PBXBuildFile; fileRef = R100000430075C29006660E4 /* NexMemoryService.swift */; };
+		S100000130075C29006660E4 /* NexMemoryController.swift in Sources */ = {isa = PBXBuildFile; fileRef = S100000230075C29006660E4 /* NexMemoryController.swift */; };
 		G100000330075C29006660E4 /* NexusConnectFraming.swift in Sources */ = {isa = PBXBuildFile; fileRef = G100000430075C29006660E4 /* NexusConnectFraming.swift */; };
 		G100000530075C29006660E4 /* NexusConnectSecurity.swift in Sources */ = {isa = PBXBuildFile; fileRef = G100000630075C29006660E4 /* NexusConnectSecurity.swift */; };
 		G100000730075C29006660E4 /* NexusConnectPolicy.swift in Sources */ = {isa = PBXBuildFile; fileRef = G100000830075C29006660E4 /* NexusConnectPolicy.swift */; };
@@ -93,6 +96,9 @@
 		O100000230075C29006660E4 /* NexConversation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NexConversation.swift; sourceTree = "<group>"; };
 		P100000230075C29006660E4 /* NexObsidianVault.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NexObsidianVault.swift; sourceTree = "<group>"; };
 		Q100000230075C29006660E4 /* NexMemoryIndex.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NexMemoryIndex.swift; sourceTree = "<group>"; };
+		R100000230075C29006660E4 /* NexToolSystem.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NexToolSystem.swift; sourceTree = "<group>"; };
+		R100000430075C29006660E4 /* NexMemoryService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NexMemoryService.swift; sourceTree = "<group>"; };
+		S100000230075C29006660E4 /* NexMemoryController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NexMemoryController.swift; sourceTree = "<group>"; };
 		G100000430075C29006660E4 /* NexusConnectFraming.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NexusConnectFraming.swift; sourceTree = "<group>"; };
 		G100000630075C29006660E4 /* NexusConnectSecurity.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NexusConnectSecurity.swift; sourceTree = "<group>"; };
 		G100000830075C29006660E4 /* NexusConnectPolicy.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NexusConnectPolicy.swift; sourceTree = "<group>"; };
@@ -177,6 +183,9 @@
 				O100000230075C29006660E4 /* NexConversation.swift */,
 				P100000230075C29006660E4 /* NexObsidianVault.swift */,
 				Q100000230075C29006660E4 /* NexMemoryIndex.swift */,
+				R100000230075C29006660E4 /* NexToolSystem.swift */,
+				R100000430075C29006660E4 /* NexMemoryService.swift */,
+				S100000230075C29006660E4 /* NexMemoryController.swift */,
 				G100000430075C29006660E4 /* NexusConnectFraming.swift */,
 				G100000630075C29006660E4 /* NexusConnectSecurity.swift */,
 				G100000830075C29006660E4 /* NexusConnectPolicy.swift */,
@@ -380,6 +389,9 @@
 				O100000130075C29006660E4 /* NexConversation.swift in Sources */,
 				P100000130075C29006660E4 /* NexObsidianVault.swift in Sources */,
 				Q100000130075C29006660E4 /* NexMemoryIndex.swift in Sources */,
+				R100000130075C29006660E4 /* NexToolSystem.swift in Sources */,
+				R100000330075C29006660E4 /* NexMemoryService.swift in Sources */,
+				S100000130075C29006660E4 /* NexMemoryController.swift in Sources */,
 				G100000330075C29006660E4 /* NexusConnectFraming.swift in Sources */,
 				G100000530075C29006660E4 /* NexusConnectSecurity.swift in Sources */,
 				G100000730075C29006660E4 /* NexusConnectPolicy.swift in Sources */,
