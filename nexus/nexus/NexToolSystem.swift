@@ -192,11 +192,35 @@ struct NexRegisteredTool: Sendable {
     let name: String
     let description: String
     let statusLabel: String
+    let completionLabel: String
     let spokenStatus: String
     let iconSystemName: String
     let permission: NexToolPermission
     let schema: NexToolInputSchema
     let handler: Handler
+
+    init(
+        name: String,
+        description: String,
+        statusLabel: String,
+        completionLabel: String? = nil,
+        spokenStatus: String,
+        iconSystemName: String,
+        permission: NexToolPermission,
+        schema: NexToolInputSchema,
+        handler: @escaping Handler
+    ) {
+        self.name = name
+        self.description = description
+        self.statusLabel = statusLabel
+        self.completionLabel = completionLabel
+            ?? "Used \(name.replacingOccurrences(of: "_", with: " "))"
+        self.spokenStatus = spokenStatus
+        self.iconSystemName = iconSystemName
+        self.permission = permission
+        self.schema = schema
+        self.handler = handler
+    }
 }
 
 enum NexToolError: LocalizedError, Equatable {
@@ -300,7 +324,7 @@ actor NexToolRegistry {
                 executionID: executionID,
                 toolName: name,
                 phase: .completed,
-                message: tool.statusLabel,
+                message: Self.completionMessage(label: tool.completionLabel, result: result),
                 progress: 1,
                 errorCode: nil,
                 occurredAt: Date()
@@ -319,5 +343,12 @@ actor NexToolRegistry {
             ))
             throw error
         }
+    }
+
+    private static func completionMessage(label: String, result: NexJSONValue) -> String {
+        guard case .object(let object) = result,
+              case .number(let rawCount) = object["count"] else { return label }
+        let count = max(0, Int(rawCount))
+        return "\(label) · \(count) source\(count == 1 ? "" : "s")"
     }
 }

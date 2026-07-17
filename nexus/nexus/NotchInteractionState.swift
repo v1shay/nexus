@@ -70,11 +70,13 @@ struct NotchInteractionState: Equatable {
     private(set) var transcript = ""
     private(set) var answer = ""
     private(set) var toolActivity: ToolActivity?
+    private(set) var toolReceipt: ToolActivity?
 
     mutating func beginDictation() {
         transcript = ""
         answer = ""
         toolActivity = nil
+        toolReceipt = nil
         presentation = .dictating
     }
 
@@ -93,7 +95,14 @@ struct NotchInteractionState: Equatable {
     }
 
     mutating func beginToolActivity(_ activity: ToolActivity) {
+        if activity.phase == .started { toolReceipt = nil }
         toolActivity = activity
+        presentation = .tool
+    }
+
+    mutating func completeToolActivity(_ activity: ToolActivity) {
+        toolActivity = activity
+        toolReceipt = activity
         presentation = .tool
     }
 
@@ -124,6 +133,7 @@ struct NotchInteractionState: Equatable {
         self.transcript = transcript
         self.answer = answer
         toolActivity = nil
+        toolReceipt = nil
         presentation = .overlay
     }
 
@@ -139,6 +149,7 @@ struct NotchInteractionState: Equatable {
 
     mutating func dismiss() {
         toolActivity = nil
+        toolReceipt = nil
         presentation = .idle
     }
 }

@@ -249,13 +249,17 @@ extension NexusGeometryTests {
             name: "future_weather",
             description: "Test future tool",
             statusLabel: "Checking weather…",
+            completionLabel: "Used weather",
             spokenStatus: "Checking weather.",
             iconSystemName: "cloud.sun",
             permission: .network,
             schema: .init(fields: ["city": .init(.string, required: true)]),
             handler: { arguments, context in
                 await context.reportProgress("Reading forecast…", 0.5)
-                return .object(["city": arguments["city"] ?? .null])
+                return .object([
+                    "city": arguments["city"] ?? .null,
+                    "count": .number(2)
+                ])
             }
         ))
         let stream = await bus.events()
@@ -274,9 +278,13 @@ extension NexusGeometryTests {
         )
         let events = await eventsTask.value
 
-        XCTAssertEqual(result, .object(["city": .string("Cupertino")]))
+        XCTAssertEqual(result, .object([
+            "city": .string("Cupertino"),
+            "count": .number(2)
+        ]))
         XCTAssertEqual(events.map(\.phase), [.started, .progress, .completed])
         XCTAssertTrue(events.allSatisfy { $0.toolName == "future_weather" })
+        XCTAssertEqual(events.last?.message, "Used weather · 2 sources")
     }
 
     func testDirectVaultDeletionIsRemovedFromLocalRetrieval() async throws {

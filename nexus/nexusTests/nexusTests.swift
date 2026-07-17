@@ -334,6 +334,52 @@ final class NexusGeometryTests: XCTestCase {
         }
     }
 
+    func testCompletedToolReceiptSurvivesThinkingAndStreamingUntilNewDictation() {
+        let executionID = UUID()
+        let started = NexToolLifecycleEvent(
+            executionID: executionID,
+            toolName: "memory_search",
+            phase: .started,
+            message: "Checking memory…",
+            progress: nil,
+            errorCode: nil,
+            occurredAt: Date()
+        )
+        let completed = NexToolLifecycleEvent(
+            executionID: executionID,
+            toolName: "memory_search",
+            phase: .completed,
+            message: "Used memory · 3 sources",
+            progress: 1,
+            errorCode: nil,
+            occurredAt: Date()
+        )
+        var state = NotchInteractionState()
+        state.beginDictation()
+        state.updateTranscript("What is my name?")
+        state.finishDictation()
+
+        state.beginToolActivity(.lifecycle(started))
+        XCTAssertEqual(state.presentation, .tool)
+        XCTAssertEqual(state.toolActivity?.status, "Checking memory…")
+
+        state.completeToolActivity(.lifecycle(completed))
+        XCTAssertEqual(state.presentation, .tool)
+        XCTAssertEqual(state.toolReceipt?.status, "Used memory · 3 sources")
+
+        state.beginThinking()
+        XCTAssertEqual(state.presentation, .thinking)
+        XCTAssertNil(state.toolActivity)
+        XCTAssertEqual(state.toolReceipt?.status, "Used memory · 3 sources")
+
+        state.receivePartialAnswer("Your name is Vishay.")
+        XCTAssertEqual(state.presentation, .overlay)
+        XCTAssertEqual(state.toolReceipt?.status, "Used memory · 3 sources")
+
+        state.beginDictation()
+        XCTAssertNil(state.toolReceipt)
+    }
+
     func testInlineLatexIsSeparatedFromMarkdownProse() {
         XCTAssertEqual(
             InlineMathParser.parse("Energy is $E=mc^2$ in this example."),

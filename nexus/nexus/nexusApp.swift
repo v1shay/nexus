@@ -129,6 +129,7 @@ final class NotchController: ObservableObject {
     var isThinking: Bool { interaction.presentation == .thinking }
     var isUsingTool: Bool { interaction.presentation == .tool }
     var toolActivity: ToolActivity? { interaction.toolActivity }
+    var toolReceipt: ToolActivity? { interaction.toolReceipt }
     var transcript: String { interaction.transcript }
     var answer: String { interaction.answer }
 
@@ -392,8 +393,16 @@ final class NotchController: ObservableObject {
     }
 
     private func retrieveMemoryContext(prompt: String, generation: UUID) async -> String? {
+        let startedAt = Date()
         do {
-            return try await memory.retrievalContext(for: prompt)
+            let context = try await memory.retrievalContext(for: prompt)
+            if NexMemoryRetrievalIntent.shouldSearch(prompt: prompt) {
+                let remaining = max(0, 0.72 - Date().timeIntervalSince(startedAt))
+                if remaining > 0 {
+                    try? await Task.sleep(for: .milliseconds(Int(remaining * 1_000)))
+                }
+            }
+            return context
         } catch {
             guard !Task.isCancelled, responseGeneration == generation else { return nil }
             // Preserve the failed indicator long enough to be legible, then
@@ -577,10 +586,10 @@ final class NotchController: ObservableObject {
             interaction.beginToolActivity(.lifecycle(event))
             if let screen { resize(to: toolActivitySize(for: screen), animated: true) }
         case .completed:
-            interaction.beginThinking()
-            if let screen { resize(to: listeningSize(for: screen), animated: true) }
+            interaction.completeToolActivity(.lifecycle(event))
+            if let screen { resize(to: toolActivitySize(for: screen), animated: true) }
         case .failed:
-            interaction.beginToolActivity(.lifecycle(event))
+            interaction.completeToolActivity(.lifecycle(event))
             if let screen { resize(to: toolActivitySize(for: screen), animated: true) }
         }
     }

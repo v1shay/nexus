@@ -87,6 +87,7 @@ private struct AnimatedToolIcon: View {
 
 private struct ToolIconView: View {
     let source: ToolIconSource
+    var size: CGFloat = 24
 
     var body: some View {
         Group {
@@ -101,7 +102,7 @@ private struct ToolIconView: View {
                 }
             }
         }
-        .frame(width: 24, height: 24)
+        .frame(width: size, height: size)
     }
 }
 
@@ -289,6 +290,9 @@ private struct TranscriptContents: View {
                             Capsule()
                                 .fill(.white.opacity(0.14))
                                 .frame(height: 1)
+                            if let receipt = notch.toolReceipt {
+                                ToolUsageReceiptView(activity: receipt)
+                            }
                             RichMarkdownView(markdown: notch.answer)
                         }
 
@@ -325,6 +329,25 @@ private struct TranscriptContents: View {
     private var saveHelp: String {
         if case .failed(let message) = notch.memory.saveState { return message }
         return "Save this conversation to the iCloud-synced Obsidian vault"
+    }
+}
+
+private struct ToolUsageReceiptView: View {
+    let activity: ToolActivity
+
+    var body: some View {
+        HStack(spacing: 7) {
+            ToolIconView(source: activity.icon, size: 13)
+            Text(activity.status)
+                .font(.system(size: 11, weight: .semibold, design: .rounded))
+                .lineLimit(1)
+        }
+        .foregroundStyle(activity.phase == .failed ? .red.opacity(0.9) : .cyan.opacity(0.9))
+        .padding(.horizontal, 9)
+        .frame(height: 25)
+        .background(.white.opacity(0.07), in: Capsule())
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .accessibilityLabel(activity.status)
     }
 }
 
