@@ -135,6 +135,8 @@ final class NotchController: ObservableObject {
     private var responseTask: Task<Void, Never>?
     private var responseGeneration = UUID()
     private var responseSpeechCursor = StreamedSpeechCursor()
+    private let conversationSession = NexConversationSession()
+    private var responseIsStreaming = false
     private var previousThinkingPhrase: String?
     private var hoverSession = NotchHoverSession()
     private var suppressAutomaticResponseReveal = false
@@ -211,10 +213,10 @@ final class NotchController: ObservableObject {
     private func installCommandHoldMonitor() {
         let monitor = NexusCommandHoldMonitor(
             onPress: { [weak self] in
-                Task { @MainActor in self?.startGlobalDictation() }
+                Task { @MainActor in await self?.startGlobalDictation() }
             },
             onRelease: { [weak self] in
-                Task { @MainActor in self?.finishGlobalDictation() }
+                Task { @MainActor in await self?.finishGlobalDictation() }
             },
             onDoubleTap: { [weak self] in
                 Task { @MainActor in self?.quickDismiss() }
@@ -224,8 +226,12 @@ final class NotchController: ObservableObject {
         monitor.install()
     }
 
-    private func startGlobalDictation() {
+    private func startGlobalDictation() async {
         closeTask?.cancel()
+        if responseIsStreaming, !responseSpeechCursor.text.isEmpty {
+            await conversationSession.appendAssistant(responseSpeechCursor.text, interrupted: true)
+        }
+        responseIsStreaming = false
         responseTask?.cancel()
         responseGeneration = UUID()
         responseSpeechCursor = StreamedSpeechCursor()
@@ -240,9 +246,13 @@ final class NotchController: ObservableObject {
         }
     }
 
-    private func finishGlobalDictation() {
+    private func finishGlobalDictation() async {
         speechTranscriber.stop()
         interaction.finishDictation()
+        let finalizedPrompt = transcript.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !finalizedPrompt.isEmpty {
+            await conversationSession.appendUser(finalizedPrompt)
+        }
         automaticRevealIsWaitingForNotchVisit = true
         if let screen {
             resize(to: expandedSize(for: screen), animated: true)
@@ -263,6 +273,7 @@ final class NotchController: ObservableObject {
             let acknowledgement = PromptAcknowledgement.text(for: prompt, avoiding: previousThinkingPhrase)
             previousThinkingPhrase = acknowledgement
             responseSpeaker.beginStreaming()
+            responseIsStreaming = true
             interaction.acknowledge(acknowledgement)
             if let screen { resize(to: expandedSize(for: screen), animated: true) }
             await responseSpeaker.speakImmediatelyAndWait(acknowledgement)
@@ -270,7 +281,8 @@ final class NotchController: ObservableObject {
             interaction.beginThinking()
             if let screen { resize(to: listeningSize(for: screen), animated: true) }
             do {
-                let answer = try await modelDownloadViewModel.response(to: prompt) { [weak self] delta, accumulated in
+                let messages = await conversationSession.contextMessages()
+                let answer = try await modelDownloadViewModel.response(messages: messages) { [weak self] delta, accumulated in
                     guard let self else { return }
                     await self.receiveResponseDelta(delta, accumulated: accumulated, generation: generation)
                 }
@@ -279,12 +291,15 @@ final class NotchController: ObservableObject {
                 if !finalSpeechDelta.isEmpty { responseSpeaker.append(finalSpeechDelta) }
                 let reveal = !suppressAutomaticResponseReveal
                 interaction.receiveAnswer(responseSpeechCursor.text, reveal: reveal)
+                await conversationSession.appendAssistant(responseSpeechCursor.text)
+                responseIsStreaming = false
                 automaticRevealIsWaitingForNotchVisit = reveal
                 if reveal, let screen { resize(to: expandedSize(for: screen), animated: true) }
                 responseSpeaker.finishStreaming()
             } catch {
                 guard !Task.isCancelled, responseGeneration == generation else { return }
                 responseSpeaker.stop()
+                responseIsStreaming = false
                 let reveal = !suppressAutomaticResponseReveal
                 interaction.failResponse(
                     "Nexus couldn’t get a response. \(error.localizedDescription)",
@@ -321,6 +336,11 @@ final class NotchController: ObservableObject {
     }
 
     func dismissOverlay() {
+        if responseIsStreaming, !responseSpeechCursor.text.isEmpty {
+            let interrupted = responseSpeechCursor.text
+            Task { await conversationSession.appendAssistant(interrupted, interrupted: true) }
+        }
+        responseIsStreaming = false
         responseTask?.cancel()
         responseGeneration = UUID()
         responseSpeaker.stop()

@@ -3,6 +3,36 @@ import WebKit
 @testable import nexus
 
 final class NexusGeometryTests: XCTestCase {
+    func testOneWordFollowUpKeepsRecentVerbatimConversationContext() async {
+        let session = NexConversationSession()
+        await session.appendUser("Use a neural network for the image classifier")
+        await session.appendAssistant("A compact convolutional network fits that task.")
+        await session.appendUser("Why?")
+
+        let messages = await session.contextMessages()
+
+        XCTAssertEqual(messages.suffix(3).map(\.role), ["user", "assistant", "user"])
+        XCTAssertEqual(messages.last?.content, "Why?")
+        XCTAssertTrue(messages.contains(where: { $0.content.contains("convolutional network") }))
+    }
+
+    func testLongConversationKeepsRollingSummaryCurrentTaskAndRecentTurns() async {
+        let session = NexConversationSession()
+        for index in 0..<20 {
+            await session.appendUser("Project Atlas step \(index): should we continue?")
+            await session.appendAssistant("Completed Atlas step \(index).")
+        }
+
+        let snapshot = await session.snapshot()
+        let messages = await session.contextMessages()
+
+        XCTAssertTrue(snapshot.summary.contains("Atlas"))
+        XCTAssertEqual(snapshot.currentTask, "Project Atlas step 19: should we continue?")
+        XCTAssertTrue(snapshot.entities.contains(where: { $0.contains("Project Atlas") }))
+        XCTAssertLessThanOrEqual(messages.filter { $0.role != "system" }.count, NexConversationSession.recentTurnLimit)
+        XCTAssertTrue(messages.first?.content.contains("Rolling summary") == true)
+    }
+
     func testDictationWingsPreserveThePhysicalNotchGap() {
         let physicalNotch = CGSize(width: 190, height: 32)
         let listening = NotchGeometry.listeningSize(for: physicalNotch)

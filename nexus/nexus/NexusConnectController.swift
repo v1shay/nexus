@@ -481,6 +481,18 @@ final class NexusConnectController: ObservableObject {
         prompt: String,
         onDelta: @escaping @Sendable (String, String) async -> Void
     ) async throws -> String {
+        try await response(
+            model: model,
+            messages: [.init(role: "user", content: prompt)],
+            onDelta: onDelta
+        )
+    }
+
+    func response(
+        model: LocalModel,
+        messages: [NexusChatMessage],
+        onDelta: @escaping @Sendable (String, String) async -> Void
+    ) async throws -> String {
         let request = try NexusWorkloadRequest(
             kind: .inference,
             priority: .interactive,
@@ -488,7 +500,7 @@ final class NexusConnectController: ObservableObject {
             payload: NexusInferencePayload(
                 runtime: model.backend == .ollama ? .ollama : .lmStudio,
                 model: model.identifier,
-                messages: [.init(role: "user", content: prompt)],
+                messages: messages,
                 temperature: nil,
                 maximumTokens: nil
             )
