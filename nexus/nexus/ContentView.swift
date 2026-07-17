@@ -247,18 +247,12 @@ private struct TranscriptContents: View {
                     close: notch.dismissOverlay
                 )
                 Button { notch.saveConversation() } label: {
-                    HStack(spacing: 6) {
-                        Image("Obsidian")
-                            .resizable()
-                            .scaledToFit()
-                            .frame(width: 13, height: 15)
-                        Text("Save")
-                    }
-                        .font(.system(size: 11, weight: .semibold, design: .rounded))
-                        .lineLimit(1)
-                        .padding(.horizontal, 9)
-                        .frame(height: 30)
-                        .background(.white.opacity(0.09), in: Capsule())
+                    Image("Obsidian")
+                        .resizable()
+                        .scaledToFit()
+                        .frame(width: 15, height: 17)
+                        .frame(width: 30, height: 30)
+                        .background(.white.opacity(0.09), in: Circle())
                 }
                 .buttonStyle(.plain)
                 .foregroundStyle(saveButtonColor)
