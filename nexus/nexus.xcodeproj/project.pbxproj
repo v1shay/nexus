@@ -26,6 +26,8 @@
 		M100000130075C29006660E4 /* NexusPairedNode.swift in Sources */ = {isa = PBXBuildFile; fileRef = M100000230075C29006660E4 /* NexusPairedNode.swift */; };
 		N100000130075C29006660E4 /* NexusConnectHostManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = N100000230075C29006660E4 /* NexusConnectHostManager.swift */; };
 		O100000130075C29006660E4 /* NexConversation.swift in Sources */ = {isa = PBXBuildFile; fileRef = O100000230075C29006660E4 /* NexConversation.swift */; };
+		P100000130075C29006660E4 /* NexObsidianVault.swift in Sources */ = {isa = PBXBuildFile; fileRef = P100000230075C29006660E4 /* NexObsidianVault.swift */; };
+		Q100000130075C29006660E4 /* NexMemoryIndex.swift in Sources */ = {isa = PBXBuildFile; fileRef = Q100000230075C29006660E4 /* NexMemoryIndex.swift */; };
 		G100000330075C29006660E4 /* NexusConnectFraming.swift in Sources */ = {isa = PBXBuildFile; fileRef = G100000430075C29006660E4 /* NexusConnectFraming.swift */; };
 		G100000530075C29006660E4 /* NexusConnectSecurity.swift in Sources */ = {isa = PBXBuildFile; fileRef = G100000630075C29006660E4 /* NexusConnectSecurity.swift */; };
 		G100000730075C29006660E4 /* NexusConnectPolicy.swift in Sources */ = {isa = PBXBuildFile; fileRef = G100000830075C29006660E4 /* NexusConnectPolicy.swift */; };
@@ -43,6 +45,7 @@
 		K100000330075C29006660E4 /* NexusConnectControllerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = K100000430075C29006660E4 /* NexusConnectControllerTests.swift */; };
 		L100000130075C29006660E4 /* NexusUnifiedWorkloadAPI.swift in Sources */ = {isa = PBXBuildFile; fileRef = L100000230075C29006660E4 /* NexusUnifiedWorkloadAPI.swift */; };
 		L100000330075C29006660E4 /* NexusUnifiedWorkloadAPITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = L100000430075C29006660E4 /* NexusUnifiedWorkloadAPITests.swift */; };
+		Q100000330075C29006660E4 /* NexMemoryTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = Q100000430075C29006660E4 /* NexMemoryTests.swift */; };
 		156AB6C030075C2A006660E4 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 156AB6BF30075C2A006660E4 /* Assets.xcassets */; };
 		156AB6C430075C2A006660E4 /* Preview Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 156AB6C330075C2A006660E4 /* Preview Assets.xcassets */; };
 		156AB6CE30075C2A006660E4 /* nexusTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 156AB6CD30075C2A006660E4 /* nexusTests.swift */; };
@@ -88,6 +91,8 @@
 		M100000230075C29006660E4 /* NexusPairedNode.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NexusPairedNode.swift; sourceTree = "<group>"; };
 		N100000230075C29006660E4 /* NexusConnectHostManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NexusConnectHostManager.swift; sourceTree = "<group>"; };
 		O100000230075C29006660E4 /* NexConversation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NexConversation.swift; sourceTree = "<group>"; };
+		P100000230075C29006660E4 /* NexObsidianVault.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NexObsidianVault.swift; sourceTree = "<group>"; };
+		Q100000230075C29006660E4 /* NexMemoryIndex.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NexMemoryIndex.swift; sourceTree = "<group>"; };
 		G100000430075C29006660E4 /* NexusConnectFraming.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NexusConnectFraming.swift; sourceTree = "<group>"; };
 		G100000630075C29006660E4 /* NexusConnectSecurity.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NexusConnectSecurity.swift; sourceTree = "<group>"; };
 		G100000830075C29006660E4 /* NexusConnectPolicy.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NexusConnectPolicy.swift; sourceTree = "<group>"; };
@@ -105,6 +110,7 @@
 		K100000430075C29006660E4 /* NexusConnectControllerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NexusConnectControllerTests.swift; sourceTree = "<group>"; };
 		L100000230075C29006660E4 /* NexusUnifiedWorkloadAPI.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NexusUnifiedWorkloadAPI.swift; sourceTree = "<group>"; };
 		L100000430075C29006660E4 /* NexusUnifiedWorkloadAPITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NexusUnifiedWorkloadAPITests.swift; sourceTree = "<group>"; };
+		Q100000430075C29006660E4 /* NexMemoryTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NexMemoryTests.swift; sourceTree = "<group>"; };
 		156AB6BF30075C2A006660E4 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		156AB6C130075C2A006660E4 /* nexus.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = nexus.entitlements; sourceTree = "<group>"; };
 		156AB6C330075C2A006660E4 /* Preview Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = "Preview Assets.xcassets"; sourceTree = "<group>"; };
@@ -169,6 +175,8 @@
 				M100000230075C29006660E4 /* NexusPairedNode.swift */,
 				N100000230075C29006660E4 /* NexusConnectHostManager.swift */,
 				O100000230075C29006660E4 /* NexConversation.swift */,
+				P100000230075C29006660E4 /* NexObsidianVault.swift */,
+				Q100000230075C29006660E4 /* NexMemoryIndex.swift */,
 				G100000430075C29006660E4 /* NexusConnectFraming.swift */,
 				G100000630075C29006660E4 /* NexusConnectSecurity.swift */,
 				G100000830075C29006660E4 /* NexusConnectPolicy.swift */,
@@ -218,6 +226,7 @@
 				J100000630075C29006660E4 /* NexusConnectSessionTests.swift */,
 				K100000430075C29006660E4 /* NexusConnectControllerTests.swift */,
 				L100000430075C29006660E4 /* NexusUnifiedWorkloadAPITests.swift */,
+				Q100000430075C29006660E4 /* NexMemoryTests.swift */,
 			);
 			path = nexusTests;
 			sourceTree = "<group>";
@@ -369,6 +378,8 @@
 				M100000130075C29006660E4 /* NexusPairedNode.swift in Sources */,
 				N100000130075C29006660E4 /* NexusConnectHostManager.swift in Sources */,
 				O100000130075C29006660E4 /* NexConversation.swift in Sources */,
+				P100000130075C29006660E4 /* NexObsidianVault.swift in Sources */,
+				Q100000130075C29006660E4 /* NexMemoryIndex.swift in Sources */,
 				G100000330075C29006660E4 /* NexusConnectFraming.swift in Sources */,
 				G100000530075C29006660E4 /* NexusConnectSecurity.swift in Sources */,
 				G100000730075C29006660E4 /* NexusConnectPolicy.swift in Sources */,
@@ -405,6 +416,7 @@
 				J100000530075C29006660E4 /* NexusConnectSessionTests.swift in Sources */,
 				K100000330075C29006660E4 /* NexusConnectControllerTests.swift in Sources */,
 				L100000330075C29006660E4 /* NexusUnifiedWorkloadAPITests.swift in Sources */,
+				Q100000330075C29006660E4 /* NexMemoryTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
