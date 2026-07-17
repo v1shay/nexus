@@ -237,25 +237,34 @@ actor NexWebSearchService {
     ) async throws -> NexWebSearchResponse {
         try Task.checkCancellation()
         await progress("Searching “\(String(query.prefix(90)))”…", 0.08)
-        var rawResults: [NexWebSearchResult] = []
-        var usedProviders: [String] = []
-        var lastError: Error?
-        for provider in providers {
-            do {
-                let results = try await provider.search(query: query, limit: configuration.resultLimit)
-                if !results.isEmpty {
-                    rawResults += results
-                    usedProviders.append(provider.name)
+        var providerResults = Array(
+            repeating: (name: "", results: [NexWebSearchResult]()),
+            count: providers.count
+        )
+        await withTaskGroup(of: (Int, String, [NexWebSearchResult]).self) { group in
+            for (index, provider) in providers.enumerated() {
+                group.addTask {
+                    do {
+                        let results = try await provider.search(
+                            query: query,
+                            limit: configuration.resultLimit
+                        )
+                        return (index, provider.name, results)
+                    } catch {
+                        return (index, provider.name, [])
+                    }
                 }
-                if rawResults.count >= configuration.resultLimit { break }
-            } catch is CancellationError {
-                throw CancellationError()
-            } catch {
-                lastError = error
+            }
+            for await (index, name, results) in group {
+                providerResults[index] = (name, results)
             }
         }
+        try Task.checkCancellation()
+        let rawResults = providerResults.flatMap(\.results)
+        let usedProviders = providerResults.compactMap { result in
+            result.results.isEmpty ? nil : result.name
+        }
         guard !rawResults.isEmpty else {
-            if let lastError { throw lastError }
             throw NexWebSearchError.noResults
         }
 
@@ -319,6 +328,7 @@ struct NexWebSearchPlan: Equatable, Sendable {
     enum QueryOrigin: Equatable, Sendable {
         case modelExtraction
         case fallback
+        case rejected
         case none
     }
 
@@ -338,7 +348,7 @@ enum NexWebSearchPlanner {
         let date = ISO8601DateFormatter().string(from: now)
         return [
             .init(role: "system", content: """
-            Analyze the user's complete request and decide whether live web evidence is needed. Search for changing facts, current events, prices, versions, recent research, named webpages, explicit lookup, or external facts that may be stale. Do not search for casual conversation, creative work, user-provided text, personal memory, or stable facts.
+            Analyze the user's complete request and decide whether live web evidence is needed. Search only when the answer depends on changing facts, current events, prices, versions, recent research, a named webpage, an explicit lookup, or external facts that may be stale. Return use_web=false for creative work, advice, casual conversation, explanations of stable concepts, or anything the model can answer without current evidence. The search decision is strict: uncertainty alone is not a reason to browse.
 
             When searching, semantically extract all four fields:
             - topic: the specific real-world subject, entity, product, event, or corrected name.
@@ -347,7 +357,7 @@ enum NexWebSearchPlanner {
             - time_scope: the requested date/current/latest scope, or "none".
             - query: one natural, self-contained search query containing the topic and information need.
 
-            Read the whole sentence. The topic must be at least two words and include a disambiguating category (for example, "Apple Swift programming language," not "Swift"). Never guess or invent a person, product, disease, version, event, or proper name the user did not state. If an identity is unknown, use a grounded category such as "public health emerging disease outbreak." Do not narrow the topic beyond what the user asked. Never use a pronoun, question word, generic adjective, or verb alone as a topic or query. A query must be 5–24 words. Correct likely speech-recognition misspellings only when topic_basis contains the original words. Today is \(date).
+            Read the whole sentence. The topic must be at least two words and include a disambiguating category (for example, "Apple Swift programming language," not "Swift"). A comparison must preserve every named subject being compared. Never guess or invent a person, product, disease, version, event, or proper name the user did not state. If an identity is unknown, use a grounded category such as "public health emerging disease outbreak." Do not narrow the topic beyond what the user asked. Never use a pronoun, question word, generic adjective, or verb alone as a topic or query. A query must be 5–24 words. time_scope must be "none" unless the user's words explicitly provide a time or freshness requirement. Correct likely speech-recognition misspellings only when topic_basis contains the original words. Today is \(date).
 
             Examples:
             User: "What changed in the newest Swift release?"
@@ -356,6 +366,12 @@ enum NexWebSearchPlanner {
             {"use_web":true,"topic":"artificial intelligence industry","topic_basis":"AI news today","information_need":"most significant current news and developments","time_scope":"today","query":"artificial intelligence industry biggest news and developments today"}
             User: "What is that new virus spreading right now?"
             {"use_web":true,"topic":"public health emerging disease outbreak","topic_basis":"new virus spreading right now","information_need":"identify the disease and report its current spread","time_scope":"current","query":"public health emerging disease outbreak currently spreading"}
+            User: "Invent a funny name for my desk lamp."
+            {"use_web":false,"topic":null,"topic_basis":null,"information_need":null,"time_scope":null,"query":null}
+            User: "Explain why decision trees split features."
+            {"use_web":false,"topic":null,"topic_basis":null,"information_need":null,"time_scope":null,"query":null}
+            User: "Compare Acme's share price with Globex's today."
+            {"use_web":true,"topic":"Acme and Globex stock prices","topic_basis":"Acme's share price with Globex's today","information_need":"compare both companies' current share prices","time_scope":"today","query":"Acme versus Globex stock prices today comparison"}
 
             Return only JSON:
             {"use_web":true,"topic":"...","topic_basis":"exact user quote","information_need":"...","time_scope":"...","query":"..."}
@@ -369,7 +385,7 @@ enum NexWebSearchPlanner {
         let date = ISO8601DateFormatter().string(from: now)
         return [
             .init(role: "system", content: """
-            Repair a rejected web-search extraction. Analyze the entire user request. Return only one JSON object with use_web, topic, topic_basis, information_need, time_scope, and query. If use_web is true, topic must be at least two words with a disambiguating category; topic_basis must be an exact quote from the request; information_need must be specific; and query must be self-contained and 5–24 words. Never invent an unstated proper name or narrow the user's topic. If the identity is unknown, use a grounded general category. Never return a one-word query or use "I", "me", "you", "what", "big", "changes", or another generic fragment as the query. Today is \(date).
+            Repair a rejected web-search extraction. Analyze the entire user request. Return only one JSON object with use_web, topic, topic_basis, information_need, time_scope, and query. Return use_web=false for creative work, advice, casual conversation, and stable explanations. If use_web is true, topic must be at least two words with a disambiguating category; topic_basis must be an exact quote from the request; information_need must be specific; time_scope must be supported by the user's own words; a comparison must preserve every named subject; and query must be self-contained and 5–24 words. Never invent an unstated proper name or narrow the user's topic. If the identity is unknown, use a grounded general category. Never return a one-word query or use "I", "me", "you", "what", "big", "changes", or another generic fragment as the query. Today is \(date).
             """),
             .init(role: "user", content: "User request:\n\(prompt)\n\nRejected extraction:\n\(rejectedOutput)")
         ]
@@ -379,6 +395,8 @@ enum NexWebSearchPlanner {
         let cleaned = raw
             .replacingOccurrences(of: "```json", with: "")
             .replacingOccurrences(of: "```", with: "")
+            .replacingOccurrences(of: "“", with: "\"")
+            .replacingOccurrences(of: "”", with: "\"")
             .trimmingCharacters(in: .whitespacesAndNewlines)
         if let data = cleaned.data(using: .utf8),
            let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
@@ -403,11 +421,14 @@ enum NexWebSearchPlanner {
                         queryOrigin: .modelExtraction
                     )
                 }
-                return .init(
-                    shouldSearch: true,
-                    query: fallbackQuery(originalPrompt),
-                    queryOrigin: .fallback
-                )
+                if obviousWebNeed(originalPrompt) {
+                    return .init(
+                        shouldSearch: true,
+                        query: fallbackQuery(originalPrompt),
+                        queryOrigin: .fallback
+                    )
+                }
+                return .init(shouldSearch: false, query: nil, queryOrigin: .rejected)
             }
             if obviousWebNeed(originalPrompt) {
                 return .init(
@@ -449,7 +470,7 @@ enum NexWebSearchQueryBuilder {
         "a", "an", "and", "are", "about", "can", "could", "did", "do", "does", "for", "from",
         "give", "have", "has", "i", "in", "is", "it", "me", "my", "of", "on", "or", "please",
         "tell", "that", "the", "this", "to", "up", "was", "were", "what", "whatever", "which",
-        "who", "why", "with", "would", "you"
+        "who", "why", "with", "would", "you", "look", "whether", "summarize", "summary"
     ]
     private static let corrections: [String: String] = [
         "siwf": "swift", "swif": "swift", "sift": "swift",
@@ -473,7 +494,8 @@ enum NexWebSearchQueryBuilder {
         let needWords = meaningfulTokens(informationNeed)
         guard topicWords.count >= 2,
               needWords.count >= 2,
-              topicBasisIsGrounded(topicBasis, in: originalPrompt) else { return nil }
+              topicBasisIsGrounded(topicBasis, in: originalPrompt),
+              webNeedIsGrounded(in: originalPrompt, timeScope: timeScope) else { return nil }
 
         let proposedWords = tokens(proposedQuery)
         let topicAnchors = Set(topicWords.map(stem))
@@ -484,10 +506,14 @@ enum NexWebSearchQueryBuilder {
         let scopeWords = meaningfulTokens(timeScope).filter { $0 != "none" }
         let scopeAnchors = Set(scopeWords.map(stem))
         let currentScope = !scopeWords.isEmpty
+        guard timeScopeIsGrounded(timeScope, in: originalPrompt) else { return nil }
+        let comparisonWords = comparisonAnchors(in: originalPrompt)
+        let comparisonAnchors = Set(comparisonWords.map(stem))
         let hasStaleYear = currentScope && proposedYears.contains { $0 != currentYear }
         if (5...24).contains(proposedWords.count),
            !topicAnchors.isDisjoint(with: proposedAnchors),
            !needAnchors.isDisjoint(with: proposedAnchors),
+           comparisonAnchors.isSubset(of: proposedAnchors),
            (!currentScope || !scopeAnchors.isDisjoint(with: proposedAnchors)),
            !hasStaleYear {
             return deduplicated(proposedWords).joined(separator: " ")
@@ -500,7 +526,7 @@ enum NexWebSearchQueryBuilder {
             formatter.dateFormat = "MMMM yyyy"
             expandedScope += formatter.string(from: now).lowercased().split(separator: " ").map(String.init)
         }
-        let composed = Array(deduplicated(topicWords + needWords + expandedScope).prefix(18))
+        let composed = Array(deduplicated(topicWords + comparisonWords + needWords + expandedScope).prefix(18))
         guard composed.count >= 5 else { return nil }
         return composed.joined(separator: " ")
     }
@@ -523,6 +549,57 @@ enum NexWebSearchQueryBuilder {
         value.lowercased()
             .split { !$0.isLetter && !$0.isNumber }
             .joined(separator: " ")
+    }
+
+    private static func timeScopeIsGrounded(_ scope: String, in prompt: String) -> Bool {
+        let normalizedScope = normalizedEvidence(scope)
+        if normalizedScope.isEmpty || normalizedScope == "none" { return true }
+        let normalizedPrompt = normalizedEvidence(prompt)
+        if normalizedPrompt.contains(normalizedScope) { return true }
+        let freshnessWords = [
+            "current", "currently", "latest", "newest", "new", "recent", "today", "tonight",
+            "tomorrow", "yesterday", "this week", "this month", "this year", "right now",
+            "most recent", "since", "still", "release", "news", "price", "outbreak", "stable",
+            "look up", "search", "find online", "verify"
+        ]
+        return freshnessWords.contains(where: normalizedPrompt.contains)
+    }
+
+    private static func webNeedIsGrounded(in prompt: String, timeScope: String) -> Bool {
+        if NexWebSearchPlanner.obviousWebNeed(prompt) { return true }
+        let normalizedScope = normalizedEvidence(timeScope)
+        if !normalizedScope.isEmpty, normalizedScope != "none" {
+            return timeScopeIsGrounded(timeScope, in: prompt)
+        }
+        let normalizedPrompt = normalizedEvidence(prompt)
+        let stableOpeners = [
+            "explain ", "explain why ", "why ", "how does ", "how do ", "what is ",
+            "what are ", "define ", "teach me ", "write ", "create ", "invent ", "draft "
+        ]
+        return !stableOpeners.contains(where: normalizedPrompt.hasPrefix)
+    }
+
+    private static func comparisonAnchors(in prompt: String) -> [String] {
+        let normalized = normalizedEvidence(prompt)
+        let comparisonSignals = ["compare", "comparison", " versus ", " vs ", " with "]
+        guard comparisonSignals.contains(where: { signal in
+            signal.trimmingCharacters(in: .whitespaces) == signal
+                ? normalized.contains(signal)
+                : " \(normalized) ".contains(signal)
+        }) else { return [] }
+
+        let ignored: Set<String> = [
+            "compare", "comparison", "should", "has", "have", "who", "what", "when", "where",
+            "why", "how", "is", "are", "look", "find", "tell", "can", "could", "would"
+        ]
+        let pattern = #"\b[A-Z][A-Za-z0-9]*(?:\.[0-9]+)?\b"#
+        guard let regex = try? NSRegularExpression(pattern: pattern) else { return [] }
+        let range = NSRange(prompt.startIndex..., in: prompt)
+        return deduplicated(regex.matches(in: prompt, range: range).compactMap { match in
+            guard let swiftRange = Range(match.range, in: prompt) else { return nil }
+            let word = String(prompt[swiftRange]).lowercased()
+            return ignored.contains(word) ? nil : word
+        })
     }
 
     static func query(for prompt: String, now: Date = Date()) -> String {
@@ -580,7 +657,7 @@ enum NexWebSearchQueryBuilder {
     }
 
     private static func meaningfulTokens(_ value: String) -> [String] {
-        tokens(value).filter { !stopWords.contains($0) && $0.count > 1 }
+        tokens(value).filter { !stopWords.contains($0) && ($0.count > 1 || Int($0) != nil) }
     }
 
     private static func deduplicated(_ words: [String]) -> [String] {
@@ -861,10 +938,12 @@ enum NexWebResultRanker {
         query: String,
         limit: Int
     ) -> [NexWebSearchResult] {
-        let terms = Set(query.lowercased().split { !$0.isLetter && !$0.isNumber }.map(String.init))
+        let queryWords = query.lowercased().split { !$0.isLetter && !$0.isNumber }.map(String.init)
+        let terms = Set(queryWords)
+        let phrases = Set(zip(queryWords, queryWords.dropFirst()).map { "\($0.0) \($0.1)" })
         var seen = Set<String>()
         return results
-            .sorted { score($0, terms: terms) > score($1, terms: terms) }
+            .sorted { score($0, terms: terms, phrases: phrases) > score($1, terms: terms, phrases: phrases) }
             .filter { result in
                 let key = canonicalKey(result.url)
                 return !key.isEmpty && seen.insert(key).inserted
@@ -873,16 +952,32 @@ enum NexWebResultRanker {
             .map { $0 }
     }
 
-    private static func score(_ result: NexWebSearchResult, terms: Set<String>) -> Double {
+    private static func score(
+        _ result: NexWebSearchResult,
+        terms: Set<String>,
+        phrases: Set<String>
+    ) -> Double {
+        let normalizedTitle = result.title.lowercased()
+            .split { !$0.isLetter && !$0.isNumber }
+            .joined(separator: " ")
+        let normalizedSnippet = result.snippet.lowercased()
+            .split { !$0.isLetter && !$0.isNumber }
+            .joined(separator: " ")
         let titleTerms = Set(result.title.lowercased().split { !$0.isLetter && !$0.isNumber }.map(String.init))
         let snippetTerms = Set(result.snippet.lowercased().split { !$0.isLetter && !$0.isNumber }.map(String.init))
         let titleMatches = Double(terms.intersection(titleTerms).count)
         let snippetMatches = Double(terms.intersection(snippetTerms).count)
+        let titlePhraseMatches = Double(phrases.filter(normalizedTitle.contains).count)
+        let snippetPhraseMatches = Double(phrases.filter(normalizedSnippet.contains).count)
         let recency: Double
         if let publishedAt = result.publishedAt {
             recency = max(0, 1 - Date().timeIntervalSince(publishedAt) / (365 * 24 * 60 * 60))
         } else { recency = 0 }
-        return titleMatches * 3 + snippetMatches + recency
+        return titleMatches * 3
+            + snippetMatches
+            + titlePhraseMatches * 7
+            + snippetPhraseMatches * 2
+            + recency
     }
 
     private static func canonicalKey(_ url: URL) -> String {

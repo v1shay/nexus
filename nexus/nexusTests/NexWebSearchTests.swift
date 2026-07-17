@@ -2,6 +2,82 @@ import XCTest
 @testable import nexus
 
 final class NexWebSearchTests: XCTestCase {
+    func testLiveModelSearchPlanningDiagnosticsWhenEnabled() async throws {
+        try XCTSkipUnless(
+            ProcessInfo.processInfo.environment["NEXUS_RUN_LIVE_PLANNER_TESTS"] == "1",
+            "Live planner diagnostics are opt-in"
+        )
+        let model = ProcessInfo.processInfo.environment["NEXUS_LIVE_PLANNER_MODEL"] ?? "gemma3:4b"
+        let manager = OllamaManager()
+        let service = NexWebSearchService()
+        let cases: [(prompt: String, shouldSearch: Bool, requiredTerms: [String])] = [
+            ("Should I bring an umbrella to San Francisco tomorrow afternoon?", true, ["san", "francisco"]),
+            ("Compare Nvidia's stock price with AMD's today.", true, ["nvidia", "amd"]),
+            ("Has Apple released a newer MacBook Air since the M4 model?", true, ["apple", "macbook"]),
+            ("Who won the most recent Formula 1 race and what happened?", true, ["formula", "race"]),
+            ("Look up whether Python 3.14 is stable and summarize the headline changes.", true, ["python", "3.14"]),
+            ("Is there an active measles outbreak in California this week?", true, ["measles", "california"]),
+            ("Write a sarcastic name for my alarm clock.", false, []),
+            ("Explain why neural networks need activation functions.", false, [])
+        ]
+
+        for testCase in cases {
+            let prompt = testCase.prompt
+            let raw = try await manager.streamChat(
+                model: model,
+                messages: NexWebSearchPlanner.planningMessages(for: prompt),
+                temperature: 0,
+                maximumTokens: 220,
+                onDelta: { _, _ in }
+            )
+            let initialPlan = NexWebSearchPlanner.parse(raw, originalPrompt: prompt)
+            var finalPlan = initialPlan
+            var repairedRaw: String?
+            if initialPlan.queryOrigin == .fallback || initialPlan.queryOrigin == .rejected {
+                let repair = try await manager.streamChat(
+                    model: model,
+                    messages: NexWebSearchPlanner.repairMessages(
+                        for: prompt,
+                        rejectedOutput: raw
+                    ),
+                    temperature: 0,
+                    maximumTokens: 220,
+                    onDelta: { _, _ in }
+                )
+                repairedRaw = repair
+                let repairedPlan = NexWebSearchPlanner.parse(repair, originalPrompt: prompt)
+                if repairedPlan.queryOrigin == .modelExtraction || repairedPlan.queryOrigin == .none {
+                    finalPlan = repairedPlan
+                } else if initialPlan.queryOrigin == .rejected {
+                    finalPlan = .init(shouldSearch: false, query: nil)
+                }
+            }
+
+            print("LIVE PLANNER PROMPT: \(prompt)")
+            print("LIVE PLANNER RAW: \(raw)")
+            print("LIVE PLANNER INITIAL ORIGIN: \(initialPlan.queryOrigin)")
+            print("LIVE PLANNER REPAIR USED: \(repairedRaw != nil)")
+            if let repairedRaw { print("LIVE PLANNER REPAIR RAW: \(repairedRaw)") }
+            print("LIVE PLANNER FINAL ORIGIN: \(finalPlan.queryOrigin)")
+            print("LIVE PLANNER FINAL QUERY: \(finalPlan.query ?? "<none>")")
+            XCTAssertEqual(finalPlan.shouldSearch, testCase.shouldSearch, prompt)
+
+            if finalPlan.shouldSearch, let query = finalPlan.query {
+                XCTAssertGreaterThanOrEqual(query.split(separator: " ").count, 5, query)
+                for term in testCase.requiredTerms {
+                    XCTAssertTrue(query.contains(term), "\(prompt): missing \(term) in \(query)")
+                }
+                let response = try await service.search(query: query) { _, _ in }
+                print("LIVE PLANNER RESULT: \(response.results.first?.title ?? "<none>")")
+                print("LIVE PLANNER RESULT URL: \(response.results.first?.url.absoluteString ?? "<none>")")
+                XCTAssertFalse(response.results.isEmpty, query)
+            } else {
+                print("LIVE PLANNER RESULT: <search not requested>")
+            }
+            print("LIVE PLANNER END")
+        }
+    }
+
     func testLiveCurrentEventsSearchWhenEnabled() async throws {
         try XCTSkipUnless(
             ProcessInfo.processInfo.environment["NEXUS_RUN_LIVE_WEB_TESTS"] == "1",
@@ -46,6 +122,28 @@ final class NexWebSearchTests: XCTestCase {
 
         XCTAssertFalse(plan.shouldSearch)
         XCTAssertNil(plan.query)
+    }
+
+    func testPlannerAcceptsModelJSONWithTypographicDoubleQuotes() {
+        let prompt = "Should I bring an umbrella to San Francisco tomorrow afternoon?"
+        let plan = NexWebSearchPlanner.parse(
+            #"{"use_web":true,"topic":"weather in San Francisco","topic_basis":"tomorrow afternoon","information_need":"forecast for rain in San Francisco tomorrow afternoon","time_scope":"tomorrow afternoon”, “query”:“San Francisco weather forecast tomorrow afternoon”}"#,
+            originalPrompt: prompt
+        )
+
+        XCTAssertEqual(plan.queryOrigin, .modelExtraction)
+        XCTAssertEqual(plan.query, "san francisco weather forecast tomorrow afternoon")
+    }
+
+    func testPlannerRejectsUnnecessarySearchForStableExplanation() {
+        let prompt = "Explain why neural networks need activation functions."
+        let plan = NexWebSearchPlanner.parse(
+            #"{"use_web":true,"topic":"neural network activation functions","topic_basis":"why neural networks need activation functions","information_need":"explain the purpose of activation functions in neural networks","time_scope":"none","query":"purpose of activation functions in neural networks"}"#,
+            originalPrompt: prompt
+        )
+
+        XCTAssertFalse(plan.shouldSearch)
+        XCTAssertEqual(plan.queryOrigin, .rejected)
     }
 
     func testObviousCurrentRequestSearchesEvenIfAWeakPlannerSaysNo() {
@@ -229,6 +327,75 @@ final class NexWebSearchTests: XCTestCase {
         XCTAssertTrue(messages.contains("Reviewed cached results…"))
     }
 
+    func testSearchQueriesEveryProviderBeforeRanking() async throws {
+        let firstCounter = NexSearchCallCounter()
+        let secondCounter = NexSearchCallCounter()
+        let first = NexProviderSpy(
+            name: "first",
+            title: "Broad result",
+            url: URL(string: "https://8.8.8.8/broad")!,
+            counter: firstCounter
+        )
+        let second = NexProviderSpy(
+            name: "second",
+            title: "Specific target result",
+            url: URL(string: "https://1.1.1.1/specific")!,
+            counter: secondCounter
+        )
+        let service = NexWebSearchService(
+            providers: [first, second],
+            pageReader: NexMockPageReader(),
+            configuration: .init(
+                resultLimit: 1,
+                pageReadLimit: 0,
+                maximumPageBytes: 1_000,
+                maximumExtractedCharacters: 1_000,
+                cacheLifetime: 60,
+                requestTimeout: 2
+            )
+        )
+
+        let response = try await service.search(query: "specific target") { _, _ in }
+
+        let firstCalls = await firstCounter.value
+        let secondCalls = await secondCounter.value
+        XCTAssertEqual(firstCalls, 1)
+        XCTAssertEqual(secondCalls, 1)
+        XCTAssertEqual(response.providers, ["first", "second"])
+        XCTAssertEqual(response.results.first?.title, "Specific target result")
+    }
+
+    func testRankingPrefersCompleteNamedPhraseOverSharedWord() {
+        let results = [
+            NexWebSearchResult(
+                title: "San Diego weather forecast",
+                url: URL(string: "https://example.com/san-diego")!,
+                snippet: "Weather forecast for Southern California.",
+                extractedText: nil,
+                publishedAt: Date(),
+                provider: "test",
+                retrievalStatus: .snippetOnly
+            ),
+            NexWebSearchResult(
+                title: "San Francisco weather forecast",
+                url: URL(string: "https://example.com/san-francisco")!,
+                snippet: "Tomorrow afternoon forecast for San Francisco.",
+                extractedText: nil,
+                publishedAt: nil,
+                provider: "test",
+                retrievalStatus: .snippetOnly
+            )
+        ]
+
+        let ranked = NexWebResultRanker.rankAndDeduplicate(
+            results,
+            query: "san francisco weather forecast tomorrow afternoon",
+            limit: 2
+        )
+
+        XCTAssertEqual(ranked.first?.title, "San Francisco weather forecast")
+    }
+
     func testWebLifecycleUsesChromeAndBuildsClickableSourceReceipt() {
         let result: NexJSONValue = .object([
             "results": .array([.object([
@@ -326,6 +493,26 @@ private struct NexMockSearchProvider: NexWebSearchProviding {
 private struct NexMockPageReader: NexWebPageReading {
     func readableText(from url: URL, maximumBytes: Int, maximumCharacters: Int) async throws -> String {
         "Extracted article evidence from \(url.host ?? "source") with enough readable detail for the model."
+    }
+}
+
+private struct NexProviderSpy: NexWebSearchProviding {
+    let name: String
+    let title: String
+    let url: URL
+    let counter: NexSearchCallCounter
+
+    func search(query: String, limit: Int) async throws -> [NexWebSearchResult] {
+        await counter.increment()
+        return [.init(
+            title: title,
+            url: url,
+            snippet: title,
+            extractedText: nil,
+            publishedAt: Date(),
+            provider: name,
+            retrievalStatus: .snippetOnly
+        )]
     }
 }
 

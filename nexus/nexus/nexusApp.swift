@@ -429,7 +429,7 @@ final class NotchController: ObservableObject {
                 onDelta: { _, _ in }
             )
             let plan = NexWebSearchPlanner.parse(raw, originalPrompt: prompt)
-            guard plan.queryOrigin == .fallback else { return plan }
+            guard plan.queryOrigin == .fallback || plan.queryOrigin == .rejected else { return plan }
 
             let repairedRaw = try await modelDownloadViewModel.response(
                 messages: NexWebSearchPlanner.repairMessages(
@@ -444,7 +444,12 @@ final class NotchController: ObservableObject {
                 repairedRaw,
                 originalPrompt: prompt
             )
-            return repairedPlan.queryOrigin == .modelExtraction ? repairedPlan : plan
+            if repairedPlan.queryOrigin == .modelExtraction || repairedPlan.queryOrigin == .none {
+                return repairedPlan
+            }
+            return plan.queryOrigin == .fallback
+                ? plan
+                : .init(shouldSearch: false, query: nil)
         } catch {
             return .init(
                 shouldSearch: NexWebSearchPlanner.obviousWebNeed(prompt),
