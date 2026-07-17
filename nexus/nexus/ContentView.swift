@@ -94,6 +94,12 @@ private struct ToolIconView: View {
             switch source {
             case .systemSymbol(let name):
                 Image(systemName: name).resizable().scaledToFit()
+            case .asset(let name, let fallback):
+                if let image = NSImage(named: NSImage.Name(name)) {
+                    Image(nsImage: image).resizable().scaledToFit()
+                } else {
+                    Image(systemName: fallback).resizable().scaledToFit()
+                }
             case .svg(let data, let fallback):
                 if let image = NSImage(data: data) {
                     Image(nsImage: image).resizable().scaledToFit()
@@ -334,8 +340,23 @@ private struct TranscriptContents: View {
 
 private struct ToolUsageReceiptView: View {
     let activity: ToolActivity
+    @State private var showsSources = false
 
+    @ViewBuilder
     var body: some View {
+        if activity.sources.isEmpty {
+            receiptLabel
+        } else {
+            Button { showsSources.toggle() } label: { receiptLabel }
+                .buttonStyle(.plain)
+                .popover(isPresented: $showsSources, arrowEdge: .top) {
+                    ToolReceiptSourcesView(activity: activity)
+                }
+                .help("Show Obsidian sources")
+        }
+    }
+
+    private var receiptLabel: some View {
         HStack(spacing: 7) {
             ToolIconView(source: activity.icon, size: 13)
             Text(activity.status)
@@ -348,6 +369,47 @@ private struct ToolUsageReceiptView: View {
         .background(.white.opacity(0.07), in: Capsule())
         .frame(maxWidth: .infinity, alignment: .leading)
         .accessibilityLabel(activity.status)
+    }
+}
+
+private struct ToolReceiptSourcesView: View {
+    let activity: ToolActivity
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(spacing: 8) {
+                ToolIconView(source: activity.icon, size: 18)
+                Text("Obsidian sources")
+                    .font(.system(size: 14, weight: .semibold, design: .rounded))
+            }
+
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 12) {
+                    ForEach(activity.sources) { source in
+                        VStack(alignment: .leading, spacing: 5) {
+                            Text(source.title)
+                                .font(.system(size: 12, weight: .semibold, design: .rounded))
+                            Text(source.excerpt)
+                                .font(.system(size: 11, weight: .regular, design: .rounded))
+                                .foregroundStyle(.secondary)
+                                .lineLimit(5)
+                            Text(source.sourceID)
+                                .font(.system(size: 9, weight: .medium, design: .monospaced))
+                                .foregroundStyle(.tertiary)
+                                .textSelection(.enabled)
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(10)
+                        .background(.primary.opacity(0.055), in: RoundedRectangle(cornerRadius: 10))
+                    }
+                }
+            }
+            .frame(maxHeight: 300)
+        }
+        .padding(15)
+        .frame(width: 380)
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("Obsidian sources used for this response")
     }
 }
 

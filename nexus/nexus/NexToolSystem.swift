@@ -157,6 +157,48 @@ struct NexToolLifecycleEvent: Codable, Equatable, Identifiable, Sendable {
     let progress: Double?
     let errorCode: String?
     let occurredAt: Date
+    let result: NexJSONValue?
+
+    init(
+        executionID: UUID,
+        toolName: String,
+        phase: NexToolLifecyclePhase,
+        message: String,
+        progress: Double?,
+        errorCode: String?,
+        occurredAt: Date
+    ) {
+        self.init(
+            executionID: executionID,
+            toolName: toolName,
+            phase: phase,
+            message: message,
+            progress: progress,
+            errorCode: errorCode,
+            occurredAt: occurredAt,
+            result: nil
+        )
+    }
+
+    init(
+        executionID: UUID,
+        toolName: String,
+        phase: NexToolLifecyclePhase,
+        message: String,
+        progress: Double?,
+        errorCode: String?,
+        occurredAt: Date,
+        result: NexJSONValue?
+    ) {
+        self.executionID = executionID
+        self.toolName = toolName
+        self.phase = phase
+        self.message = message
+        self.progress = progress
+        self.errorCode = errorCode
+        self.occurredAt = occurredAt
+        self.result = result
+    }
 }
 
 actor NexToolEventBus {
@@ -327,7 +369,8 @@ actor NexToolRegistry {
                 message: Self.completionMessage(label: tool.completionLabel, result: result),
                 progress: 1,
                 errorCode: nil,
-                occurredAt: Date()
+                occurredAt: Date(),
+                result: result
             ))
             return result
         } catch {

@@ -226,6 +226,7 @@ final class NexusGeometryTests: XCTestCase {
         XCTAssertTrue(instructions.contains("natural language by default"))
         XCTAssertTrue(instructions.contains("prior assistant claims are not evidence"))
         XCTAssertTrue(instructions.contains("Never turn advice, recommendations, workouts"))
+        XCTAssertTrue(instructions.contains("never expose citations, source IDs"))
         XCTAssertLessThan(instructions.split(whereSeparator: \.isWhitespace).count, 180)
     }
 
@@ -405,7 +406,17 @@ final class NexusGeometryTests: XCTestCase {
             message: "Used memory · 3 sources",
             progress: 1,
             errorCode: nil,
-            occurredAt: Date()
+            occurredAt: Date(),
+            result: .object([
+                "results": .array([
+                    .object([
+                        "source_id": .string("profile-id"),
+                        "chunk_id": .string("profile-id:memory:0"),
+                        "title": .string("Identity and background"),
+                        "excerpt": .string("Vishay attends Lynbrook High School.")
+                    ])
+                ])
+            ])
         )
         var state = NotchInteractionState()
         state.beginDictation()
@@ -419,6 +430,12 @@ final class NexusGeometryTests: XCTestCase {
         state.completeToolActivity(.lifecycle(completed))
         XCTAssertEqual(state.presentation, .tool)
         XCTAssertEqual(state.toolReceipt?.status, "Used memory · 3 sources")
+        XCTAssertEqual(state.toolReceipt?.sources.first?.title, "Identity and background")
+        if case .asset(let name, _) = state.toolReceipt?.icon {
+            XCTAssertEqual(name, "Obsidian")
+        } else {
+            XCTFail("Memory activity should use the bundled Obsidian SVG asset")
+        }
 
         state.beginThinking()
         XCTAssertEqual(state.presentation, .thinking)

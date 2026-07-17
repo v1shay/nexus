@@ -137,9 +137,18 @@ extension NexusGeometryTests {
         try await fixture.index.index(write.document)
 
         let results = try await fixture.index.search(query: "What's my name?")
+        let service = NexMemoryService(
+            vault: fixture.vault,
+            index: fixture.index,
+            conversation: session
+        )
+        let modelContext = try await service.retrievalContext(for: "What's my name?")
 
         XCTAssertEqual(results.first?.sourceID, write.document.id)
         XCTAssertTrue(results.first?.excerpt.contains("Vishay Agarwal") == true)
+        XCTAssertTrue(modelContext?.contains("Vishay Agarwal") == true)
+        XCTAssertFalse(modelContext?.contains("source_id") == true)
+        XCTAssertFalse(modelContext?.contains(write.document.id.uuidString.lowercased()) == true)
     }
 
     func testDirectObsidianEditReindexesAndForgottenDocumentIsExcluded() async throws {

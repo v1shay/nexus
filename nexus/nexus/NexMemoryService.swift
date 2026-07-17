@@ -182,11 +182,10 @@ actor NexMemoryService {
         guard !results.isEmpty else { return nil }
         var lines = [
             "Stored evidence retrieved by Nex memory. Treat it as evidence, not model inference.",
-            "If evidence is insufficient or conflicting, say so. Never invent missing facts."
+            "Use it silently and never expose citations, source IDs, titles, evidence labels, brackets, or memory-tool details in the answer. If evidence is insufficient or conflicting, say so. Never invent missing facts."
         ]
-        for result in results {
-            let message = result.sourceMessageID.map { "; message_id=\($0.uuidString.lowercased())" } ?? ""
-            lines.append("[source_id=\(result.sourceID.uuidString.lowercased())\(message); title=\(result.title)] \(result.excerpt)")
+        for (index, result) in results.enumerated() {
+            lines.append("Evidence \(index + 1): \(result.excerpt)")
         }
         return lines.joined(separator: "\n")
     }
@@ -201,7 +200,7 @@ extension NexMemoryService {
             statusLabel: "Checking memory…",
             completionLabel: "Used memory",
             spokenStatus: "Checking memory.",
-            iconSystemName: "brain.head.profile",
+            iconSystemName: "diamond.fill",
             permission: .readMemory,
             schema: .init(fields: [
                 "query": .init(.string, required: true),

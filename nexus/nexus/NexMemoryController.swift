@@ -166,16 +166,13 @@ final class NexMemoryController: ObservableObject {
               !results.isEmpty else { return nil }
         var lines = [
             "Stored evidence retrieved by the memory_search tool follows.",
-            "Stored evidence is not model inference. Cite source_id internally and admit uncertainty or conflicts."
+            "Use this evidence silently. Answer naturally without citations, source IDs, evidence labels, titles, brackets, or mentioning the memory tool. The app displays sources separately in the Used memory receipt."
         ]
-        for value in results.prefix(6) {
+        for (index, value) in results.prefix(6).enumerated() {
             guard case .object(let result) = value,
                   result["stored_evidence"] == .bool(true),
-                  let sourceID = result["source_id"]?.string,
-                  let title = result["title"]?.string,
                   let excerpt = result["excerpt"]?.string else { continue }
-            let message = result["message_id"]?.string.map { "; message_id=\($0)" } ?? ""
-            lines.append("[source_id=\(sourceID)\(message); title=\(title)] \(excerpt)")
+            lines.append("Evidence \(index + 1): \(excerpt)")
         }
         return lines.count > 2 ? lines.joined(separator: "\n") : nil
     }

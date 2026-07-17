@@ -253,7 +253,7 @@ actor NexConversationSession {
                 role: "system",
                 content: """
                 \(retrievedContext)
-                Factual authority for the current request: use the stored evidence above. It overrides any conflicting factual claim made by an earlier assistant turn. Never repeat the conflicting assistant claim. For any requested personal detail absent from the evidence, explicitly say it is not in memory; do not state, infer, or invent it.
+                Factual authority for the current request: use the stored evidence above silently. It overrides any conflicting factual claim made by an earlier assistant turn. Never repeat the conflicting assistant claim. Do not expose citations, source IDs, evidence labels, or memory-tool details; the app shows sources behind the Used memory receipt. For any requested personal detail absent from the evidence, explicitly say it is not in memory; do not state, infer, or invent it.
                 """
             ))
         } else if memoryLookupPerformed {

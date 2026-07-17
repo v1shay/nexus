@@ -10,7 +10,15 @@ enum NotchPresentation: Equatable {
 
 enum ToolIconSource: Equatable, Sendable {
     case systemSymbol(String)
+    case asset(name: String, fallbackSystemName: String)
     case svg(data: Data, fallbackSystemName: String)
+}
+
+struct ToolReceiptSource: Equatable, Identifiable, Sendable {
+    let id: String
+    let sourceID: String
+    let title: String
+    let excerpt: String
 }
 
 struct ToolActivity: Equatable, Sendable {
@@ -20,6 +28,7 @@ struct ToolActivity: Equatable, Sendable {
     let icon: ToolIconSource
     var phase: NexToolLifecyclePhase = .started
     var progress: Double?
+    var sources: [ToolReceiptSource] = []
 
     static func googleSearch(query: String) -> ToolActivity {
         ToolActivity(
@@ -35,7 +44,7 @@ struct ToolActivity: Equatable, Sendable {
         let isMemory = event.toolName.hasPrefix("memory_") || event.toolName == "conversation_recall"
         let title = isMemory ? "Nex Memory" : event.toolName.replacingOccurrences(of: "_", with: " ").capitalized
         let icon: ToolIconSource = isMemory
-            ? .svg(data: Data(memorySVG.utf8), fallbackSystemName: "brain.head.profile")
+            ? .asset(name: "Obsidian", fallbackSystemName: "diamond.fill")
             : .systemSymbol("wrench.and.screwdriver")
         return ToolActivity(
             toolName: title,
@@ -43,8 +52,24 @@ struct ToolActivity: Equatable, Sendable {
             spokenStatus: isMemory ? "Checking memory." : event.message,
             icon: icon,
             phase: event.phase,
-            progress: event.progress
+            progress: event.progress,
+            sources: isMemory ? memorySources(from: event.result) : []
         )
+    }
+
+    private static func memorySources(from result: NexJSONValue?) -> [ToolReceiptSource] {
+        guard case .object(let object) = result,
+              case .array(let values) = object["results"] else { return [] }
+        var seen = Set<String>()
+        return values.compactMap { value in
+            guard case .object(let source) = value,
+                  let sourceID = source["source_id"]?.string,
+                  let title = source["title"]?.string,
+                  let excerpt = source["excerpt"]?.string else { return nil }
+            let id = source["chunk_id"]?.string ?? sourceID
+            guard seen.insert(id).inserted else { return nil }
+            return ToolReceiptSource(id: id, sourceID: sourceID, title: title, excerpt: excerpt)
+        }
     }
 
     private static let chromeSVG = """
@@ -56,13 +81,6 @@ struct ToolActivity: Equatable, Sendable {
     </svg>
     """
 
-    private static let memorySVG = """
-    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
-      <path fill="none" stroke="white" stroke-width="4" stroke-linecap="round" stroke-linejoin="round" d="M27 10c-8 0-13 5-13 12 0 2 .5 4 1.6 5.6C12 30 10 34 10 38c0 7 5 12 12 12h5V10Zm10 0c8 0 13 5 13 12 0 2-.5 4-1.6 5.6C52 30 54 34 54 38c0 7-5 12-12 12h-5V10Z"/>
-      <path fill="none" stroke="#67E8F9" stroke-width="3" stroke-linecap="round" d="M20 23h7m-9 12h9m10-12h7m-7 12h9"/>
-      <circle cx="32" cy="53" r="5" fill="#67E8F9" opacity=".9"/>
-    </svg>
-    """
 }
 
 struct NotchInteractionState: Equatable {
