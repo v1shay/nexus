@@ -25,6 +25,7 @@ final class ResponseSpeaker {
     private var lastPCMActivityUptime: TimeInterval = 0
     private var pipelineGeneration = UUID()
     private var orderedPCM = OrderedDataChunkBuffer()
+    private var suppressCitationSpeech = false
 
     init() {
         audioEngine.attach(playerNode)
@@ -32,6 +33,7 @@ final class ResponseSpeaker {
 
     func beginStreaming() {
         streamingSessionIsActive = true
+        suppressCitationSpeech = false
         chunker = SpeechSentenceChunker()
         markdownFilter = StreamingSpeechMarkdownFilter()
         guard !isMuted, piperProcess == nil,
@@ -73,6 +75,14 @@ final class ResponseSpeaker {
         schedulePendingPhraseFlush()
     }
 
+    /// Web citations are rendered by the overlay after generation. They are
+    /// never part of spoken content, even when a small model ignores the
+    /// response contract and emits Markdown links itself.
+    func setWebEvidenceActive(_ active: Bool) {
+        suppressCitationSpeech = active
+        markdownFilter = StreamingSpeechMarkdownFilter(speakLinkLabels: !active)
+    }
+
     func finishStreaming() {
         flushTask?.cancel()
         flushTask = nil
@@ -84,6 +94,7 @@ final class ResponseSpeaker {
         if let remainder = chunker.flush() { enqueue(remainder) }
         try? piperInput?.close()
         piperInput = nil
+        suppressCitationSpeech = false
     }
 
     func setMuted(_ muted: Bool) {
@@ -147,7 +158,10 @@ final class ResponseSpeaker {
     }
 
     private func enqueue(_ phrase: String) {
-        let cleaned = SpeechSanitizer.forSpeech(phrase)
+        let cleaned = SpeechSanitizer.forSpeech(
+            phrase,
+            suppressCitations: suppressCitationSpeech
+        )
         guard !cleaned.isEmpty, !isMuted else { return }
         if let input = piperInput {
             do {
@@ -404,7 +418,13 @@ struct StreamingSpeechMarkdownFilter: Equatable {
 
     private var mode: Mode = .prose
     private var pendingBackticks = 0
-    private var linkFilter = StreamingSpeechLinkFilter()
+    private let speakLinkLabels: Bool
+    private var linkFilter: StreamingSpeechLinkFilter
+
+    init(speakLinkLabels: Bool = true) {
+        self.speakLinkLabels = speakLinkLabels
+        self.linkFilter = StreamingSpeechLinkFilter(speakLabels: speakLinkLabels)
+    }
 
     mutating func append(_ text: String) -> String {
         processMarkdown(linkFilter.append(text))
@@ -463,7 +483,7 @@ struct StreamingSpeechMarkdownFilter: Equatable {
         }
         mode = .prose
         pendingBackticks = 0
-        linkFilter = StreamingSpeechLinkFilter()
+        linkFilter = StreamingSpeechLinkFilter(speakLabels: speakLinkLabels)
         return output
     }
 
@@ -517,6 +537,11 @@ struct StreamingSpeechLinkFilter: Equatable {
     }
 
     private var mode: Mode = .text
+    private let speakLabels: Bool
+
+    init(speakLabels: Bool = true) {
+        self.speakLabels = speakLabels
+    }
 
     mutating func append(_ text: String) -> String {
         var output = ""
@@ -549,7 +574,7 @@ struct StreamingSpeechLinkFilter: Equatable {
                     mode = .destination(label: label, depth: depth + 1)
                 } else if character == ")" {
                     if depth == 1 {
-                        output += label
+                        if speakLabels { output += label }
                         mode = .text
                     } else {
                         mode = .destination(label: label, depth: depth - 1)
@@ -566,14 +591,18 @@ struct StreamingSpeechLinkFilter: Equatable {
         case .text: return ""
         case .label(let label): return "[" + label
         case .awaitingDestination(let label): return "[" + label + "]"
-        case .destination(let label, _): return label
+        case .destination(let label, _): return speakLabels ? label : ""
         }
     }
 }
 
 enum SpeechSanitizer {
     static func forSpeech(_ markdown: String) -> String {
-        markdown
+        forSpeech(markdown, suppressCitations: false)
+    }
+
+    static func forSpeech(_ markdown: String, suppressCitations: Bool) -> String {
+        var cleaned = markdown
             .replacingOccurrences(of: #"```[\s\S]*?```"#, with: " code block ", options: .regularExpression)
             .replacingOccurrences(of: #"`([^`]+)`"#, with: "$1", options: .regularExpression)
             .replacingOccurrences(of: #"\[([^\]]+)\]\([^\)]+\)"#, with: "$1", options: .regularExpression)
@@ -581,6 +610,17 @@ enum SpeechSanitizer {
             .replacingOccurrences(of: #"[*_>#]"#, with: "", options: .regularExpression)
             .replacingOccurrences(of: #"\s+"#, with: " ", options: .regularExpression)
             .trimmingCharacters(in: .whitespacesAndNewlines)
+        if suppressCitations {
+            cleaned = cleaned.replacingOccurrences(
+                of: #"(?i)\b(?:sources?|citations?|references?)\s*:.*$"#,
+                with: "",
+                options: .regularExpression
+            ).trimmingCharacters(in: .whitespacesAndNewlines)
+            if ["source", "sources", "citation", "citations", "references"].contains(cleaned.lowercased()) {
+                return ""
+            }
+        }
+        return cleaned
     }
 }
 

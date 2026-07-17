@@ -36,5 +36,20 @@ echo "Built Nexus at $APP"
 echo "Signed Nexus with stable identity: $SIGNING_IDENTITY"
 
 if [[ "${1:-}" == "--run" ]]; then
-  /usr/bin/open "$APP"
+  EXECUTABLE="$APP/Contents/MacOS/nexus"
+  running_pids() {
+    /bin/ps -axo pid=,command= | /usr/bin/awk -v executable="$EXECUTABLE" '$2 == executable { print $1 }'
+  }
+
+  for pid in ${(f)"$(running_pids)"}; do
+    [[ -n "$pid" ]] && /bin/kill "$pid" 2>/dev/null || true
+  done
+  for _ in {1..20}; do
+    [[ -z "$(running_pids)" ]] && break
+    /bin/sleep 0.05
+  done
+  for pid in ${(f)"$(running_pids)"}; do
+    [[ -n "$pid" ]] && /bin/kill -9 "$pid" 2>/dev/null || true
+  done
+  /usr/bin/open -n "$APP"
 fi

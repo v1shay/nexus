@@ -334,6 +334,22 @@ final class NexusGeometryTests: XCTestCase {
         )
     }
 
+    func testWebSpeechDropsCitationLabelsAndSourceSectionsEntirely() {
+        var filter = StreamingSpeechMarkdownFilter(speakLinkLabels: false)
+        var spoken = filter.append("Swift 6.3 adds Android support. [Apple")
+        spoken += filter.append("](https://apple.com/swift) **Sources:** [Macworld](https://example.com)")
+        spoken += filter.finish()
+
+        XCTAssertTrue(spoken.contains("Swift 6.3 adds Android support"))
+        XCTAssertFalse(spoken.contains("Apple"))
+        XCTAssertFalse(spoken.contains("Macworld"))
+        XCTAssertFalse(spoken.contains("https"))
+        XCTAssertEqual(
+            SpeechSanitizer.forSpeech("Sources: Apple and Macworld", suppressCitations: true),
+            ""
+        )
+    }
+
     func testThinkingBeginsOnlyAfterAcknowledgementStateIsFinished() {
         var state = NotchInteractionState()
         state.beginDictation()

@@ -32,8 +32,9 @@ final class NexWebSearchTests: XCTestCase {
         let plan = NexWebSearchPlanner.parse(raw, originalPrompt: "what's that new virus spreading")
 
         XCTAssertTrue(plan.shouldSearch)
-        XCTAssertTrue(plan.query?.contains("chikungunya outbreak") == true)
+        XCTAssertFalse(plan.query?.contains("chikungunya") == true)
         XCTAssertTrue(plan.query?.contains("virus") == true)
+        XCTAssertTrue(plan.query?.contains("spreading") == true)
         XCTAssertTrue(NexWebSearchPlanner.obviousWebNeed("What changed in the newest version?"))
     }
 
@@ -74,6 +75,19 @@ final class NexWebSearchTests: XCTestCase {
             XCTAssertTrue(query.contains(requiredTopic), query)
             XCTAssertGreaterThanOrEqual(query.split(separator: " ").count, 3)
         }
+    }
+
+    func testModelCanDecideToSearchButCannotChooseTheQueryText() {
+        let prompt = "What changed in the newest Swift release?"
+        let plan = NexWebSearchPlanner.parse(
+            #"{"use_web":true,"query":"based changes random"}"#,
+            originalPrompt: prompt
+        )
+
+        XCTAssertTrue(plan.shouldSearch)
+        XCTAssertTrue(plan.query?.hasPrefix("swift programming language release") == true)
+        XCTAssertFalse(plan.query?.contains("based") == true)
+        XCTAssertFalse(plan.query?.contains("random") == true)
     }
 
     func testSpeechTranscriptionTyposAreNormalizedInFallbackQueries() {

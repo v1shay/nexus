@@ -170,6 +170,7 @@ actor NexWebSearchService {
     func search(query rawQuery: String, progress: @escaping Progress) async throws -> NexWebSearchResponse {
         let query = Self.normalizedQuery(rawQuery)
         guard query.count >= 2 else { throw NexWebSearchError.invalidQuery }
+        NSLog("Nex web search request: %@", query)
         let key = Self.cacheKey(query)
         let now = Date()
         cache = cache.filter { $0.value.expiresAt > now }
@@ -339,11 +340,15 @@ enum NexWebSearchPlanner {
         if let data = cleaned.data(using: .utf8),
            let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
            let useWeb = object["use_web"] as? Bool {
-            let query = (object["query"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
-            if useWeb, let query, !query.isEmpty {
+            if useWeb {
+                // The model may decide whether current evidence is needed,
+                // but it never controls the actual query. Small local models
+                // frequently returned generic fragments such as "what",
+                // "changes", or "big". The application always derives a
+                // complete topic-preserving query from the user's own words.
                 return .init(
                     shouldSearch: true,
-                    query: NexWebSearchQueryBuilder.validated(query, for: originalPrompt)
+                    query: NexWebSearchQueryBuilder.query(for: originalPrompt)
                 )
             }
             if obviousWebNeed(originalPrompt) {
@@ -380,10 +385,6 @@ enum NexWebSearchQueryBuilder {
         "tell", "that", "the", "this", "to", "up", "was", "were", "what", "whatever", "which",
         "who", "why", "with", "would", "you"
     ]
-    private static let queryFiller: Set<String> = [
-        "information", "largest", "latest", "newest", "recent", "today", "current", "currently",
-        "articles", "online", "search", "find", "look"
-    ]
     private static let corrections: [String: String] = [
         "siwf": "swift", "swif": "swift", "sift": "swift",
         "realease": "release", "trealize": "release"
@@ -392,30 +393,6 @@ enum NexWebSearchQueryBuilder {
         "big", "biggest", "change", "changed", "changes", "current", "currently", "latest",
         "new", "newest", "now", "recent", "right", "spreading", "today"
     ]
-
-    static func validated(_ modelQuery: String, for prompt: String) -> String {
-        let candidate = tokens(modelQuery)
-        let meaningfulCandidate = candidate.filter { !stopWords.contains($0) }
-        let anchors = Set(tokens(prompt).filter {
-            !stopWords.contains($0) && !queryFiller.contains($0) && $0.count > 1
-        }.map(stem))
-        let candidateAnchors = Set(meaningfulCandidate.map(stem))
-        let hasPromptAnchor = !anchors.isDisjoint(with: candidateAnchors)
-        guard meaningfulCandidate.count >= 3, meaningfulCandidate.count <= 24 else {
-            return query(for: prompt)
-        }
-        if hasPromptAnchor {
-            return meaningfulCandidate.joined(separator: " ")
-        }
-        // A model may correctly repair an unknown name (for example, a
-        // speech-to-text misspelling) without sharing a literal prompt token.
-        // Preserve that useful repair but anchor it with the user's topic so
-        // an unrelated model guess can never become the entire query.
-        let promptAnchors = tokens(prompt).filter {
-            !stopWords.contains($0) && !queryFiller.contains($0) && $0.count > 1
-        }
-        return (meaningfulCandidate + Array(promptAnchors.prefix(5))).joined(separator: " ")
-    }
 
     static func query(for prompt: String, now: Date = Date()) -> String {
         var words = tokens(prompt).filter { !stopWords.contains($0) }
@@ -436,7 +413,17 @@ enum NexWebSearchQueryBuilder {
             words += formatter.string(from: now).lowercased().split(separator: " ").map(String.init)
         }
         var seen = Set<String>()
-        return words.filter { seen.insert($0).inserted }.joined(separator: " ")
+        let query = words.filter { seen.insert($0).inserted }.joined(separator: " ")
+        if query.split(separator: " ").count >= 3 { return query }
+        return Self.normalizedFallback(prompt, existing: query)
+    }
+
+    private static func normalizedFallback(_ prompt: String, existing: String) -> String {
+        let original = NexWebSearchService.normalizedQuery(prompt)
+        let base = original.isEmpty ? existing : original
+        return [base, "reliable current information"]
+            .filter { !$0.isEmpty }
+            .joined(separator: " ")
     }
 
     private static func contextualPrefix(for prompt: String) -> [String] {
@@ -461,13 +448,6 @@ enum NexWebSearchQueryBuilder {
             .map { corrections[$0] ?? $0 }
     }
 
-    private static func stem(_ word: String) -> String {
-        if word.hasSuffix("us") || word.hasSuffix("ss") { return word }
-        if word.count > 4, word.hasSuffix("ies") { return String(word.dropLast(3)) + "y" }
-        if word.count > 4, word.hasSuffix("es") { return String(word.dropLast(2)) }
-        if word.count > 3, word.hasSuffix("s") { return String(word.dropLast()) }
-        return word
-    }
 }
 
 actor NexWebSearchController {

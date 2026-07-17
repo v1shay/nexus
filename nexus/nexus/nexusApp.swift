@@ -333,6 +333,7 @@ final class NotchController: ObservableObject {
                 let webPlan = await plannedWebSearch
                 let webRetrieval = await retrieveWebContext(plan: webPlan, generation: generation)
                 guard !Task.isCancelled, responseGeneration == generation else { return }
+                responseSpeaker.setWebEvidenceActive(webRetrieval.response != nil)
                 if let compound = NexCompoundMemoryQuery.split(prompt) {
                     // Answer the independent portion first, then visibly check
                     // memory and stream the personal-history portion as a
