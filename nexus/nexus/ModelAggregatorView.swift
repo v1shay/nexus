@@ -453,8 +453,21 @@ private struct SpinningUSDZView: NSViewRepresentable {
 
     private func loadScene(into view: SCNView) {
         view.setAccessibilityIdentifier(assetName)
-        guard let url = Bundle.main.url(forResource: assetName, withExtension: "usdz", subdirectory: "Nexus3D"),
-              let source = try? SCNScene(url: url, options: nil) else { return }
+        guard let url = Bundle.main.url(
+            forResource: assetName,
+            withExtension: "usdz",
+            subdirectory: "Nexus3D"
+        ) else {
+            NSLog("Nexus 3D asset is missing from the app bundle: %@", assetName)
+            return
+        }
+        let source: SCNScene
+        do {
+            source = try SCNScene(url: url, options: nil)
+        } catch {
+            NSLog("Nexus could not decode 3D asset %@: %@", assetName, error.localizedDescription)
+            return
+        }
 
         let scene = SCNScene()
         let content = SCNNode()
@@ -475,6 +488,12 @@ private struct SpinningUSDZView: NSViewRepresentable {
         let camera = SCNNode()
         camera.camera = SCNCamera()
         camera.camera?.fieldOfView = 38
+        // USDZ files use their own real-world scales. These models place the
+        // camera 200–1,000 scene units away, beyond SceneKit's default zFar.
+        // Derive both clipping planes from the measured model radius so the
+        // geometry remains visible regardless of the asset's authored scale.
+        camera.camera?.zNear = Double(max(radius * 0.01, 0.01))
+        camera.camera?.zFar = Double(max(radius * 10, 1_000))
         camera.position = SCNVector3(0, radius * 0.15, radius * 3.1)
         camera.constraints = [SCNLookAtConstraint(target: spinner)]
         scene.rootNode.addChildNode(camera)
