@@ -21,6 +21,7 @@ final class ModelDownloadViewModel: ObservableObject {
     @Published var pendingOllamaInstall: LocalModel?
     @Published var pendingRemoteRuntimeInstall: RemoteRuntimeInstallRequest?
     @Published private(set) var activeModel: LocalModel?
+    let apiProvider = NexusAPIProviderStore()
 
     var memoryGB: Int {
         connect?.remoteMemoryGB ?? max(1, Int(ProcessInfo.processInfo.physicalMemory / 1_073_741_824))
@@ -298,6 +299,20 @@ final class ModelDownloadViewModel: ObservableObject {
         maximumTokens: Int? = nil,
         onDelta: @escaping @Sendable (_ delta: String, _ accumulated: String) async -> Void
     ) async throws -> String {
+        if apiProvider.enabled {
+            do {
+                return try await NexusAPIProviderClient.streamChat(
+                    configuration: try apiProvider.configuration(),
+                    messages: messages,
+                    temperature: temperature,
+                    maximumTokens: maximumTokens,
+                    onDelta: onDelta
+                )
+            } catch {
+                apiProvider.recordError(error)
+                throw error
+            }
+        }
         guard let activeModel else {
             throw LocalModelError.invalidResponse("Choose an installed model in the model window first")
         }

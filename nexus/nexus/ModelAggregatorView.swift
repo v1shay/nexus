@@ -91,24 +91,66 @@ private struct NexusAppRail: View {
 
 private struct NexusModelsPage: View {
     @ObservedObject var viewModel: ModelDownloadViewModel
+    @State private var isShowingAPISettings = false
 
     var body: some View {
-        GeometryReader { proxy in
-            let rowHeight = max(260, (proxy.size.height - 42) / 2)
-            VStack(spacing: 0) {
-                HStack(spacing: 0) {
-                    ModelSceneCard(asset: "Computer", accent: .cyan)
-                    ModelLibraryCard(backend: .ollama, viewModel: viewModel)
-                }
-                .frame(height: rowHeight)
-                HStack(spacing: 0) {
-                    ModelLibraryCard(backend: .lmStudio, viewModel: viewModel)
-                    ModelSceneCard(asset: "Moon_Globe", accent: .indigo)
-                }
-                .frame(height: rowHeight)
+        VStack(spacing: 0) {
+            HStack {
+                Spacer()
+                Button("API") { isShowingAPISettings = true }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(viewModel.apiProvider.enabled ? .green : .secondary)
+                    .help("Use an OpenAI-compatible or Gemini API model")
             }
-            .padding(.horizontal, 18)
+            .padding(.horizontal, 22)
+            .frame(height: 28)
+            GeometryReader { proxy in
+                let rowHeight = max(260, (proxy.size.height - 42) / 2)
+                VStack(spacing: 0) {
+                    HStack(spacing: 0) {
+                        ModelSceneCard(asset: "Computer", accent: .cyan)
+                        ModelLibraryCard(backend: .ollama, viewModel: viewModel)
+                    }
+                    .frame(height: rowHeight)
+                    HStack(spacing: 0) {
+                        ModelLibraryCard(backend: .lmStudio, viewModel: viewModel)
+                        ModelSceneCard(asset: "Moon_Globe", accent: .indigo)
+                    }
+                    .frame(height: rowHeight)
+                }
+            }
         }
+        .sheet(isPresented: $isShowingAPISettings) { NexusAPIProviderView(store: viewModel.apiProvider) }
+    }
+}
+
+private struct NexusAPIProviderView: View {
+    @ObservedObject var store: NexusAPIProviderStore
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            HStack { Text("API model").font(.headline); Spacer(); Toggle("Use", isOn: $store.enabled).labelsHidden() }
+            Picker("Provider", selection: $store.kind) {
+                ForEach(NexusAPIProviderKind.allCases) { Text($0.title).tag($0) }
+            }
+            .onChange(of: store.kind) { _, next in store.selectKind(next) }
+            TextField("Base URL", text: $store.baseURL)
+            TextField("Model", text: $store.model)
+            SecureField(store.savedKey ? "API key (saved — enter to replace)" : "API key", text: $store.apiKeyInput)
+            if let error = store.errorMessage { Text(error).font(.caption).foregroundStyle(.red) }
+            HStack {
+                Button("Disable") { store.disable(); dismiss() }
+                Spacer()
+                Button("Save") {
+                    do { try store.save(); dismiss() }
+                    catch { store.recordError(error) }
+                }
+                .keyboardShortcut(.defaultAction)
+            }
+        }
+        .padding(24)
+        .frame(width: 440)
     }
 }
 

@@ -3,6 +3,28 @@ import WebKit
 @testable import nexus
 
 final class NexusGeometryTests: XCTestCase {
+    @MainActor
+    func testAPIProviderKeepsKeyOutOfDefaultsAndBuildsGeminiConfiguration() throws {
+        let suite = "nexus-api-provider-test-\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let secrets = NexusMemorySecretStore()
+        let store = NexusAPIProviderStore(defaults: defaults, secretStore: secrets)
+        store.kind = .gemini
+        store.baseURL = NexusAPIProviderKind.gemini.defaultBaseURL
+        store.model = "gemini-2.5-flash"
+        store.apiKeyInput = "test-key"
+        store.enabled = true
+
+        try store.save()
+        let configuration = try store.configuration()
+
+        XCTAssertEqual(configuration.kind, .gemini)
+        XCTAssertEqual(configuration.model, "gemini-2.5-flash")
+        XCTAssertEqual(configuration.apiKey, "test-key")
+        XCTAssertFalse(String(describing: defaults.dictionary(forKey: "nexus.api-provider.settings.v1")).contains("test-key"))
+    }
+
     func testRequestedModelAndConnectCameraSizing() {
         XCTAssertEqual(Nexus3DLayout.computerCameraDistance, 2.55)
         XCTAssertEqual(Nexus3DLayout.globeCameraDistance, 2.70)
