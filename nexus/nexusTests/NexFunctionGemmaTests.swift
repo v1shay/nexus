@@ -294,9 +294,9 @@ final class NexFunctionGemmaTests: XCTestCase {
         let baselineFirst = DateRecorder()
         _ = try await manager.streamChat(
             model: primaryModel,
-            messages: [.init(role: "user", content: "Explain recursion in one sentence.")],
+            messages: [.init(role: "user", content: "Reply with only: recursion is self-reference")],
             temperature: 0,
-            maximumTokens: 60,
+            maximumTokens: 12,
             onDelta: { _, _ in await baselineFirst.recordIfNeeded(Date()) }
         )
         let baselineEnd = Date()
@@ -305,13 +305,13 @@ final class NexFunctionGemmaTests: XCTestCase {
         let enabledFirst = DateRecorder()
         async let primaryAnswer = manager.streamChat(
             model: primaryModel,
-            messages: [.init(role: "user", content: "Explain recursion in one sentence.")],
+            messages: [.init(role: "user", content: "Reply with only: recursion is self-reference")],
             temperature: 0,
-            maximumTokens: 60,
+            maximumTokens: 12,
             onDelta: { _, _ in await enabledFirst.recordIfNeeded(Date()) }
         )
         async let route = router.route(
-            request: "Explain recursion in one sentence.",
+            request: "Reply with only: recursion is self-reference",
             activeConversation: snapshot(),
             tools: tools()
         )
@@ -337,6 +337,7 @@ final class NexFunctionGemmaTests: XCTestCase {
         XCTAssertTrue(measuredRoute.output.actions.isEmpty)
         XCTAssertLessThan(measuredRoute.metrics.latencyMilliseconds, 2_500)
         XCTAssertLessThan(enabledTTFT, baselineTTFT + 500)
+        XCTAssertLessThan(enabledTotal, baselineTotal + 500)
         await router.shutdown()
     }
 
