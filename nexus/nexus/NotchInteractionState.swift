@@ -28,6 +28,8 @@ struct ToolActivity: Equatable, Sendable {
     let icon: ToolIconSource
     var phase: NexToolLifecyclePhase = .started
     var progress: Double?
+    /// The exact validated query sent to a retrieval tool.
+    var query: String?
     var sources: [ToolReceiptSource] = []
 
     static func googleSearch(query: String) -> ToolActivity {
@@ -54,6 +56,14 @@ struct ToolActivity: Equatable, Sendable {
         } else {
             icon = .systemSymbol("wrench.and.screwdriver")
         }
+        let query: String?
+        if let submitted = event.arguments["query"]?.string {
+            query = submitted
+        } else if case .object(let result)? = event.result {
+            query = result["query"]?.string
+        } else {
+            query = nil
+        }
         return ToolActivity(
             toolName: title,
             status: event.message,
@@ -61,6 +71,7 @@ struct ToolActivity: Equatable, Sendable {
             icon: icon,
             phase: event.phase,
             progress: event.progress,
+            query: query,
             sources: isMemory ? memorySources(from: event.result) : (isWebSearch ? webSources(from: event.result) : [])
         )
     }

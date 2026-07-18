@@ -345,7 +345,7 @@ private struct ToolUsageReceiptView: View {
 
     @ViewBuilder
     var body: some View {
-        if activity.sources.isEmpty {
+        if activity.sources.isEmpty && activity.query == nil {
             receiptLabel
         } else {
             Button { showsSources.toggle() } label: { receiptLabel }
@@ -353,7 +353,7 @@ private struct ToolUsageReceiptView: View {
                 .popover(isPresented: $showsSources, arrowEdge: .top) {
                     ToolReceiptSourcesView(activity: activity)
                 }
-                .help("Show sources")
+                .help(activity.query == nil ? "Show sources" : "Show submitted query and sources")
         }
     }
 
@@ -384,7 +384,23 @@ private struct ToolReceiptSourcesView: View {
                     .font(.system(size: 14, weight: .semibold, design: .rounded))
             }
 
-            ScrollView {
+            if let query = activity.query {
+                VStack(alignment: .leading, spacing: 5) {
+                    Text(activity.toolName == "Web Search" ? "Search query" : "Retrieval query")
+                        .font(.system(size: 11, weight: .semibold, design: .rounded))
+                        .foregroundStyle(.secondary)
+                    Text(query)
+                        .font(.system(size: 12, weight: .medium, design: .rounded))
+                        .textSelection(.enabled)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(10)
+                .background(.cyan.opacity(0.07), in: RoundedRectangle(cornerRadius: 10))
+            }
+
+            if !activity.sources.isEmpty {
+                ScrollView {
                 LazyVStack(alignment: .leading, spacing: 12) {
                     ForEach(activity.sources) { source in
                         VStack(alignment: .leading, spacing: 5) {
@@ -413,8 +429,9 @@ private struct ToolReceiptSourcesView: View {
                         .background(.primary.opacity(0.055), in: RoundedRectangle(cornerRadius: 10))
                     }
                 }
+                }
+                .frame(maxHeight: 300)
             }
-            .frame(maxHeight: 300)
         }
         .padding(15)
         .frame(width: 380)

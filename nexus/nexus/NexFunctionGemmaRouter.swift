@@ -416,9 +416,12 @@ struct NexSemanticRoutingGuard: Sendable {
 
     func decision(for request: String, activeConversation: NexConversationSnapshot) -> Decision {
         let scores = scores(for: request)
-        let web = scores.web > 0.80
+        let currentExternal = Self.isCurrentExternalFactRequest(request)
+        let personalHistory = Self.isPersonalHistoryRequest(request)
+        let web = (!personalHistory || currentExternal) && ((scores.web > 0.80
             && scores.web > scores.direct + 0.025
-            && scores.web > scores.memory + 0.01
+            && scores.web > scores.memory + 0.01)
+            || currentExternal)
         var memory = scores.memory > 0.78
             && scores.memory > scores.direct + 0.025
             && scores.memory > scores.activeConversation + 0.01
@@ -431,6 +434,45 @@ struct NexSemanticRoutingGuard: Sendable {
             && scores.memoryWrite > scores.memory + 0.015
             && scores.memoryWrite > scores.temporary - 0.005
         return .init(web: web, memory: memory, memoryWrite: write)
+    }
+
+    /// Complements embedding similarity with the grammatical shape of a
+    /// time-sensitive public-fact request. This is intentionally not a
+    /// one-word trigger: it requires both a current time scope and an external
+    /// fact category, so a new "Conrad Challenge deadline this year" request
+    /// is recognized without treating ordinary explanations as web searches.
+    private static func isCurrentExternalFactRequest(_ request: String) -> Bool {
+        let normalized = request.lowercased()
+        if isPersonalHistoryRequest(request) {
+            // "my most recent competition" is a request to recall the
+            // user's history, whereas "my project and this year's
+            // competition" needs both memory and the web.
+            let explicitExternalScope = [
+                "today", "tomorrow", "this week", "this month", "this year",
+                "right now", "current", "currently", "latest", "newest", "still available"
+            ]
+            guard explicitExternalScope.contains(where: normalized.contains) else { return false }
+        }
+        let currentScopes = [
+            "today", "tomorrow", "this week", "this month", "this year",
+            "right now", "current", "currently", "latest", "newest", "recent", "still available"
+        ]
+        guard currentScopes.contains(where: normalized.contains) else { return false }
+        let publicFactCategories = [
+            "deadline", "eligibility", "application", "competition", "weather", "forecast",
+            "price", "score", "release", "version", "benchmark", "news", "outbreak",
+            "law", "regulation", "availability", "documentation", "api"
+        ]
+        return publicFactCategories.contains(where: normalized.contains)
+    }
+
+    private static func isPersonalHistoryRequest(_ request: String) -> Bool {
+        let normalized = request.lowercased()
+        let phrases = [
+            "my last", "my previous", "i won", "i win", "did i win", "i built", "we decided",
+            "saved project", "saved research", "my research", "my project"
+        ]
+        return phrases.contains(where: normalized.contains)
     }
 
     func scores(for request: String) -> Scores {
@@ -609,7 +651,10 @@ actor NexFunctionGemmaRouter: NexIntentRouting {
         let referenceDate = now()
         let decision = semanticGuard.decision(for: request, activeConversation: activeConversation)
         let queryTools = Self.queryTools(from: tools)
-        let context = Self.compactContext(activeConversation)
+        // A self-contained new request must not be contaminated by a prior
+        // topic.  We only pass turns to FunctionGemma when the new wording is
+        // actually referential ("that API", "is it still available", etc.).
+        let context = Self.compactContext(activeConversation, for: request)
         let prompt = """
         Today is \(Self.dateFormatter.string(from: referenceDate)).
         Visible active conversation context (do not retrieve it again):
@@ -633,7 +678,12 @@ actor NexFunctionGemmaRouter: NexIntentRouting {
             await calls(
                 prompt: prompt,
                 declarations: activityDeclarations,
-                maximumTokens: selectedBuiltIns.isEmpty ? 6 : 28
+                // Six tokens stopped after `call:explain_topic`, producing an
+                // empty argument map and therefore the neutral fallback on
+                // every ordinary request.  Sixteen is enough for a complete
+                // compact activity call; retrieval needs room for a real
+                // standalone query rather than a one-word fragment.
+                maximumTokens: selectedBuiltIns.isEmpty ? 16 : 40
             )
         }
         let activityBatch = await activityTask.value
@@ -694,7 +744,7 @@ actor NexFunctionGemmaRouter: NexIntentRouting {
                 )
             : nil
         let status = invalidOutput
-            ? FunctionGemmaOutput.neutral.status
+            ? Self.fallbackStatus(for: request, decision: decision)
             : Self.status(
                 from: generatedWrites + generated,
                 actions: actions,
@@ -827,14 +877,17 @@ actor NexFunctionGemmaRouter: NexIntentRouting {
         )
     }
 
-    private static func compactContext(_ snapshot: NexConversationSnapshot) -> String {
-        let turns = snapshot.turns.dropLast().suffix(6).map {
+    private static func compactContext(
+        _ snapshot: NexConversationSnapshot,
+        for request: String
+    ) -> String {
+        guard shouldUseConversationContext(for: request) else {
+            return "(The current request is self-contained. Ignore earlier topics.)"
+        }
+        let turns = snapshot.turns.dropLast().suffix(4).map {
             "\($0.role.rawValue): \(String($0.text.prefix(360)))"
         }.joined(separator: "\n")
         var lines: [String] = []
-        if !snapshot.entities.isEmpty { lines.append("Entities: \(snapshot.entities.prefix(8).joined(separator: ", "))") }
-        if !snapshot.projects.isEmpty { lines.append("Projects: \(snapshot.projects.prefix(6).joined(separator: ", "))") }
-        if let task = snapshot.currentTask { lines.append("Current task: \(String(task.prefix(260)))") }
         if !turns.isEmpty { lines.append("Recent turns:\n\(turns)") }
         return lines.isEmpty ? "(none)" : lines.joined(separator: "\n")
     }
@@ -856,7 +909,8 @@ actor NexFunctionGemmaRouter: NexIntentRouting {
             .contains(where: normalizedCandidate.contains)
         if candidate.split(separator: " ").count < 5
             || normalizedCandidate == normalizedRequest
-            || leakedPromptLabels {
+            || leakedPromptLabels
+            || !candidateIsGrounded(candidate, in: originalRequest) {
             candidate = fallback
         }
         if let date, candidate.localizedCaseInsensitiveContains("tomorrow") {
@@ -868,24 +922,28 @@ actor NexFunctionGemmaRouter: NexIntentRouting {
                 options: [.caseInsensitive]
             )
         }
+        if let date, candidate.localizedCaseInsensitiveContains("this year") {
+            let year = Calendar.current.component(.year, from: date)
+            candidate = candidate.replacingOccurrences(
+                of: "this year",
+                with: String(year),
+                options: [.caseInsensitive]
+            )
+        }
         var seen = Set<String>()
         candidate = candidate.split(whereSeparator: \.isWhitespace).filter { token in
             seen.insert(token.lowercased().trimmingCharacters(in: .punctuationCharacters)).inserted
         }.joined(separator: " ")
+        candidate = ensureStandaloneQuery(candidate, originalRequest: originalRequest, date: date)
         return String(candidate.prefix(220))
     }
 
     private static func memoryFallbackQuery(_ request: String, snapshot: NexConversationSnapshot) -> String {
-        let relationships = (snapshot.projects + snapshot.entities).prefix(8).joined(separator: " ")
-        let recentUserContext = snapshot.turns.dropLast().last(where: { $0.role == .user })?.text ?? ""
-        let anchors = [relationships, String(recentUserContext.prefix(180))]
-            .filter { !$0.isEmpty }
-            .joined(separator: " ")
-        let combined = anchors.isEmpty ? request : "\(request) \(anchors)"
-        let retrievalGrounding = anchors.isEmpty
-            ? "saved memory conversation project details decisions"
-            : "saved memory relevant context"
-        return "\(combined) \(retrievalGrounding)"
+        let recentUserContext = shouldUseConversationContext(for: request)
+            ? snapshot.turns.dropLast().last(where: { $0.role == .user })?.text ?? ""
+            : ""
+        let combined = recentUserContext.isEmpty ? request : "\(request) \(recentUserContext)"
+        return "\(combined) saved memory relevant details decisions"
             .split(whereSeparator: \.isWhitespace)
             .prefix(24)
             .joined(separator: " ")
@@ -896,13 +954,91 @@ actor NexFunctionGemmaRouter: NexIntentRouting {
         snapshot: NexConversationSnapshot,
         date: Date
     ) -> String {
-        let namedContext = (snapshot.entities + snapshot.projects).prefix(8).joined(separator: " ")
-        let recentUserContext = snapshot.turns.dropLast().last(where: { $0.role == .user })?.text ?? ""
-        let context = [namedContext, String(recentUserContext.prefix(180))]
-            .filter { !$0.isEmpty }
-            .joined(separator: " ")
-        let grounded = context.isEmpty ? request : "\(request) \(context)"
-        return NexWebSearchQueryBuilder.query(for: grounded, now: date)
+        let recentUserContext = shouldUseConversationContext(for: request)
+            ? snapshot.turns.dropLast().last(where: { $0.role == .user })?.text ?? ""
+            : ""
+        let grounded = recentUserContext.isEmpty ? request : "\(request) \(recentUserContext)"
+        return ensureStandaloneQuery(
+            NexWebSearchQueryBuilder.query(for: grounded, now: date),
+            originalRequest: request,
+            date: date
+        )
+    }
+
+    /// Conversation context is a resolver for anaphora, not an extra bag of
+    /// search words.  A new named request (for example, the Conrad Challenge)
+    /// remains scoped to itself even if the preceding turn discussed San
+    /// Francisco.
+    private static func shouldUseConversationContext(for request: String) -> Bool {
+        let normalized = request.lowercased()
+            .split { !$0.isLetter && !$0.isNumber }
+            .map(String.init)
+        let referentialTerms: Set<String> = [
+            "it", "that", "those", "they", "them", "there",
+            "previous", "earlier", "above", "discussed", "continue", "again"
+        ]
+        if !Set(normalized).isDisjoint(with: referentialTerms) { return true }
+        if let thisIndex = normalized.firstIndex(of: "this") {
+            let next = normalized.indices.contains(normalized.index(after: thisIndex))
+                ? normalized[normalized.index(after: thisIndex)]
+                : ""
+            // "this year" and "this week" are temporal scopes, not a
+            // reference to a stale topic from the previous turn.
+            if !["year", "month", "week", "day", "morning", "afternoon", "evening"].contains(next) {
+                return true
+            }
+        }
+        let phrases = ["last answer", "the api", "the project", "still available", "works differently"]
+        return phrases.contains { normalized.joined(separator: " ").contains($0) }
+    }
+
+    private static func candidateIsGrounded(_ candidate: String, in request: String) -> Bool {
+        let requestTerms = meaningfulTerms(request)
+        // A vague referential request legitimately needs the resolved context.
+        guard requestTerms.count >= 2, !shouldUseConversationContext(for: request) else { return true }
+        let candidateTerms = Set(meaningfulTerms(candidate))
+        return !Set(requestTerms).isDisjoint(with: candidateTerms)
+    }
+
+    private static func meaningfulTerms(_ text: String) -> [String] {
+        let ignored: Set<String> = [
+            "a", "an", "and", "are", "ask", "at", "can", "could", "did", "do", "does",
+            "for", "from", "have", "how", "i", "if", "in", "is", "it", "me", "my", "of",
+            "on", "or", "please", "should", "that", "the", "this", "to", "what", "when",
+            "where", "which", "who", "why", "with", "would", "you", "your", "current", "latest"
+        ]
+        return text.lowercased()
+            .split { !$0.isLetter && !$0.isNumber }
+            .map(String.init)
+            .filter { $0.count > 1 && !ignored.contains($0) }
+    }
+
+    private static func ensureStandaloneQuery(
+        _ candidate: String,
+        originalRequest: String,
+        date: Date?
+    ) -> String {
+        var words = candidate.split(whereSeparator: \.isWhitespace).map(String.init)
+        let lowerRequest = originalRequest.lowercased()
+        if lowerRequest.contains("this year"), let date {
+            let year = String(Calendar.current.component(.year, from: date))
+            if !words.contains(year) { words.append(year) }
+        }
+        if words.count < 5 {
+            words += ["official", "information"]
+        }
+        var seen = Set<String>()
+        return words.filter { seen.insert($0.lowercased()).inserted }.joined(separator: " ")
+    }
+
+    private static func fallbackStatus(
+        for request: String,
+        decision: NexSemanticRoutingGuard.Decision
+    ) -> String {
+        if decision.web { return sanitizedStatus("Checking current information…") }
+        if decision.memory { return sanitizedStatus("Reviewing saved context…") }
+        let subject = conciseSubject(request, maximumWords: 3)
+        return sanitizedStatus("Thinking through \(subject)…")
     }
 
     private static func memoryWrite(

@@ -413,6 +413,7 @@ final class NexWebSearchTests: XCTestCase {
             progress: 1,
             errorCode: nil,
             occurredAt: Date(),
+            arguments: ["query": .string("Conrad Challenge 2026 deadline official information")],
             result: result
         )
 
@@ -420,6 +421,7 @@ final class NexWebSearchTests: XCTestCase {
 
         XCTAssertEqual(activity.toolName, "Web Search")
         XCTAssertEqual(activity.icon, .asset(name: "Chrome", fallbackSystemName: "globe"))
+        XCTAssertEqual(activity.query, "Conrad Challenge 2026 deadline official information")
         XCTAssertEqual(activity.sources.first?.sourceID, "https://example.com/report")
     }
 

@@ -130,6 +130,33 @@ final class NexFunctionGemmaTests: XCTestCase {
         XCTAssertFalse(query.split(separator: " ") == ["you"])
     }
 
+    func testNewNamedRequestCannotInheritAnUnrelatedPreviousSearchTopic() async {
+        let prior = NexConversationTurn(
+            role: .user,
+            text: "What is the weather in San Francisco tomorrow?"
+        )
+        let assistant = NexConversationTurn(role: .assistant, text: "It should be mild.")
+        let current = NexConversationTurn(
+            role: .user,
+            text: "What is the Conrad Challenge deadline this year?"
+        )
+        let router = NexFunctionGemmaRouter(
+            runtime: StaleQueryFunctionGemmaRuntime(),
+            now: { Date(timeIntervalSince1970: 1_784_355_600) }
+        )
+        let route = await router.route(
+            request: current.text,
+            activeConversation: snapshot(turns: [prior, assistant, current]),
+            tools: tools()
+        )
+        let query = route.output.actions.first(where: { $0.tool == "web_search" })?.query.lowercased() ?? ""
+        XCTAssertTrue(query.contains("conrad"), query)
+        XCTAssertTrue(query.contains("challenge"), query)
+        XCTAssertTrue(query.contains("2026"), query)
+        XCTAssertFalse(query.contains("san francisco"), query)
+        XCTAssertGreaterThanOrEqual(query.split(separator: " ").count, 5)
+    }
+
     func testMultiSourcePromptRunsMemoryAndWebInParallelShape() async {
         let router = makeRouter()
         let route = await router.route(
@@ -162,7 +189,8 @@ final class NexFunctionGemmaTests: XCTestCase {
             now: { Date(timeIntervalSince1970: 1_784_355_600) }
         )
         let route = await router.route(request: "Explain recursion.", activeConversation: snapshot(), tools: tools())
-        XCTAssertEqual(route.output, .neutral)
+        XCTAssertTrue(route.output.actions.isEmpty)
+        XCTAssertEqual(route.output.status, "Thinking through Explain recursion…")
         XCTAssertEqual(route.metrics.runtime, .semanticFallback)
         XCTAssertTrue(route.metrics.invalidModelOutput)
     }
@@ -270,6 +298,22 @@ final class NexFunctionGemmaTests: XCTestCase {
             XCTAssertEqual(route.output.memoryWrite?.operation, expectedWrite, prompt)
             XCTAssertTrue(route.output.actions.allSatisfy { $0.query.split(separator: " ").count >= 3 }, prompt)
         }
+        let staleConversation = snapshot(turns: [
+            .init(role: .user, text: "What is the weather in San Francisco tomorrow?"),
+            .init(role: .assistant, text: "It should be mild."),
+            .init(role: .user, text: "What is the Conrad Challenge deadline this year?")
+        ])
+        let conrad = await router.route(
+            request: "What is the Conrad Challenge deadline this year?",
+            activeConversation: staleConversation,
+            tools: tools()
+        )
+        let conradQuery = conrad.output.actions.first(where: { $0.tool == "web_search" })?.query.lowercased() ?? ""
+        print("LIVE FUNCTIONGEMMA CONRAD QUERY: \(conradQuery)")
+        XCTAssertTrue(conradQuery.contains("conrad"), conradQuery)
+        XCTAssertTrue(conradQuery.contains("challenge"), conradQuery)
+        XCTAssertTrue(conradQuery.contains("2026"), conradQuery)
+        XCTAssertFalse(conradQuery.contains("san francisco"), conradQuery)
         await router.shutdown()
     }
 
@@ -454,6 +498,13 @@ private actor OneWordFunctionGemmaRuntime: NexFunctionGemmaGenerating {
     func warmUp() async {}
     func generateCalls(prompt: String, declarations: String, maximumTokens: Int) async throws -> [NexFunctionGemmaRuntime.GeneratedCall] {
         [.init(name: "web_search", arguments: ["query": "you"])]
+    }
+}
+
+private actor StaleQueryFunctionGemmaRuntime: NexFunctionGemmaGenerating {
+    func warmUp() async {}
+    func generateCalls(prompt: String, declarations: String, maximumTokens: Int) async throws -> [NexFunctionGemmaRuntime.GeneratedCall] {
+        [.init(name: "web_search", arguments: ["query": "San Francisco weather forecast tomorrow latest"])]
     }
 }
 

@@ -166,6 +166,10 @@ struct NexToolLifecycleEvent: Codable, Equatable, Identifiable, Sendable {
     let progress: Double?
     let errorCode: String?
     let occurredAt: Date
+    /// The validated inputs that were actually handed to the tool.  Keeping
+    /// these on the lifecycle event lets the UI show the exact action taken
+    /// without reconstructing it from result snippets or model text.
+    let arguments: [String: NexJSONValue]
     let result: NexJSONValue?
 
     init(
@@ -175,7 +179,8 @@ struct NexToolLifecycleEvent: Codable, Equatable, Identifiable, Sendable {
         message: String,
         progress: Double?,
         errorCode: String?,
-        occurredAt: Date
+        occurredAt: Date,
+        arguments: [String: NexJSONValue] = [:]
     ) {
         self.init(
             executionID: executionID,
@@ -185,6 +190,7 @@ struct NexToolLifecycleEvent: Codable, Equatable, Identifiable, Sendable {
             progress: progress,
             errorCode: errorCode,
             occurredAt: occurredAt,
+            arguments: arguments,
             result: nil
         )
     }
@@ -197,7 +203,8 @@ struct NexToolLifecycleEvent: Codable, Equatable, Identifiable, Sendable {
         progress: Double?,
         errorCode: String?,
         occurredAt: Date,
-        result: NexJSONValue?
+        arguments: [String: NexJSONValue] = [:],
+        result: NexJSONValue? = nil
     ) {
         self.executionID = executionID
         self.toolName = toolName
@@ -206,6 +213,7 @@ struct NexToolLifecycleEvent: Codable, Equatable, Identifiable, Sendable {
         self.progress = progress
         self.errorCode = errorCode
         self.occurredAt = occurredAt
+        self.arguments = arguments
         self.result = result
     }
 }
@@ -356,7 +364,8 @@ actor NexToolRegistry {
                 message: tool.statusLabel,
                 progress: nil,
                 errorCode: nil,
-                occurredAt: Date()
+                occurredAt: Date(),
+                arguments: arguments
             ))
         }
         let eventBus = events
@@ -370,7 +379,8 @@ actor NexToolRegistry {
                 message: message,
                 progress: progress,
                 errorCode: nil,
-                occurredAt: Date()
+                occurredAt: Date(),
+                arguments: arguments
             ))
         }
         do {
@@ -384,6 +394,7 @@ actor NexToolRegistry {
                     progress: 1,
                     errorCode: nil,
                     occurredAt: Date(),
+                    arguments: arguments,
                     result: result
                 ))
             }
@@ -398,7 +409,8 @@ actor NexToolRegistry {
                     message: error.localizedDescription,
                     progress: nil,
                     errorCode: toolError?.code ?? "tool_execution_failed",
-                    occurredAt: Date()
+                    occurredAt: Date(),
+                    arguments: arguments
                 ))
             }
             throw error
