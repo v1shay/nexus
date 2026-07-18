@@ -1136,7 +1136,10 @@ actor NexFunctionGemmaRouter: NexIntentRouting {
         guard let raw = calls.lazy.compactMap({ $0.arguments["status"] }).first else { return nil }
         let normalized = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         let words = normalized.split(whereSeparator: \.isWhitespace)
-        guard (2...14).contains(words.count) else { return nil }
+        // A generated status may need more than a short UI-label length for a
+        // genuinely specific task. The overlay handles wrapping; do not throw
+        // away a valid status merely because it exceeds an arbitrary word cap.
+        guard words.count >= 2 else { return nil }
         let rejected = ["ongoing", "working", "processing", "done", "completed", "natural", "status"]
         guard !rejected.contains(where: normalized.lowercased().contains) else { return nil }
         return sanitizedStatus(normalized)
