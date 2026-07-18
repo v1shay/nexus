@@ -19,12 +19,16 @@ protocol NexusHostModelServing: Sendable {
         maximumTokens: Int?,
         onDelta: @escaping @Sendable (String, String) async -> Void
     ) async throws -> String
+    func generateRaw(model: String, prompt: String, maximumTokens: Int) async throws -> String
     func runtimeInventory() async throws -> NexusRuntimeInventoryPayload
     func provisionDefaultRuntime(preferred: NexusRuntimeKind?, userConfirmed: Bool) async throws -> NexusRuntimeInventoryPayload
     func delete(runtime: NexusRuntimeKind, model: String) async throws
 }
 
 extension NexusHostModelServing {
+    func generateRaw(model: String, prompt: String, maximumTokens: Int) async throws -> String {
+        throw NexusConnectError.requestFailed("This host version does not support intent routing")
+    }
     func runtimeInventory() async throws -> NexusRuntimeInventoryPayload {
         .init(runtimes: [], defaultRuntime: nil)
     }
@@ -118,6 +122,15 @@ final class NexusLocalModelService: NexusHostModelServing, @unchecked Sendable {
                 onDelta: onDelta
             )
         }
+    }
+
+    func generateRaw(model: String, prompt: String, maximumTokens: Int) async throws -> String {
+        try await ollama.generateRaw(
+            model: model,
+            prompt: prompt,
+            maximumTokens: maximumTokens,
+            keepAlive: "30m"
+        )
     }
 
     static func awaitProgress(
@@ -261,6 +274,25 @@ actor NexusHostRuntimeManager: NexusHostModelServing {
                 onDelta: onDelta
             )
         }
+    }
+
+    func generateRaw(model: String, prompt: String, maximumTokens: Int) async throws -> String {
+        guard ollama.executableURL() != nil else {
+            throw NexusConnectError.requestFailed("Ollama is unavailable on this host")
+        }
+        let installed = try await ollama.installedModelNames()
+        let normalized = model.lowercased().replacingOccurrences(of: ":latest", with: "")
+        if !installed.contains(where: {
+            $0.lowercased().replacingOccurrences(of: ":latest", with: "") == normalized
+        }) {
+            try await ollama.pull(model: model) { _ in }
+        }
+        return try await ollama.generateRaw(
+            model: model,
+            prompt: prompt,
+            maximumTokens: maximumTokens,
+            keepAlive: "30m"
+        )
     }
 }
 
@@ -476,6 +508,14 @@ actor NexusHostServiceExecutor {
             await emitter.emit(kind: .result, payload: await health())
         case .inference:
             try await inference(try request.decodePayload(), emitter: emitter)
+        case .intentRoute:
+            let payload: NexusIntentRoutePayload = try request.decodePayload()
+            let response = try await models.generateRaw(
+                model: payload.model,
+                prompt: payload.prompt,
+                maximumTokens: payload.maximumTokens
+            )
+            await emitter.emit(kind: .result, payload: NexusIntentRouteResultPayload(response: response))
         case .agent:
             try await agent(try request.decodePayload(), emitter: emitter)
         case .modelList:

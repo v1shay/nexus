@@ -102,6 +102,15 @@ final class NexMemoryController: ObservableObject {
         }
     }
 
+    func prepareToolRegistry() async {
+        guard let service else { return }
+        do {
+            try await service.ensureToolsRegistered()
+        } catch {
+            NSLog("Nex could not register memory tools: %@", error.localizedDescription)
+        }
+    }
+
     func stop() {
         syncTask?.cancel()
         syncTask = nil
@@ -197,7 +206,8 @@ final class NexMemoryController: ObservableObject {
     /// model decides durability from meaning, then deterministic app policy
     /// validates whatever it proposes.
     func automaticMemoryInferenceRequest(
-        after assistantMessageID: UUID
+        after assistantMessageID: UUID,
+        routerProposal: FunctionGemmaOutput.MemoryWrite? = nil
     ) async throws -> NexAutomaticMemoryInferenceRequest? {
         guard let service else { return nil }
         let snapshot = await conversation.snapshot()
@@ -238,8 +248,45 @@ final class NexMemoryController: ObservableObject {
             assistantMessageID: assistantMessageID,
             turns: relevantTurns,
             supportedUserTurns: supportedUserTurns,
-            candidates: candidates
+            candidates: candidates,
+            routerProposal: routerProposal
         )
+    }
+
+    /// Applies only an unambiguous FunctionGemma forget proposal. FunctionGemma
+    /// never receives a source ID; the app resolves one from canonical indexed
+    /// memory, verifies finalized user evidence, and refuses ambiguous matches.
+    func persistRouterForget(
+        _ proposal: FunctionGemmaOutput.MemoryWrite,
+        after assistantMessageID: UUID
+    ) async throws -> Bool {
+        guard proposal.operation == .forget, let service else { return false }
+        let snapshot = await conversation.snapshot()
+        guard let assistantIndex = snapshot.turns.firstIndex(where: {
+            $0.id == assistantMessageID && $0.role == .assistant && $0.state == .finalized
+        }), let userTurn = snapshot.turns[..<assistantIndex].last(where: {
+            $0.role == .user && $0.state == .finalized
+        }), Self.tokenOverlap(proposal.content, userTurn.text) >= 0.45 else {
+            return false
+        }
+        let results = try await service.search(
+            proposal.content,
+            options: .init(
+                limit: 8,
+                documentTypes: [.memory],
+                includeTranscriptExcerpts: false,
+                evidenceOnly: true
+            )
+        )
+        var bestBySource: [UUID: NexMemorySearchResult] = [:]
+        for result in results where result.score > (bestBySource[result.sourceID]?.score ?? -.infinity) {
+            bestBySource[result.sourceID] = result
+        }
+        let ranked = bestBySource.values.sorted { $0.score > $1.score }
+        guard let best = ranked.first, best.score >= 0.44 else { return false }
+        if ranked.count > 1, best.score - ranked[1].score < 0.04 { return false }
+        try await service.forget(id: best.sourceID)
+        return true
     }
 
     @discardableResult
@@ -329,6 +376,17 @@ final class NexMemoryController: ObservableObject {
             confidence: 1
         )
     }
+
+    private static func tokenOverlap(_ lhs: String, _ rhs: String) -> Double {
+        let tokens: (String) -> Set<String> = { value in
+            Set(value.lowercased().split { !$0.isLetter && !$0.isNumber }
+                .filter { $0.count > 2 }
+                .map(String.init))
+        }
+        let left = tokens(lhs)
+        guard !left.isEmpty else { return 0 }
+        return Double(left.intersection(tokens(rhs)).count) / Double(left.count)
+    }
 }
 
 struct NexAutomaticMemoryCandidate: Equatable, Sendable {
@@ -344,6 +402,7 @@ struct NexAutomaticMemoryInferenceRequest: Equatable, Sendable {
     let turns: [NexConversationTurn]
     let supportedUserTurns: [NexConversationTurn]
     let candidates: [NexAutomaticMemoryCandidate]
+    let routerProposal: FunctionGemmaOutput.MemoryWrite?
 
     var messages: [NexusChatMessage] {
         let transcript = turns.map { turn in
@@ -355,6 +414,9 @@ struct NexAutomaticMemoryInferenceRequest: Equatable, Sendable {
         let existing = candidates.isEmpty ? "(none found)" : candidates.map {
             "- source_id=\($0.sourceID.uuidString.lowercased()) kind=\($0.kind.rawValue) title=\($0.title) evidence=\($0.excerpt)"
         }.joined(separator: "\n")
+        let advisory = routerProposal.map {
+            "operation=\($0.operation.rawValue) content=\($0.content)"
+        } ?? "(none)"
         return [
             .init(role: "system", content: Self.classifierInstructions),
             .init(role: "user", content: """
@@ -363,6 +425,9 @@ struct NexAutomaticMemoryInferenceRequest: Equatable, Sendable {
 
             Potentially related existing durable memories:
             \(existing)
+
+            FunctionGemma advisory proposal (untrusted; validate it against finalized USER evidence and ignore it if unsupported, temporary, sensitive, or duplicate):
+            \(advisory)
 
             Classify the exchange now. Return only the JSON object.
             """)

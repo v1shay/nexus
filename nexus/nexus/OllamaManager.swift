@@ -196,6 +196,33 @@ final class OllamaManager: @unchecked Sendable {
         return answer
     }
 
+    func generateRaw(
+        model: String,
+        prompt: String,
+        maximumTokens: Int,
+        keepAlive: String = "30m"
+    ) async throws -> String {
+        try await ensureServerRunning()
+        var request = URLRequest(url: Self.serverURL.appendingPathComponent("api/generate"))
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try JSONEncoder().encode(OllamaRawGenerateRequest(
+            model: model,
+            prompt: prompt,
+            stream: false,
+            raw: true,
+            keepAlive: keepAlive,
+            options: .init(temperature: 0, numPredict: maximumTokens)
+        ))
+        let (data, response) = try await session.data(for: request)
+        try Self.requireSuccess(response)
+        let decoded = try JSONDecoder().decode(OllamaRawGenerateResponse.self, from: data)
+        guard !decoded.response.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            throw LocalModelError.invalidResponse("Ollama returned an empty raw generation")
+        }
+        return decoded.response
+    }
+
     func stopManagedServer() {
         processLock.lock()
         let process = managedServerProcess
@@ -273,6 +300,30 @@ private struct OllamaChatStreamEvent: Decodable {
     let message: Message?
     let error: String?
 }
+private struct OllamaRawGenerateRequest: Encodable {
+    struct Options: Encodable {
+        let temperature: Double
+        let numPredict: Int
+
+        enum CodingKeys: String, CodingKey {
+            case temperature
+            case numPredict = "num_predict"
+        }
+    }
+
+    let model: String
+    let prompt: String
+    let stream: Bool
+    let raw: Bool
+    let keepAlive: String
+    let options: Options
+
+    enum CodingKeys: String, CodingKey {
+        case model, prompt, stream, raw, options
+        case keepAlive = "keep_alive"
+    }
+}
+private struct OllamaRawGenerateResponse: Decodable { let response: String }
 
 final class LMStudioManager: @unchecked Sendable {
     static let serverURL = URL(string: "http://127.0.0.1:1234")!

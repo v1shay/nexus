@@ -4,6 +4,32 @@ import XCTest
 @testable import nexus
 
 extension NexusGeometryTests {
+    func testHostExecutesRawFunctionGemmaRouteWithoutPrimarySystemPrompt() async throws {
+        let models = NexusHostModelStub()
+        let host = NexusHostServiceExecutor(nodeID: UUID(), models: models)
+        let rawPrompt = "<bos><start_of_turn>developer>native function declarations"
+        let request = try NexusWorkloadRequest(
+            kind: .intentRoute,
+            priority: .interactive,
+            retrySafety: .idempotent,
+            payload: NexusIntentRoutePayload(
+                model: "functiongemma:latest",
+                prompt: rawPrompt,
+                maximumTokens: 96
+            )
+        )
+        let events = NexusEventCollector()
+
+        await host.execute(request) { await events.append($0) }
+
+        let collectedResult = await events.first(kind: .result)
+        let resultEvent = try XCTUnwrap(collectedResult)
+        let result = try resultEvent.decodePayload(NexusIntentRouteResultPayload.self)
+        XCTAssertEqual(result.response, "call:web_search{query:<escape>current Swift release<escape>}")
+        let receivedPrompt = await models.lastRawPrompt()
+        XCTAssertEqual(receivedPrompt, rawPrompt)
+    }
+
     func testHostStreamsInferenceAndCompletesWithTypedEvents() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
@@ -236,6 +262,7 @@ private actor NexusHostModelStub: NexusHostModelServing {
     private var installed = [NexusModelDescriptor(runtime: .ollama, identifier: "large:120b")]
     private var pulledModel: String?
     private var runtimes: Set<NexusRuntimeAvailability> = []
+    private var rawPrompt: String?
 
     func installedModels(runtime: NexusRuntimeKind?) async throws -> [NexusModelDescriptor] {
         installed.filter { runtime == nil || $0.runtime == runtime }
@@ -266,6 +293,11 @@ private actor NexusHostModelStub: NexusHostModelServing {
         return "Hello from Studio"
     }
 
+    func generateRaw(model: String, prompt: String, maximumTokens: Int) async throws -> String {
+        rawPrompt = prompt
+        return "call:web_search{query:<escape>current Swift release<escape>}"
+    }
+
     func runtimeInventory() async throws -> NexusRuntimeInventoryPayload {
         .init(runtimes: runtimes, defaultRuntime: runtimes.first?.kind)
     }
@@ -286,4 +318,5 @@ private actor NexusHostModelStub: NexusHostModelServing {
     }
 
     func lastPulledModel() -> String? { pulledModel }
+    func lastRawPrompt() -> String? { rawPrompt }
 }

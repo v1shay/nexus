@@ -3,6 +3,14 @@ import WebKit
 @testable import nexus
 
 final class NexusGeometryTests: XCTestCase {
+    func testRequestedModelAndConnectCameraSizing() {
+        XCTAssertEqual(Nexus3DLayout.computerCameraDistance, 2.55)
+        XCTAssertEqual(Nexus3DLayout.globeCameraDistance, 2.70)
+        XCTAssertEqual(Nexus3DLayout.connectDeviceCameraDistance, 4.15)
+        XCTAssertLessThan(Nexus3DLayout.computerCameraDistance, 2.72)
+        XCTAssertLessThan(Nexus3DLayout.globeCameraDistance, 2.88)
+        XCTAssertGreaterThan(Nexus3DLayout.connectDeviceCameraDistance, 3.70)
+    }
     func testOneWordFollowUpKeepsRecentVerbatimConversationContext() async {
         let session = NexConversationSession()
         await session.appendUser("Use a neural network for the image classifier")
@@ -360,20 +368,6 @@ final class NexusGeometryTests: XCTestCase {
         XCTAssertEqual(state.presentation, .overlay)
         state.beginThinking()
         XCTAssertEqual(state.presentation, .thinking)
-    }
-
-    func testAcknowledgementMatchesThePromptIntent() {
-        XCTAssertEqual(PromptAcknowledgement.text(for: "What is photosynthesis?", choosing: 0), "Looking into it…")
-        XCTAssertEqual(PromptAcknowledgement.text(for: "Find the missing document", choosing: 0), "Tracking it down…")
-        XCTAssertEqual(PromptAcknowledgement.text(for: "Generate a logo", choosing: 0), "Building it out…")
-        XCTAssertEqual(PromptAcknowledgement.text(for: "Explain photosynthesis", choosing: 0), "Breaking it apart…")
-        XCTAssertEqual(PromptAcknowledgement.text(for: "Solve this equation", choosing: 0), "Running the numbers…")
-        XCTAssertEqual(PromptAcknowledgement.text(for: "Debug this Swift code", choosing: 0), "Tracing the issue…")
-        XCTAssertEqual(Set(PromptAcknowledgement.candidates(for: "Find this")).count, 8)
-        XCTAssertNotEqual(
-            PromptAcknowledgement.text(for: "Find this", avoiding: "Tracking it down…", choosing: 0),
-            "Tracking it down…"
-        )
     }
 
     func testLegacyDownloadedOllamaModelBecomesRestorableDefault() {

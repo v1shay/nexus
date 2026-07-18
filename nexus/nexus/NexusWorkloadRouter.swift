@@ -205,6 +205,8 @@ actor NexusMultiNodeWorkloadRouter: NexusWorkloadExecuting {
         switch request.kind {
         case .inference:
             descriptor = try? request.decodePayload(NexusInferencePayload.self).modelDescriptor
+        case .intentRoute:
+            descriptor = .init(runtime: .ollama, identifier: "functiongemma:latest")
         case .modelPull:
             descriptor = try? request.decodePayload(NexusModelPullPayload.self).modelDescriptor
         default:

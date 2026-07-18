@@ -2,6 +2,12 @@ import AppKit
 import SceneKit
 import SwiftUI
 
+enum Nexus3DLayout {
+    static let computerCameraDistance: Float = 2.55
+    static let globeCameraDistance: Float = 2.70
+    static let connectDeviceCameraDistance: Float = 4.15
+}
+
 struct ModelAggregatorView: View {
     @ObservedObject var viewModel: ModelDownloadViewModel
     @ObservedObject var connect: NexusConnectController
@@ -113,7 +119,9 @@ private struct ModelSceneCard: View {
     var body: some View {
         SpinningUSDZView(
             assetName: asset,
-            cameraDistance: asset == "Computer" ? 2.72 : 2.88
+            cameraDistance: asset == "Computer"
+                ? Nexus3DLayout.computerCameraDistance
+                : Nexus3DLayout.globeCameraDistance
         )
             .background(
                 RadialGradient(
@@ -312,7 +320,10 @@ private struct DeviceCard: View {
 
     var body: some View {
         VStack(spacing: 8) {
-            SpinningUSDZView(assetName: device.asset, cameraDistance: 3.7)
+            SpinningUSDZView(
+                assetName: device.asset,
+                cameraDistance: Nexus3DLayout.connectDeviceCameraDistance
+            )
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             Text(device.name).font(.headline).lineLimit(1)
             HStack(spacing: 6) {

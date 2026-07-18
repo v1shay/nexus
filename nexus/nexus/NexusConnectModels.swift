@@ -77,6 +77,7 @@ enum NexusCapability: String, CaseIterable, Codable, Hashable, Sendable {
 enum NexusWorkloadKind: String, Codable, Sendable {
     case health
     case inference
+    case intentRoute
     case agent
     case modelList
     case modelPull
@@ -97,7 +98,7 @@ enum NexusWorkloadKind: String, Codable, Sendable {
     var capability: NexusCapability {
         switch self {
         case .health: .health
-        case .inference: .inference
+        case .inference, .intentRoute: .inference
         case .agent: .agent
         case .modelList: .modelList
         case .modelPull: .modelPull
@@ -264,6 +265,16 @@ struct NexusInferencePayload: Codable, Equatable, Sendable {
     let messages: [NexusChatMessage]
     let temperature: Double?
     let maximumTokens: Int?
+}
+
+struct NexusIntentRoutePayload: Codable, Equatable, Sendable {
+    let model: String
+    let prompt: String
+    let maximumTokens: Int
+}
+
+struct NexusIntentRouteResultPayload: Codable, Equatable, Sendable {
+    let response: String
 }
 
 struct NexusAgentPayload: Codable, Equatable, Sendable {

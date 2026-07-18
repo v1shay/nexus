@@ -158,18 +158,25 @@ final class NotchController: ObservableObject {
     private let conversationSession: NexConversationSession
     let memory: NexMemoryController
     private lazy var webSearch = NexWebSearchController(registry: memory.registry)
+    private let intentRouter: any NexIntentRouting
+    private lazy var toolOrchestrator = NexToolOrchestrator(registry: memory.registry)
     private var memoryObservation: AnyCancellable?
     private var toolEventTask: Task<Void, Never>?
     private var responseIsStreaming = false
-    private var previousThinkingPhrase: String?
     private var hoverSession = NotchHoverSession()
     private var suppressAutomaticResponseReveal = false
 
-    init(connectController: NexusConnectController? = nil) {
+    init(
+        connectController: NexusConnectController? = nil,
+        intentRouter: (any NexIntentRouting)? = nil
+    ) {
         let resolvedConnectController = connectController ?? .shared
         let conversationSession = NexConversationSession()
         self.connectController = resolvedConnectController
         self.conversationSession = conversationSession
+        self.intentRouter = intentRouter ?? NexFunctionGemmaRouter(
+            remoteRuntime: NexRemoteFunctionGemmaRuntime(connect: resolvedConnectController)
+        )
         modelDownloadViewModel = ModelDownloadViewModel(connect: resolvedConnectController)
         memory = NexMemoryController(conversation: conversationSession)
         memoryObservation = memory.objectWillChange.sink { [weak self] _ in
@@ -207,6 +214,12 @@ final class NotchController: ObservableObject {
         if startServices {
             startToolEventListener()
             memory.start()
+            Task { [weak self] in
+                guard let self else { return }
+                await memory.prepareToolRegistry()
+                try? await webSearch.registerIfNeeded()
+                await intentRouter.warmUp()
+            }
             installCommandHoldMonitor()
             installPointerMonitor()
         }
@@ -288,9 +301,8 @@ final class NotchController: ObservableObject {
         speechTranscriber.stop()
         interaction.finishDictation()
         let finalizedPrompt = transcript.trimmingCharacters(in: .whitespacesAndNewlines)
-        if !finalizedPrompt.isEmpty, let turn = await conversationSession.appendUser(finalizedPrompt) {
+        if !finalizedPrompt.isEmpty, await conversationSession.appendUser(finalizedPrompt) != nil {
             await memory.conversationDidChange()
-            memory.storeExplicitRememberRequest(prompt: finalizedPrompt, evidenceMessageID: turn.id)
         }
         automaticRevealIsWaitingForNotchVisit = true
         if let screen {
@@ -309,100 +321,70 @@ final class NotchController: ObservableObject {
         responseTask = Task { [weak self] in
             guard let self else { return }
             guard !Task.isCancelled, responseGeneration == generation else { return }
-            if let identityAnswer = NexAssistantIdentityIntent.answer(for: prompt) {
-                responseSpeaker.beginStreaming()
-                responseIsStreaming = true
-                _ = responseSpeechCursor.consume(delta: identityAnswer, accumulated: identityAnswer)
-                interaction.receiveAnswer(identityAnswer)
-                let assistantTurn = await conversationSession.appendAssistant(identityAnswer)
-                await memory.conversationDidChange()
-                responseSpeaker.append(identityAnswer)
-                responseSpeaker.finishStreaming()
-                if let assistantTurn { scheduleAutomaticMemoryInference(after: assistantTurn.id) }
-                responseIsStreaming = false
-                automaticRevealIsWaitingForNotchVisit = true
-                if let screen { resize(to: expandedSize(for: screen), animated: true) }
-                return
-            }
-            let acknowledgement = PromptAcknowledgement.text(for: prompt, avoiding: previousThinkingPhrase)
-            previousThinkingPhrase = acknowledgement
-            async let plannedWebSearch = planWebSearch(for: prompt)
             responseSpeaker.beginStreaming()
             responseIsStreaming = true
-            interaction.acknowledge(acknowledgement)
-            if let screen { resize(to: expandedSize(for: screen), animated: true) }
-            await responseSpeaker.speakImmediatelyAndWait(acknowledgement)
-            guard !Task.isCancelled, responseGeneration == generation else { return }
-            interaction.beginThinking()
-            if let screen { resize(to: listeningSize(for: screen), animated: true) }
             do {
-                let webPlan = await plannedWebSearch
-                let webRetrieval = await retrieveWebContext(plan: webPlan, generation: generation)
-                guard !Task.isCancelled, responseGeneration == generation else { return }
-                responseSpeaker.setWebEvidenceActive(webRetrieval.response != nil)
-                if let compound = NexCompoundMemoryQuery.split(prompt) {
-                    // Answer the independent portion first, then visibly check
-                    // memory and stream the personal-history portion as a
-                    // second segment. This avoids one long silent retrieval.
-                    interaction.beginThinking()
-                    if let screen { resize(to: listeningSize(for: screen), animated: true) }
-                    var immediateMessages = await conversationSession.contextMessages(
-                        webContext: webRetrieval.context
-                    )
-                    immediateMessages.append(.init(
-                        role: "system",
-                        content: "For this first response segment, answer only this independent question: \(compound.immediateQuestion). Do not answer the memory-dependent part yet."
-                    ))
-                    let immediateAnswer = try await streamModelResponse(
-                        messages: immediateMessages,
-                        generation: generation
-                    )
-                    let immediateDelta = responseSpeechCursor.consume(delta: "", accumulated: immediateAnswer)
-                    if !immediateDelta.isEmpty { responseSpeaker.append(immediateDelta) }
-                    let immediateRenderedAnswer = responseSpeechCursor.text
-                    try? await Task.sleep(for: .milliseconds(180))
+                let activeConversation = await conversationSession.snapshot()
+                let baseMessages = await conversationSession.contextMessages()
+                let speculativeBuffer = NexSpeculativePrimaryBuffer()
+                let speculativeTask = Task {
+                    try await self.modelDownloadViewModel.response(messages: baseMessages) { delta, accumulated in
+                        await speculativeBuffer.append(delta: delta, accumulated: accumulated)
+                    }
+                }
 
-                    let retrievedContext = await retrieveMemoryContext(
-                        prompt: compound.memoryQuestion,
-                        generation: generation
-                    )
-                    guard !Task.isCancelled, responseGeneration == generation else { return }
+                await memory.prepareToolRegistry()
+                try? await webSearch.registerIfNeeded()
+                let definitions = await memory.registry.definitions()
+                let route = await intentRouter.route(
+                    request: prompt,
+                    activeConversation: activeConversation,
+                    tools: definitions
+                )
+                guard !Task.isCancelled, responseGeneration == generation else { return }
+                NSLog(
+                    "FunctionGemma route %@ in %.0f ms: %@",
+                    route.metrics.runtime.rawValue,
+                    route.metrics.latencyMilliseconds,
+                    route.output.actions.map { "\($0.tool)=\($0.query)" }.joined(separator: " | ")
+                )
+                interaction.acknowledge(route.output.status)
+                if let screen { resize(to: expandedSize(for: screen), animated: true) }
+                responseSpeaker.speakImmediately(route.output.status)
+
+                let toolResult: NexToolOrchestrationResult?
+                if route.output.actions.isEmpty {
+                    try? await Task.sleep(for: .milliseconds(120))
+                    await speculativeBuffer.activate { delta, accumulated in
+                        await self.receiveResponseDelta(delta, accumulated: accumulated, generation: generation)
+                    }
+                    let answer = try await speculativeTask.value
+                    let finalDelta = responseSpeechCursor.consume(delta: "", accumulated: answer)
+                    if !finalDelta.isEmpty { responseSpeaker.append(finalDelta) }
+                    toolResult = nil
+                } else {
+                    await speculativeBuffer.discard()
+                    speculativeTask.cancel()
                     interaction.beginThinking()
                     if let screen { resize(to: listeningSize(for: screen), animated: true) }
-                    responseSpeechCursor.beginSegment()
-                    var memoryMessages = await conversationSession.contextMessages(
-                        retrievedContext: retrievedContext,
-                        memoryLookupPerformed: true,
-                        webContext: webRetrieval.context
-                    )
-                    memoryMessages.append(.init(role: "assistant", content: immediateRenderedAnswer))
-                    memoryMessages.append(.init(
-                        role: "system",
-                        content: "Continue without repeating the first segment. Answer only this memory-dependent question using stored evidence when available: \(compound.memoryQuestion). If no evidence was retrieved, say that clearly."
-                    ))
-                    let memoryAnswer = try await streamModelResponse(messages: memoryMessages, generation: generation)
-                    let finalDelta = responseSpeechCursor.consume(delta: "", accumulated: memoryAnswer)
-                    if !finalDelta.isEmpty { responseSpeaker.append(finalDelta) }
-                } else {
-                    let memoryLookupPerformed = NexMemoryRetrievalIntent.shouldSearch(prompt: prompt)
-                    let retrievedContext = await retrieveMemoryContext(prompt: prompt, generation: generation)
+                    let result = await toolOrchestrator.execute(route.output.actions)
                     guard !Task.isCancelled, responseGeneration == generation else { return }
+                    responseSpeaker.setWebEvidenceActive(!result.webResponses.isEmpty)
                     interaction.beginThinking()
                     if let screen { resize(to: listeningSize(for: screen), animated: true) }
                     let messages = await conversationSession.contextMessages(
-                        retrievedContext: retrievedContext,
-                        memoryLookupPerformed: memoryLookupPerformed,
-                        webContext: webRetrieval.context
+                        memoryLookupPerformed: route.output.actions.contains { $0.tool == "memory_search" },
+                        webContext: result.context
                     )
                     let answer = try await streamModelResponse(messages: messages, generation: generation)
                     let finalSpeechDelta = responseSpeechCursor.consume(delta: "", accumulated: answer)
                     if !finalSpeechDelta.isEmpty { responseSpeaker.append(finalSpeechDelta) }
+                    toolResult = result
                 }
                 guard !Task.isCancelled, responseGeneration == generation else { return }
                 let reveal = !suppressAutomaticResponseReveal
-                let completedAnswer = webRetrieval.response?.appendingSourceLinks(
-                    to: responseSpeechCursor.text
-                ) ?? responseSpeechCursor.text
+                let completedAnswer = toolResult?.appendingWebSources(to: responseSpeechCursor.text)
+                    ?? responseSpeechCursor.text
                 interaction.receiveAnswer(completedAnswer, reveal: reveal)
                 let assistantTurn = await conversationSession.appendAssistant(completedAnswer)
                 await memory.conversationDidChange()
@@ -410,7 +392,12 @@ final class NotchController: ObservableObject {
                 automaticRevealIsWaitingForNotchVisit = reveal
                 if reveal, let screen { resize(to: expandedSize(for: screen), animated: true) }
                 responseSpeaker.finishStreaming()
-                if let assistantTurn { scheduleAutomaticMemoryInference(after: assistantTurn.id) }
+                if let assistantTurn {
+                    scheduleAutomaticMemoryInference(
+                        after: assistantTurn.id,
+                        routerProposal: route.output.memoryWrite
+                    )
+                }
             } catch {
                 guard !Task.isCancelled, responseGeneration == generation else { return }
                 responseSpeaker.stop()
@@ -426,79 +413,25 @@ final class NotchController: ObservableObject {
         }
     }
 
-    private func planWebSearch(for prompt: String) async -> NexWebSearchPlan {
-        do {
-            let raw = try await modelDownloadViewModel.response(
-                messages: NexWebSearchPlanner.planningMessages(for: prompt),
-                temperature: 0,
-                maximumTokens: 220,
-                onDelta: { _, _ in }
-            )
-            let plan = NexWebSearchPlanner.parse(raw, originalPrompt: prompt)
-            guard plan.queryOrigin == .fallback || plan.queryOrigin == .rejected else { return plan }
-
-            let repairedRaw = try await modelDownloadViewModel.response(
-                messages: NexWebSearchPlanner.repairMessages(
-                    for: prompt,
-                    rejectedOutput: raw
-                ),
-                temperature: 0,
-                maximumTokens: 220,
-                onDelta: { _, _ in }
-            )
-            let repairedPlan = NexWebSearchPlanner.parse(
-                repairedRaw,
-                originalPrompt: prompt
-            )
-            if repairedPlan.queryOrigin == .modelExtraction || repairedPlan.queryOrigin == .none {
-                return repairedPlan
-            }
-            return plan.queryOrigin == .fallback
-                ? plan
-                : .init(shouldSearch: false, query: nil)
-        } catch {
-            return .init(
-                shouldSearch: NexWebSearchPlanner.obviousWebNeed(prompt),
-                query: NexWebSearchPlanner.obviousWebNeed(prompt)
-                    ? NexWebSearchPlanner.fallbackQuery(prompt)
-                    : nil,
-                queryOrigin: NexWebSearchPlanner.obviousWebNeed(prompt) ? .fallback : .none
-            )
-        }
-    }
-
-    private struct WebRetrieval {
-        let context: String?
-        let response: NexWebSearchResponse?
-
-        static let none = WebRetrieval(context: nil, response: nil)
-    }
-
-    private func retrieveWebContext(plan: NexWebSearchPlan, generation: UUID) async -> WebRetrieval {
-        guard plan.shouldSearch, let query = plan.query, !query.isEmpty else { return .none }
-        NSLog("Nex web search query: %@", query)
-        do {
-            let response = try await webSearch.search(query: query)
-            return .init(context: response.modelContext(), response: response)
-        } catch is CancellationError {
-            return .none
-        } catch {
-            guard !Task.isCancelled, responseGeneration == generation else { return .none }
-            try? await Task.sleep(for: .milliseconds(500))
-            return .init(
-                context: "Live web search was required for this request but failed: \(error.localizedDescription). Do not present changing facts as verified or fabricate sources; briefly explain that live lookup failed.",
-                response: nil
-            )
-        }
-    }
-
-    private func scheduleAutomaticMemoryInference(after assistantMessageID: UUID) {
+    private func scheduleAutomaticMemoryInference(
+        after assistantMessageID: UUID,
+        routerProposal: FunctionGemmaOutput.MemoryWrite? = nil
+    ) {
         memoryWriterTask?.cancel()
         memoryWriterTask = Task { [weak self] in
             guard let self else { return }
             do {
+                if let routerProposal, routerProposal.operation == .forget {
+                    let forgotten = try await memory.persistRouterForget(
+                        routerProposal,
+                        after: assistantMessageID
+                    )
+                    if forgotten { NSLog("Nex background memory writer applied one validated forget proposal") }
+                    return
+                }
                 guard let request = try await memory.automaticMemoryInferenceRequest(
-                    after: assistantMessageID
+                    after: assistantMessageID,
+                    routerProposal: routerProposal
                 ) else { return }
                 try Task.checkCancellation()
                 let raw = try await modelDownloadViewModel.response(
@@ -519,26 +452,6 @@ final class NotchController: ObservableObject {
                 // response, streaming, TTS, or the next dictation session.
                 NSLog("Nex background memory writer skipped: %@", error.localizedDescription)
             }
-        }
-    }
-
-    private func retrieveMemoryContext(prompt: String, generation: UUID) async -> String? {
-        let startedAt = Date()
-        do {
-            let context = try await memory.retrievalContext(for: prompt)
-            if NexMemoryRetrievalIntent.shouldSearch(prompt: prompt) {
-                let remaining = max(0, 0.72 - Date().timeIntervalSince(startedAt))
-                if remaining > 0 {
-                    try? await Task.sleep(for: .milliseconds(Int(remaining * 1_000)))
-                }
-            }
-            return context
-        } catch {
-            guard !Task.isCancelled, responseGeneration == generation else { return nil }
-            // Preserve the failed indicator long enough to be legible, then
-            // continue honestly without retrieved evidence.
-            try? await Task.sleep(for: .milliseconds(650))
-            return nil
         }
     }
 
@@ -695,6 +608,7 @@ final class NotchController: ObservableObject {
         commandHoldMonitor = nil
         modelDownloadViewModel.shutdown()
         connectController.shutdown()
+        Task { await intentRouter.shutdown() }
     }
 
     func confirmDiscardBeforeQuit() -> Bool {

@@ -68,6 +68,44 @@ extension NexusGeometryTests {
     }
 
     @MainActor
+    func testValidatedRouterForgetResolvesStableIDAndWritesTombstone() async throws {
+        let fixture = try NexMemoryFixture()
+        let session = NexConversationSession()
+        let appendedInitialUser = await session.appendUser("I prefer cloud inference for large models.")
+        let initialUser = try XCTUnwrap(appendedInitialUser)
+        let appendedInitialAssistant = await session.appendAssistant("Understood.")
+        let initialAssistant = try XCTUnwrap(appendedInitialAssistant)
+        let controller = NexMemoryController(
+            conversation: session,
+            vaultURL: fixture.vaultURL,
+            databaseURL: fixture.root.appendingPathComponent("forget.sqlite"),
+            embeddingProvider: NexTestEmbeddingProvider()
+        )
+        let initialRequest = automaticInferenceRequest(user: initialUser, assistant: initialAssistant)
+        let initialJSON = """
+        {"proposals":[{"idempotency_key":"inference-preference","kind":"preference","title":"Inference preference","statement":"The user prefers cloud inference for large models.","summary":"Cloud inference preference","topics":["AI inference"],"projects":[],"entities":[],"evidence":[{"message_id":"\(initialUser.id.uuidString)","quote":"I prefer cloud inference for large models."}],"importance":0.8,"confidence":0.99,"supersedes_source_id":null}]}
+        """
+        let initialStored = try await controller.persistAutomaticMemoryInference(
+            initialJSON,
+            request: initialRequest
+        )
+        XCTAssertEqual(initialStored, 1)
+
+        _ = await session.appendUser("Forget that I wanted cloud inference.")
+        let appendedForgetAssistant = await session.appendAssistant("I’ll remove that saved preference.")
+        let forgetAssistant = try XCTUnwrap(appendedForgetAssistant)
+        let forgotten = try await controller.persistRouterForget(
+            .init(operation: .forget, content: "User wanted cloud inference."),
+            after: forgetAssistant.id
+        )
+
+        XCTAssertTrue(forgotten)
+        let scan = try await fixture.vault.scan()
+        XCTAssertTrue(scan.documents.isEmpty)
+        XCTAssertEqual(scan.tombstonedIDs.count, 1)
+    }
+
+    @MainActor
     func testAutomaticMemoryCorrectionUpdatesOneObsidianFileInsteadOfDuplicating() async throws {
         let fixture = try NexMemoryFixture()
         let session = NexConversationSession()
@@ -105,7 +143,8 @@ extension NexusGeometryTests {
                 kind: .project,
                 title: original.title,
                 excerpt: original.summary
-            )]
+            )],
+            routerProposal: nil
         )
         let correctedJSON = """
         {"proposals":[{"idempotency_key":"research-app-name","kind":"project","title":"Glasswork","statement":"The user's research app is called Glasswork, formerly Driftglass.","summary":"Current research app name","topics":[],"projects":["Glasswork"],"entities":["Glasswork","Driftglass"],"evidence":[{"message_id":"\(correctedUser.id.uuidString)","quote":"I renamed my research app from Driftglass to Glasswork."}],"importance":0.9,"confidence":0.99,"supersedes_source_id":"\(original.id.uuidString)"}]}
@@ -129,7 +168,8 @@ extension NexusGeometryTests {
             assistantMessageID: assistant.id,
             turns: [user, assistant],
             supportedUserTurns: [user],
-            candidates: []
+            candidates: [],
+            routerProposal: nil
         )
     }
 
