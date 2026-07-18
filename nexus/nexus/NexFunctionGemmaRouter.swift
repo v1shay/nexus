@@ -281,9 +281,7 @@ actor NexFunctionGemmaRuntime: NexFunctionGemmaGenerating {
             let bodyRange = balancedBodyRange(in: source, startingAt: bodyStart)
                 ?? NSRange(location: bodyStart, length: max(0, fallbackEnd - bodyStart))
             let body = source.substring(with: bodyRange)
-            let arguments = parseArguments(body)
-            guard !arguments.isEmpty else { continue }
-            calls.append(.init(name: name, arguments: arguments))
+            calls.append(.init(name: name, arguments: parseArguments(body)))
         }
         return calls
     }
@@ -635,7 +633,7 @@ actor NexFunctionGemmaRouter: NexIntentRouting {
             await calls(
                 prompt: prompt,
                 declarations: activityDeclarations,
-                maximumTokens: selectedBuiltIns.isEmpty ? 12 : 28
+                maximumTokens: selectedBuiltIns.isEmpty ? 6 : 28
             )
         }
         let activityBatch = await activityTask.value
