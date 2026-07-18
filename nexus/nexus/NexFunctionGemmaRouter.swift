@@ -662,48 +662,39 @@ actor NexFunctionGemmaRouter: NexIntentRouting {
         Completed user request: \(request)
         """
 
-        let selectedBuiltIns = Set(
-            [(decision.web ? "web_search" : nil), (decision.memory ? "memory_search" : nil)]
-                .compactMap { $0 }
-        )
-        let activityDeclarations: String
-        if selectedBuiltIns.isEmpty {
-            activityDeclarations = Self.activityDeclarations + queryTools.customDeclarations
-        } else {
-            activityDeclarations = selectedBuiltIns.sorted()
-                .compactMap { queryTools.declarationsByName[$0] }
-                .joined()
+        // Run one native FunctionGemma probe per registered retrieval tool.
+        // The base model handles a single real function definition well, but
+        // its 270M zero-shot checkpoint regularly stops calling functions when
+        // web search, personal memory, and memory-writing schemas are packed
+        // into one prompt.  Isolated probes preserve the model's semantic
+        // choice without restoring a keyword gate. They run concurrently on
+        // the dedicated two-context local server.
+        let activityBatches = await withTaskGroup(
+            of: GeneratedBatch.self,
+            returning: [GeneratedBatch].self
+        ) { group in
+            for name in queryTools.names.sorted() {
+                guard let declaration = queryTools.declarationsByName[name] else { continue }
+                group.addTask { [self] in
+                    await calls(
+                        prompt: prompt,
+                        declarations: declaration,
+                        maximumTokens: 64
+                    )
+                }
+            }
+            var batches: [GeneratedBatch] = []
+            for await batch in group { batches.append(batch) }
+            return batches
         }
-        let activityTask = Task {
-            await calls(
-                prompt: prompt,
-                declarations: activityDeclarations,
-                // Six tokens stopped after `call:explain_topic`, producing an
-                // empty argument map and therefore the neutral fallback on
-                // every ordinary request.  Sixteen is enough for a complete
-                // compact activity call; retrieval needs room for a real
-                // standalone query rather than a one-word fragment.
-                maximumTokens: selectedBuiltIns.isEmpty ? 16 : 40
-            )
-        }
-        let activityBatch = await activityTask.value
-        // Ollama's parallel contexts can occasionally cross-contaminate two
-        // simultaneous native function grammars for this tiny model. Memory
-        // proposals are rare, so serialize only that second router pass.
-        let writeBatch = decision.memoryWrite
-            ? await callsWithDeadline(
-                prompt: "Completed user request: \(request)",
-                declarations: Self.memoryWriteDeclaration,
-                maximumTokens: 20,
-                deadline: .milliseconds(1_200)
-            )
-            : nil
-        let generated = activityBatch.calls
-        let generatedWrites = writeBatch?.calls ?? []
+        let generated = activityBatches.flatMap(\.calls)
+        let activityRuntime = activityBatches.first(where: { !$0.calls.isEmpty })?.runtime
+            ?? .semanticFallback
         let invalidOutput = generated.isEmpty
         var actions: [FunctionGemmaOutput.Action] = []
 
-        if decision.web, queryTools.names.contains("web_search") {
+        if generated.contains(where: { $0.name == "web_search" }),
+           queryTools.names.contains("web_search") {
             let query = Self.query(
                 from: generated,
                 tool: "web_search",
@@ -717,7 +708,8 @@ actor NexFunctionGemmaRouter: NexIntentRouting {
             )
             actions.append(.init(tool: "web_search", query: query))
         }
-        if decision.memory, queryTools.names.contains("memory_search") {
+        if generated.contains(where: { $0.name == "memory_search" }),
+           queryTools.names.contains("memory_search") {
             let query = Self.query(
                 from: generated,
                 tool: "memory_search",
@@ -726,6 +718,23 @@ actor NexFunctionGemmaRouter: NexIntentRouting {
                 date: nil
             )
             actions.append(.init(tool: "memory_search", query: query))
+        }
+        // A router timeout or invalid native output must not silently remove
+        // an obvious retrieval. The semantic guard supplies only this safe
+        // fallback; it no longer blocks FunctionGemma's semantic selection.
+        if actions.isEmpty, decision.web, queryTools.names.contains("web_search") {
+            actions.append(.init(
+                tool: "web_search",
+                query: Self.webFallbackQuery(request, snapshot: activeConversation, date: referenceDate)
+            ))
+        }
+        if !actions.contains(where: { $0.tool == "memory_search" }),
+           decision.memory,
+           queryTools.names.contains("memory_search") {
+            actions.append(.init(
+                tool: "memory_search",
+                query: Self.memoryFallbackQuery(request, snapshot: activeConversation)
+            ))
         }
         let builtInQueryTools: Set<String> = ["web_search", "memory_search"]
         if let first = generated.first,
@@ -736,17 +745,22 @@ actor NexFunctionGemmaRouter: NexIntentRouting {
             actions.append(.init(tool: first.name, query: String(query.prefix(220))))
         }
 
-        let memoryWrite = decision.memoryWrite
-            ? Self.memoryWrite(from: generatedWrites, originalRequest: request)
-                ?? .init(
+        // The durable-memory classifier runs after every finalized exchange
+        // with evidence and duplicate checks. FunctionGemma's base checkpoint
+        // is used for retrieval routing; its zero-shot memory-write calls are
+        // advisory only, so do not let a malformed one suppress that proven
+        // classifier pipeline.
+        let memoryWrite = Self.memoryWrite(from: generated, originalRequest: request)
+            ?? (decision.memoryWrite
+                ? .init(
                     operation: semanticGuard.memoryOperation(for: request),
                     content: request.trimmingCharacters(in: .whitespacesAndNewlines)
                 )
-            : nil
+                : nil)
         let status = invalidOutput
             ? Self.fallbackStatus(for: request, decision: decision)
             : Self.status(
-                from: generatedWrites + generated,
+                from: generated,
                 actions: actions,
                 memoryWrite: memoryWrite
             )
@@ -759,7 +773,7 @@ actor NexFunctionGemmaRouter: NexIntentRouting {
         return .init(
             output: output,
             metrics: .init(
-                runtime: invalidOutput ? .semanticFallback : activityBatch.runtime,
+                runtime: invalidOutput ? .semanticFallback : activityRuntime,
                 startedAt: startedAt,
                 completedAt: completedAt,
                 invalidModelOutput: invalidOutput
@@ -907,7 +921,7 @@ actor NexFunctionGemmaRouter: NexIntentRouting {
         let normalizedRequest = originalRequest.lowercased().split { !$0.isLetter && !$0.isNumber }.joined(separator: " ")
         let leakedPromptLabels = ["visible active conversation", "completed user request", "today is"]
             .contains(where: normalizedCandidate.contains)
-        if candidate.split(separator: " ").count < 5
+        if candidate.split(separator: " ").count < 3
             || normalizedCandidate == normalizedRequest
             || leakedPromptLabels
             || !candidateIsGrounded(candidate, in: originalRequest) {
@@ -1024,7 +1038,7 @@ actor NexFunctionGemmaRouter: NexIntentRouting {
             let year = String(Calendar.current.component(.year, from: date))
             if !words.contains(year) { words.append(year) }
         }
-        if words.count < 5 {
+        if words.count < 3 {
             words += ["official", "information"]
         }
         var seen = Set<String>()
@@ -1122,7 +1136,7 @@ actor NexFunctionGemmaRouter: NexIntentRouting {
         guard let raw = calls.lazy.compactMap({ $0.arguments["status"] }).first else { return nil }
         let normalized = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         let words = normalized.split(whereSeparator: \.isWhitespace)
-        guard (2...6).contains(words.count) else { return nil }
+        guard (2...14).contains(words.count) else { return nil }
         let rejected = ["ongoing", "working", "processing", "done", "completed", "natural", "status"]
         guard !rejected.contains(where: normalized.lowercased().contains) else { return nil }
         return sanitizedStatus(normalized)
@@ -1141,7 +1155,6 @@ actor NexFunctionGemmaRouter: NexIntentRouting {
     private static func sanitizedStatus(_ raw: String) -> String {
         var words = raw.trimmingCharacters(in: .whitespacesAndNewlines)
             .split(whereSeparator: \.isWhitespace)
-            .prefix(6)
             .joined(separator: " ")
         let banned = ["functiongemma", "ollama", "tool", "router", "prompt", "model"]
         if banned.contains(where: words.lowercased().contains) || words.isEmpty {

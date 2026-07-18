@@ -104,6 +104,26 @@ final class NexFunctionGemmaTests: XCTestCase {
         XCTAssertFalse(query.lowercased().contains("what is the"), query)
     }
 
+    func testFunctionGemmaCanRouteNicheWebAndImplicitPersonalMemoryWithoutKeywordGate() async {
+        let router = makeRouter()
+        let web = await router.route(
+            request: "Tell me about the cyclospora outbreak in Florida.",
+            activeConversation: snapshot(),
+            tools: tools()
+        )
+        XCTAssertEqual(web.output.actions.map(\.tool), ["web_search"])
+        XCTAssertTrue(web.output.actions[0].query.localizedCaseInsensitiveContains("cyclospora"))
+        XCTAssertTrue(web.output.actions[0].query.localizedCaseInsensitiveContains("florida"))
+
+        let memory = await router.route(
+            request: "What school do I attend?",
+            activeConversation: snapshot(),
+            tools: tools()
+        )
+        XCTAssertEqual(memory.output.actions.map(\.tool), ["memory_search"])
+        XCTAssertGreaterThanOrEqual(memory.output.actions[0].query.split(separator: " ").count, 3)
+    }
+
     func testRejectedOneWordQueryFallsBackToConversationGroundedSearch() async {
         let prior = NexConversationTurn(
             role: .user,
@@ -458,26 +478,38 @@ private actor ScriptedFunctionGemmaRuntime: NexFunctionGemmaGenerating {
         declarations: String,
         maximumTokens: Int
     ) async throws -> [NexFunctionGemmaRuntime.GeneratedCall] {
-        if declarations.contains("propose_memory_write") {
-            if prompt.contains("Remember that I prefer local models") {
-                return [.init(name: "propose_memory_write", arguments: ["operation": "append", "content": "User prefers local models."])]
-            }
-            if prompt.contains("From now on, keep my project updates concise") {
-                return [.init(name: "propose_memory_write", arguments: ["operation": "append", "content": "User prefers concise project updates."])]
-            }
-            if prompt.contains("Nexus now uses Rust instead of Go") {
-                return [.init(name: "propose_memory_write", arguments: ["operation": "update", "content": "Nexus now uses Rust instead of Go."])]
-            }
-            if prompt.contains("Forget that I wanted cloud inference") {
-                return [.init(name: "propose_memory_write", arguments: ["operation": "forget", "content": "User wanted cloud inference."])]
-            }
-            return []
+        if prompt.contains("Remember that I prefer local models") {
+            return [.init(name: "propose_memory_write", arguments: ["operation": "append", "content": "User prefers local models."])]
         }
-        return [
-            .init(name: "explain_topic", arguments: ["topic": "the request"]),
-            .init(name: "memory_search", arguments: ["query": "most relevant saved project decisions and user context"]),
-            .init(name: "web_search", arguments: ["query": webQuery(for: prompt)])
-        ]
+        if prompt.contains("From now on, keep my project updates concise") {
+            return [.init(name: "propose_memory_write", arguments: ["operation": "append", "content": "User prefers concise project updates."])]
+        }
+        if prompt.contains("Nexus now uses Rust instead of Go") {
+            return [.init(name: "propose_memory_write", arguments: ["operation": "update", "content": "Nexus now uses Rust instead of Go."])]
+        }
+        if prompt.contains("Forget that I wanted cloud inference") {
+            return [.init(name: "propose_memory_write", arguments: ["operation": "forget", "content": "User wanted cloud inference."])]
+        }
+        if prompt.contains("cyclospora outbreak in Florida") {
+            return [.init(name: "web_search", arguments: ["query": "cyclospora outbreak Florida"])]
+        }
+        if prompt.contains("What school do I attend") {
+            return [.init(name: "memory_search", arguments: ["query": "user school attendance"])]
+        }
+        if prompt.contains("last project") || prompt.contains("architecture did we")
+            || prompt.contains("most recent competition") || prompt.contains("previous research plan") {
+            return [.init(name: "memory_search", arguments: ["query": "most relevant saved project decisions and user context"])]
+        }
+        if prompt.contains("weather") || prompt.contains("robotics competition") || prompt.contains("current competition") {
+            if prompt.contains("previous robotics project") {
+                return [
+                    .init(name: "memory_search", arguments: ["query": "previous robotics project capabilities results awards"]),
+                    .init(name: "web_search", arguments: ["query": "2026 high school robotics competition eligibility deadline"])
+                ]
+            }
+            return [.init(name: "web_search", arguments: ["query": webQuery(for: prompt)])]
+        }
+        return []
     }
 
     private func webQuery(for prompt: String) -> String {
