@@ -52,8 +52,7 @@ final class NexusAPIProviderStore: ObservableObject {
         self.savedKey = stored?["hasKey"] as? Bool ?? false
     }
 
-    func selectKind(_ newKind: NexusAPIProviderKind) {
-        let previous = kind
+    func selectKind(_ newKind: NexusAPIProviderKind, replacing previous: NexusAPIProviderKind) {
         kind = newKind
         if baseURL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || baseURL == previous.defaultBaseURL {
             baseURL = newKind.defaultBaseURL
@@ -88,6 +87,13 @@ final class NexusAPIProviderStore: ObservableObject {
             savedKey = false
             persist()
             throw LocalModelError.invalidResponse("Add an API key in the model window")
+        }
+        // Repair the endpoint saved by the first API-provider build: the Picker
+        // updated `kind` before its change handler ran, so a Gemini selection
+        // could retain OpenAI's default endpoint.
+        if kind == .gemini, normalizedBaseURL() == NexusAPIProviderKind.openAICompatible.defaultBaseURL {
+            baseURL = NexusAPIProviderKind.gemini.defaultBaseURL
+            persist()
         }
         guard let endpoint = URL(string: normalizedBaseURL()) else {
             throw LocalModelError.invalidResponse("Enter a valid API base URL")
@@ -186,7 +192,7 @@ enum NexusAPIProviderClient {
             maxTokens: maximumTokens
         ))
         let (bytes, response) = try await URLSession.shared.bytes(for: request)
-        try requireSuccess(response, provider: "API")
+        try await requireSuccess(response, bytes: bytes, provider: "API")
         var answer = ""
         for try await line in bytes.lines {
             guard line.hasPrefix("data:") else { continue }
@@ -229,7 +235,7 @@ enum NexusAPIProviderClient {
             generationConfig: .init(temperature: temperature, maxOutputTokens: maximumTokens)
         ))
         let (bytes, response) = try await URLSession.shared.bytes(for: request)
-        try requireSuccess(response, provider: "Gemini")
+        try await requireSuccess(response, bytes: bytes, provider: "Gemini")
         var answer = ""
         for try await line in bytes.lines {
             guard line.hasPrefix("data:"), let data = line.dropFirst(5).trimmingCharacters(in: .whitespaces).data(using: .utf8) else { continue }
@@ -244,10 +250,31 @@ enum NexusAPIProviderClient {
         return try completed(answer, provider: "Gemini")
     }
 
-    private static func requireSuccess(_ response: URLResponse, provider: String) throws {
-        guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
-            throw LocalModelError.invalidResponse("\(provider) HTTP \((response as? HTTPURLResponse)?.statusCode ?? -1)")
+    private static func requireSuccess(
+        _ response: URLResponse,
+        bytes: URLSession.AsyncBytes,
+        provider: String
+    ) async throws {
+        guard let http = response as? HTTPURLResponse else {
+            throw LocalModelError.invalidResponse("\(provider) returned an invalid response")
         }
+        guard !(200..<300).contains(http.statusCode) else { return }
+
+        var body = ""
+        for try await line in bytes.lines {
+            body += line
+            if body.count >= 2_000 { break }
+        }
+        let providerMessage: String? = {
+            guard let data = body.data(using: .utf8) else { return nil }
+            return try? JSONDecoder().decode(ProviderErrorEnvelope.self, from: data).error.message
+        }()
+        throw LocalModelError.invalidResponse(providerMessage ?? "\(provider) HTTP \(http.statusCode)")
+    }
+
+    private struct ProviderErrorEnvelope: Decodable {
+        struct APIError: Decodable { let message: String }
+        let error: APIError
     }
 
     private static func completed(_ raw: String, provider: String) throws -> String {

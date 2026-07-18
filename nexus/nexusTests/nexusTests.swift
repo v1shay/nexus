@@ -25,6 +25,19 @@ final class NexusGeometryTests: XCTestCase {
         XCTAssertFalse(String(describing: defaults.dictionary(forKey: "nexus.api-provider.settings.v1")).contains("test-key"))
     }
 
+    @MainActor
+    func testSwitchingToGeminiReplacesTheOpenAIDefaultEndpoint() {
+        let suite = "nexus-api-provider-kind-test-\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let store = NexusAPIProviderStore(defaults: defaults, secretStore: NexusMemorySecretStore())
+
+        store.baseURL = NexusAPIProviderKind.openAICompatible.defaultBaseURL
+        store.selectKind(.gemini, replacing: .openAICompatible)
+
+        XCTAssertEqual(store.baseURL, NexusAPIProviderKind.gemini.defaultBaseURL)
+    }
+
     func testRequestedModelAndConnectCameraSizing() {
         XCTAssertEqual(Nexus3DLayout.computerCameraDistance, 2.55)
         XCTAssertEqual(Nexus3DLayout.globeCameraDistance, 2.70)

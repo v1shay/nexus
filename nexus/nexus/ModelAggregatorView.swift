@@ -134,7 +134,9 @@ private struct NexusAPIProviderView: View {
             Picker("Provider", selection: $store.kind) {
                 ForEach(NexusAPIProviderKind.allCases) { Text($0.title).tag($0) }
             }
-            .onChange(of: store.kind) { _, next in store.selectKind(next) }
+            .onChange(of: store.kind) { previous, next in
+                store.selectKind(next, replacing: previous)
+            }
             TextField("Base URL", text: $store.baseURL)
             TextField("Model", text: $store.model)
             SecureField(store.savedKey ? "API key (saved — enter to replace)" : "API key", text: $store.apiKeyInput)
