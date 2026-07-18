@@ -353,8 +353,22 @@ final class NotchController: ObservableObject {
                 responseSpeaker.speakImmediately(route.output.status)
 
                 let toolResult: NexToolOrchestrationResult?
+                // Keep the acknowledgement readable, then deliberately enter the
+                // compact working state.  The primary request is already running
+                // in `speculativeTask`; this only controls the presentation.  Do
+                // not flush buffered answer tokens directly from the status view,
+                // otherwise the pet/thinking transition is never visible.
+                try? await Task.sleep(for: .milliseconds(520))
+                guard !Task.isCancelled, responseGeneration == generation else { return }
+                interaction.beginThinking()
+                if let screen { resize(to: listeningSize(for: screen), animated: true) }
+
                 if route.output.actions.isEmpty {
-                    try? await Task.sleep(for: .milliseconds(120))
+                    // Make the compact pet-thinking animation perceptible even
+                    // when the primary model has already produced speculative
+                    // tokens while the acknowledgement was on screen.
+                    try? await Task.sleep(for: .milliseconds(300))
+                    guard !Task.isCancelled, responseGeneration == generation else { return }
                     await speculativeBuffer.activate { delta, accumulated in
                         await self.receiveResponseDelta(delta, accumulated: accumulated, generation: generation)
                     }
@@ -365,8 +379,6 @@ final class NotchController: ObservableObject {
                 } else {
                     await speculativeBuffer.discard()
                     speculativeTask.cancel()
-                    interaction.beginThinking()
-                    if let screen { resize(to: listeningSize(for: screen), animated: true) }
                     let result = await toolOrchestrator.execute(route.output.actions)
                     guard !Task.isCancelled, responseGeneration == generation else { return }
                     responseSpeaker.setWebEvidenceActive(!result.webResponses.isEmpty)

@@ -188,9 +188,11 @@ final class NexFunctionGemmaTests: XCTestCase {
             runtime: FailingFunctionGemmaRuntime(),
             now: { Date(timeIntervalSince1970: 1_784_355_600) }
         )
-        let route = await router.route(request: "Explain recursion.", activeConversation: snapshot(), tools: tools())
+        let request = "Can you tell me something?"
+        let route = await router.route(request: request, activeConversation: snapshot(), tools: tools())
         XCTAssertTrue(route.output.actions.isEmpty)
-        XCTAssertEqual(route.output.status, "Thinking through Explain recursion…")
+        XCTAssertEqual(route.output.status, "Thinking it through…")
+        XCTAssertFalse(route.output.status.localizedCaseInsensitiveContains("can you"))
         XCTAssertEqual(route.metrics.runtime, .semanticFallback)
         XCTAssertTrue(route.metrics.invalidModelOutput)
     }

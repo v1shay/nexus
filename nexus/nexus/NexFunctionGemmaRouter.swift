@@ -1037,8 +1037,12 @@ actor NexFunctionGemmaRouter: NexIntentRouting {
     ) -> String {
         if decision.web { return sanitizedStatus("Checking current information…") }
         if decision.memory { return sanitizedStatus("Reviewing saved context…") }
-        let subject = conciseSubject(request, maximumWords: 3)
-        return sanitizedStatus("Thinking through \(subject)…")
+        // The deterministic fallback is used only when FunctionGemma produces
+        // invalid output.  Never turn a partial user sentence into a fake status
+        // (for example, “Thinking through can you tell…”).  It is clearer and
+        // less misleading to use one neutral, non-random phrase until the local
+        // router is available again.
+        return sanitizedStatus("Thinking it through…")
     }
 
     private static func memoryWrite(
