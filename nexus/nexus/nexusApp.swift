@@ -159,7 +159,6 @@ final class NotchController: ObservableObject {
     private let conversationSession: NexConversationSession
     let memory: NexMemoryController
     private lazy var webSearch = NexWebSearchController(registry: memory.registry)
-    private let intentRouter: any NexIntentRouting
     private lazy var toolOrchestrator = NexToolOrchestrator(registry: memory.registry)
     private var memoryObservation: AnyCancellable?
     private var toolEventTask: Task<Void, Never>?
@@ -167,17 +166,11 @@ final class NotchController: ObservableObject {
     private var hoverSession = NotchHoverSession()
     private var suppressAutomaticResponseReveal = false
 
-    init(
-        connectController: NexusConnectController? = nil,
-        intentRouter: (any NexIntentRouting)? = nil
-    ) {
+    init(connectController: NexusConnectController? = nil) {
         let resolvedConnectController = connectController ?? .shared
         let conversationSession = NexConversationSession()
         self.connectController = resolvedConnectController
         self.conversationSession = conversationSession
-        self.intentRouter = intentRouter ?? NexFunctionGemmaRouter(
-            remoteRuntime: NexRemoteFunctionGemmaRuntime(connect: resolvedConnectController)
-        )
         modelDownloadViewModel = ModelDownloadViewModel(connect: resolvedConnectController)
         memory = NexMemoryController(conversation: conversationSession)
         memoryObservation = memory.objectWillChange.sink { [weak self] _ in
@@ -219,7 +212,6 @@ final class NotchController: ObservableObject {
                 guard let self else { return }
                 await memory.prepareToolRegistry()
                 try? await webSearch.registerIfNeeded()
-                await intentRouter.warmUp()
             }
             installCommandHoldMonitor()
             installPointerMonitor()
@@ -339,7 +331,6 @@ final class NotchController: ObservableObject {
             responseSpeaker.beginStreaming()
             responseIsStreaming = true
             do {
-                let activeConversation = await conversationSession.snapshot()
                 let baseMessages = await conversationSession.contextMessages()
                 let speculativeBuffer = NexSpeculativePrimaryBuffer()
                 let speculativeTask = Task {
@@ -351,22 +342,27 @@ final class NotchController: ObservableObject {
                 await memory.prepareToolRegistry()
                 try? await webSearch.registerIfNeeded()
                 let definitions = await memory.registry.definitions()
-                let route = await intentRouter.route(
-                    request: prompt,
-                    activeConversation: activeConversation,
+                let planningMessages = NexPrimaryToolPlanner.planningMessages(
+                    context: baseMessages,
                     tools: definitions
                 )
+                let rawPlan = try await modelDownloadViewModel.response(
+                    messages: planningMessages,
+                    temperature: 0,
+                    maximumTokens: 360,
+                    onDelta: { _, _ in }
+                )
+                let plan = NexPrimaryToolPlanner.parse(rawPlan, registeredTools: definitions)
                 guard !Task.isCancelled, responseGeneration == generation else { return }
                 NSLog(
-                    "FunctionGemma route %@ in %.0f ms: %@",
-                    route.metrics.runtime.rawValue,
-                    route.metrics.latencyMilliseconds,
-                    route.output.actions.map { "\($0.tool)=\($0.query)" }.joined(separator: " | ")
+                    "Primary model tool plan: %@",
+                    plan.actions.map { "\($0.tool)" }.joined(separator: " | ")
                 )
-                interaction.acknowledge(route.output.status)
+                interaction.acknowledge(plan.status)
                 if let screen { resize(to: expandedSize(for: screen), animated: true) }
-                responseSpeaker.speakImmediately(route.output.status)
+                responseSpeaker.speakImmediately(plan.status)
 
+                var plannerAdvisory = plan.memoryWrite
                 let toolResult: NexToolOrchestrationResult?
                 // Keep the acknowledgement readable, then deliberately enter the
                 // compact working state.  The primary request is already running
@@ -378,7 +374,7 @@ final class NotchController: ObservableObject {
                 interaction.beginThinking()
                 if let screen { resize(to: listeningSize(for: screen), animated: true) }
 
-                if route.output.actions.isEmpty {
+                if plan.actions.isEmpty {
                     // Make the compact pet-thinking animation perceptible even
                     // when the primary model has already produced speculative
                     // tokens while the acknowledgement was on screen.
@@ -394,13 +390,45 @@ final class NotchController: ObservableObject {
                 } else {
                     await speculativeBuffer.discard()
                     speculativeTask.cancel()
-                    let result = await toolOrchestrator.execute(route.output.actions)
+                    var result = NexToolOrchestrationResult(context: nil, webResponses: [], failures: [])
+                    var pendingPlan = plan
+                    var executedActions: [NexPrimaryToolPlan.Action] = []
+                    var memoryLookupPerformed = false
+
+                    // Tool-capable primary models may ask for one dependency at
+                    // a time. Give the same model completed evidence and let it
+                    // infer only the next missing action, with a small bound to
+                    // prevent an unhealthy runtime from looping forever.
+                    for _ in 0..<3 {
+                        let actions = pendingPlan.actions.filter { !executedActions.contains($0) }
+                        guard !actions.isEmpty else { break }
+                        executedActions += actions
+                        memoryLookupPerformed = memoryLookupPerformed || actions.contains { $0.tool == "memory_search" }
+                        result = result.merging(await toolOrchestrator.execute(actions))
+                        guard !Task.isCancelled, responseGeneration == generation else { return }
+
+                        let planningContext = await conversationSession.contextMessages(
+                            memoryLookupPerformed: memoryLookupPerformed,
+                            webContext: result.context
+                        )
+                        let rawFollowUpPlan = try await modelDownloadViewModel.response(
+                            messages: NexPrimaryToolPlanner.planningMessages(
+                                context: planningContext,
+                                tools: definitions
+                            ),
+                            temperature: 0,
+                            maximumTokens: 360,
+                            onDelta: { _, _ in }
+                        )
+                        pendingPlan = NexPrimaryToolPlanner.parse(rawFollowUpPlan, registeredTools: definitions)
+                        if plannerAdvisory == nil { plannerAdvisory = pendingPlan.memoryWrite }
+                    }
                     guard !Task.isCancelled, responseGeneration == generation else { return }
                     responseSpeaker.setWebEvidenceActive(!result.webResponses.isEmpty)
                     interaction.beginThinking()
                     if let screen { resize(to: listeningSize(for: screen), animated: true) }
                     let messages = await conversationSession.contextMessages(
-                        memoryLookupPerformed: route.output.actions.contains { $0.tool == "memory_search" },
+                        memoryLookupPerformed: memoryLookupPerformed,
                         webContext: result.context
                     )
                     let answer = try await streamModelResponse(messages: messages, generation: generation)
@@ -423,7 +451,7 @@ final class NotchController: ObservableObject {
                 if let assistantTurn {
                     scheduleAutomaticMemoryInference(
                         after: assistantTurn.id,
-                        routerProposal: route.output.memoryWrite
+                        plannerAdvisory: plannerAdvisory
                     )
                 }
             } catch {
@@ -444,15 +472,15 @@ final class NotchController: ObservableObject {
 
     private func scheduleAutomaticMemoryInference(
         after assistantMessageID: UUID,
-        routerProposal: FunctionGemmaOutput.MemoryWrite? = nil
+        plannerAdvisory: NexPrimaryToolPlan.MemoryWrite? = nil
     ) {
         memoryWriterTask?.cancel()
         memoryWriterTask = Task { [weak self] in
             guard let self else { return }
             do {
-                if let routerProposal, routerProposal.operation == .forget {
-                    let forgotten = try await memory.persistRouterForget(
-                        routerProposal,
+                if let plannerAdvisory, plannerAdvisory.operation == .forget {
+                    let forgotten = try await memory.persistPlannerForget(
+                        plannerAdvisory,
                         after: assistantMessageID
                     )
                     if forgotten { NSLog("Nex background memory writer applied one validated forget proposal") }
@@ -460,7 +488,7 @@ final class NotchController: ObservableObject {
                 }
                 guard let request = try await memory.automaticMemoryInferenceRequest(
                     after: assistantMessageID,
-                    routerProposal: routerProposal
+                    plannerAdvisory: plannerAdvisory
                 ) else { return }
                 try Task.checkCancellation()
                 let raw = try await modelDownloadViewModel.response(
@@ -641,7 +669,6 @@ final class NotchController: ObservableObject {
         commandHoldMonitor = nil
         modelDownloadViewModel.shutdown()
         connectController.shutdown()
-        Task { await intentRouter.shutdown() }
     }
 
     func confirmDiscardBeforeQuit() -> Bool {

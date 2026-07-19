@@ -180,7 +180,11 @@ final class OllamaManager: @unchecked Sendable {
         )
         let (bytes, response) = try await session.bytes(for: request)
         try Self.requireSuccess(response)
+        let isToolPlanningPass = messages.contains {
+            $0.role == "system" && $0.content.contains("NEXUS_TOOL_PLANNING_PASS")
+        }
         var accumulated = ""
+        var nativeActions: [NexPrimaryToolPlan.Action] = []
         for try await line in bytes.lines {
             try Task.checkCancellation()
             guard let data = line.data(using: .utf8), !data.isEmpty else { continue }
@@ -190,8 +194,21 @@ final class OllamaManager: @unchecked Sendable {
                 accumulated += delta
                 await onDelta(delta, accumulated)
             }
+            if isToolPlanningPass {
+                nativeActions += (event.message?.toolCalls ?? []).map {
+                    .init(tool: $0.function.name, arguments: $0.function.arguments)
+                }
+            }
         }
         let answer = accumulated.trimmingCharacters(in: .whitespacesAndNewlines)
+        if answer.isEmpty, isToolPlanningPass, !nativeActions.isEmpty {
+            let plan = NexPrimaryToolPlanner.nativeCallPlan(nativeActions)
+            guard let data = try? JSONEncoder().encode(plan),
+                  let json = String(data: data, encoding: .utf8) else {
+                throw LocalModelError.invalidResponse("Ollama returned an unreadable native tool call")
+            }
+            return json
+        }
         guard !answer.isEmpty else { throw LocalModelError.invalidResponse("Ollama returned an empty answer") }
         return answer
     }
@@ -296,7 +313,24 @@ private struct OllamaChatRequest: Encodable {
     let options: Options
 }
 private struct OllamaChatStreamEvent: Decodable {
-    struct Message: Decodable { let content: String }
+    struct Message: Decodable {
+        struct ToolCall: Decodable {
+            struct Function: Decodable {
+                let name: String
+                let arguments: [String: NexJSONValue]
+            }
+
+            let function: Function
+        }
+
+        let content: String
+        let toolCalls: [ToolCall]?
+
+        enum CodingKeys: String, CodingKey {
+            case content
+            case toolCalls = "tool_calls"
+        }
+    }
     let message: Message?
     let error: String?
 }

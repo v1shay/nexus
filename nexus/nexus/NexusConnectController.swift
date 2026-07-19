@@ -524,47 +524,6 @@ final class NexusConnectController: ObservableObject {
         return answer
     }
 
-    /// FunctionGemma's remote fallback is intentionally explicit and never
-    /// passes through automatic workload fallback: failure on the Studio must
-    /// return immediately so the local deterministic router can take over.
-    func functionGemmaRawGeneration(
-        prompt: String,
-        maximumTokens: Int = 96
-    ) async throws -> String {
-        let candidates = pairedNodes.filter { node in
-            node.status == .online
-                && node.capabilities.contains(.inference)
-                && node.displayName.localizedCaseInsensitiveContains("studio")
-        }
-        guard let node = candidates.sorted(by: {
-            $0.displayName.localizedCaseInsensitiveCompare($1.displayName) == .orderedAscending
-        }).first else {
-            throw NexusConnectError.unavailable("no paired Mac Studio is online")
-        }
-        let remote = try connectedExecutor(nodeID: node.id)
-        let request = try NexusWorkloadRequest(
-            kind: .intentRoute,
-            priority: .interactive,
-            retrySafety: .idempotent,
-            payload: NexusIntentRoutePayload(
-                model: "functiongemma:latest",
-                prompt: prompt,
-                maximumTokens: maximumTokens
-            )
-        )
-        let stream = try await remote.events(for: request)
-        for try await event in stream {
-            if event.kind == .failed {
-                let failure = try event.decodePayload(NexusRemoteErrorPayload.self)
-                throw NexusConnectError.requestFailed(failure.message)
-            }
-            if event.kind == .result {
-                return try event.decodePayload(NexusIntentRouteResultPayload.self).response
-            }
-        }
-        throw NexusConnectError.requestFailed("The Mac Studio returned no intent route.")
-    }
-
     func pullModel(
         _ model: LocalModel,
         on nodeID: UUID? = nil,

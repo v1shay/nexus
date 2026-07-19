@@ -94,7 +94,7 @@ extension NexusGeometryTests {
         _ = await session.appendUser("Forget that I wanted cloud inference.")
         let appendedForgetAssistant = await session.appendAssistant("I’ll remove that saved preference.")
         let forgetAssistant = try XCTUnwrap(appendedForgetAssistant)
-        let forgotten = try await controller.persistRouterForget(
+        let forgotten = try await controller.persistPlannerForget(
             .init(operation: .forget, content: "User wanted cloud inference."),
             after: forgetAssistant.id
         )
@@ -144,7 +144,7 @@ extension NexusGeometryTests {
                 title: original.title,
                 excerpt: original.summary
             )],
-            routerProposal: nil
+            plannerAdvisory: nil
         )
         let correctedJSON = """
         {"proposals":[{"idempotency_key":"research-app-name","kind":"project","title":"Glasswork","statement":"The user's research app is called Glasswork, formerly Driftglass.","summary":"Current research app name","topics":[],"projects":["Glasswork"],"entities":["Glasswork","Driftglass"],"evidence":[{"message_id":"\(correctedUser.id.uuidString)","quote":"I renamed my research app from Driftglass to Glasswork."}],"importance":0.9,"confidence":0.99,"supersedes_source_id":"\(original.id.uuidString)"}]}
@@ -169,7 +169,7 @@ extension NexusGeometryTests {
             turns: [user, assistant],
             supportedUserTurns: [user],
             candidates: [],
-            routerProposal: nil
+            plannerAdvisory: nil
         )
     }
 
@@ -536,35 +536,6 @@ extension NexusGeometryTests {
 
         let afterDeletion = try await service.search("Quartz Metal")
         XCTAssertTrue(afterDeletion.isEmpty)
-    }
-
-    func testCompoundQuestionSeparatesImmediateAndMemoryDependentParts() {
-        let split = NexCompoundMemoryQuery.split("What is a neural network and have I used one in my projects?")
-
-        XCTAssertEqual(split?.immediateQuestion, "What is a neural network")
-        XCTAssertEqual(split?.memoryQuestion, "have I used one in my projects?")
-        XCTAssertNil(NexCompoundMemoryQuery.split("Why?"))
-        XCTAssertNil(NexCompoundMemoryQuery.split("Explain neural networks"))
-    }
-
-    func testPersonalQuestionsTriggerMemoryWhileOrdinaryQuestionsDoNot() {
-        let personalPrompts = [
-            "What's my name?",
-            "Who am I?",
-            "What is my GitHub handle?",
-            "Where do I go to high school?",
-            "What are my current research roles?",
-            "How do I prefer answers to be written?",
-            "Check your memory: what is Moonshot Robotics?",
-            "Should I do open source contributions for college?",
-            "What is the best demo for my AI agent?",
-            "Give me an ab workout I can do on my bed"
-        ]
-
-        XCTAssertTrue(personalPrompts.allSatisfy(NexMemoryRetrievalIntent.shouldSearch))
-        XCTAssertFalse(NexMemoryRetrievalIntent.shouldSearch(prompt: "What's the weather?"))
-        XCTAssertFalse(NexMemoryRetrievalIntent.shouldSearch(prompt: "Why?"))
-        XCTAssertFalse(NexMemoryRetrievalIntent.shouldSearch(prompt: "Continue"))
     }
 
     func testEvidenceOnlyRetrievalRejectsSavedAssistantHallucinations() async throws {
