@@ -10,8 +10,8 @@
 
 ### aggregates 400+ models from day one
 
-<td align="center"><img height="340" alt="lm studio" src="https://github.com/user-attachments/assets/27bf12d1-4c6c-49a1-a27e-06958b560cfd" /></td>
-<td align="center"><img height="340" alt="ollama" src="https://github.com/user-attachments/assets/0c1284a5-811b-409c-9e1a-1243a80c9fcb" /></td>
+<td align="center"><img width="450" alt="lm studio" src="https://github.com/user-attachments/assets/27bf12d1-4c6c-49a1-a27e-06958b560cfd" /></td>
+<td align="center"><img width="450" alt="ollama" src="https://github.com/user-attachments/assets/0c1284a5-811b-409c-9e1a-1243a80c9fcb" /></td>
 
 ### a one click setup
 
