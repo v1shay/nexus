@@ -23,26 +23,9 @@
 
 ### Nexus Connect
 
-Nexus Connect lets the Mac app securely route model inference, OCR, indexing, approved structured processes, files, and downloads across any saved Studio/iMac on the same Tailscale tailnet. Every device is paired once, retains an independently pinned identity, reconnects after restart, and runs through a persistent background host even when its visible Nexus UI is closed. Existing local Ollama/LM Studio behavior remains available.
+<img width="1016" height="588" alt="Screenshot 2026-07-18 at 6 45 09 PM" src="https://github.com/user-attachments/assets/048d36cd-e3c1-482a-af2e-769f5b0373df" />
 
-Build and run:
-
-```bash
-./scripts/build-nexus.sh --run
-```
-
-Then open the model window from the notch and expand **Nexus Connect**. Follow the MacBook + Studio + iMac steps in [Nexus Connect setup](docs/NEXUS_CONNECT_SETUP.md). The model window separately controls where inference runs and which one or more Macs receive a model download.
-
-- [Architecture and security](docs/NEXUS_CONNECT_ARCHITECTURE.md)
-- [Unified workload API](docs/NEXUS_CONNECT_API.md)
-- [Migration and rollback](docs/NEXUS_CONNECT_MIGRATION.md)
-- [Voice setup](VOICE_SETUP.md)
 
 ### Unified Memory
 
-Nex now keeps unsaved active-chat continuity in memory, saves chats only when you press **Save to Obsidian**, and uses a human-readable Obsidian vault as the canonical long-term store. Each Mac builds its own replaceable SQLite/FTS/vector index outside iCloud; the live database is never synchronized. A clock button in the notch opens saved chats and resumes the original conversation ID on another Mac after iCloud has delivered and Nex has ingested the Markdown.
-
-- [Memory architecture](docs/NEX_MEMORY_ARCHITECTURE.md)
-- [Obsidian and iCloud setup](docs/NEX_MEMORY_SETUP.md)
-- [Memory tool contracts](docs/NEX_MEMORY_TOOLS.md)
-- [Migration, rollback, and limitations](docs/NEX_MEMORY_MIGRATION.md)
+<img width="1710" height="1033" alt="Screenshot 2026-07-18 at 6 44 50 PM" src="https://github.com/user-attachments/assets/a0932a3d-4096-42b6-b321-15b64b287633" />
