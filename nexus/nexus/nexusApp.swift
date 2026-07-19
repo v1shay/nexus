@@ -147,6 +147,7 @@ final class NotchController: ObservableObject {
     private var modelPanel: NSPanel?
     private var savedChatsPanel: NSPanel?
     private let speechTranscriber = SpeechTranscriber()
+    private let wakePhraseListener = WakePhraseListener()
     private let connectController: NexusConnectController
     private let modelDownloadViewModel: ModelDownloadViewModel
     private var automaticRevealIsWaitingForNotchVisit = false
@@ -222,6 +223,7 @@ final class NotchController: ObservableObject {
             }
             installCommandHoldMonitor()
             installPointerMonitor()
+            armWakePhraseListener()
         }
         panel.orderFrontRegardless()
         NSLog("Nexus installed its panel, pointer monitor, and global hotkey")
@@ -274,6 +276,7 @@ final class NotchController: ObservableObject {
     }
 
     private func startGlobalDictation() async {
+        wakePhraseListener.stop()
         closeTask?.cancel()
         // Foreground speech always wins model capacity. If a prior background
         // classification is cancelled, the next pass still sees recent turns.
@@ -311,9 +314,21 @@ final class NotchController: ObservableObject {
         startResponseIfPossible()
     }
 
+    private func armWakePhraseListener() {
+        guard !isListening, !responseIsStreaming else { return }
+        wakePhraseListener.start { [weak self] phrase in
+            guard let self else { return }
+            NSLog("Nex heard wake phrase: %@", phrase.rawValue)
+            Task { @MainActor in await self.startGlobalDictation() }
+        }
+    }
+
     private func startResponseIfPossible() {
         let prompt = transcript.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !prompt.isEmpty, modelDownloadViewModel.activeModel != nil else { return }
+        guard !prompt.isEmpty, modelDownloadViewModel.activeModel != nil else {
+            armWakePhraseListener()
+            return
+        }
         responseTask?.cancel()
         let generation = UUID()
         responseGeneration = generation
@@ -404,6 +419,7 @@ final class NotchController: ObservableObject {
                 automaticRevealIsWaitingForNotchVisit = reveal
                 if reveal, let screen { resize(to: expandedSize(for: screen), animated: true) }
                 responseSpeaker.finishStreaming()
+                armWakePhraseListener()
                 if let assistantTurn {
                     scheduleAutomaticMemoryInference(
                         after: assistantTurn.id,
@@ -421,6 +437,7 @@ final class NotchController: ObservableObject {
                 )
                 automaticRevealIsWaitingForNotchVisit = reveal
                 if reveal, let screen { resize(to: expandedSize(for: screen), animated: true) }
+                armWakePhraseListener()
             }
         }
     }
@@ -517,6 +534,7 @@ final class NotchController: ObservableObject {
         suppressAutomaticResponseReveal = false
         interaction.dismiss()
         if let screen { resize(to: closedSize(for: screen), animated: true) }
+        armWakePhraseListener()
     }
 
     private func quickDismiss() {
@@ -529,11 +547,13 @@ final class NotchController: ObservableObject {
             speechTranscriber.stop()
             interaction.dismiss()
             if let screen { resize(to: closedSize(for: screen), animated: true) }
+            armWakePhraseListener()
         } else if isExpanded {
             collapse()
         } else {
             interaction.dismiss()
             if let screen { resize(to: closedSize(for: screen), animated: true) }
+            armWakePhraseListener()
         }
     }
 
@@ -612,6 +632,7 @@ final class NotchController: ObservableObject {
 
     func shutdown() {
         speechTranscriber.stop()
+        wakePhraseListener.stop()
         responseTask?.cancel()
         memoryWriterTask?.cancel()
         responseSpeaker.stop()

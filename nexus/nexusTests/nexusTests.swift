@@ -4,6 +4,14 @@ import WebKit
 
 final class NexusGeometryTests: XCTestCase {
     @MainActor
+    func testWakePhraseListenerMatchesOnlyIntentionalMultiWordPhrases() {
+        XCTAssertEqual(WakePhraseListener.match(in: "Hey, next!"), .heyNext)
+        XCTAssertEqual(WakePhraseListener.match(in: "Wake up next"), .wakeUpNext)
+        XCTAssertNil(WakePhraseListener.match(in: "What should I do next?"))
+        XCTAssertNil(WakePhraseListener.match(in: "Nex, open the overlay"))
+    }
+
+    @MainActor
     func testAPIProviderKeepsKeyOutOfDefaultsAndBuildsGeminiConfiguration() throws {
         let suite = "nexus-api-provider-test-\(UUID().uuidString)"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
