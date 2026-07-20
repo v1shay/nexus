@@ -57,7 +57,9 @@ private struct ToolActivityIndicator: View {
                 .frame(width: NotchGeometry.wingWidth)
                 Color.clear.frame(maxWidth: .infinity)
                 Group {
-                    if isCodex, activity.codexKind == .thinking {
+                    if isCodex, activity.phase == .completed {
+                        CodexCompletionIndicator()
+                    } else if isCodex, activity.codexKind == .thinking {
                         // Codex thinking deliberately uses Nex's existing
                         // three-dot motion rather than a separate SVG.
                         ThinkingIndicator()
@@ -141,6 +143,27 @@ private struct CodexAvatarView: View {
         .clipShape(Circle())
         .shadow(color: .blue.opacity(0.9), radius: 6)
         .accessibilityLabel("Codex")
+    }
+}
+
+private struct CodexCompletionIndicator: View {
+    var body: some View {
+        ZStack {
+            Circle()
+                .fill(
+                    LinearGradient(
+                        colors: [.cyan.opacity(0.95), .blue.opacity(0.96), .indigo.opacity(0.9)],
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing
+                    )
+                )
+                .frame(width: 22, height: 22)
+                .shadow(color: .blue.opacity(0.8), radius: 6)
+            Image(systemName: "checkmark")
+                .font(.system(size: 11, weight: .black))
+                .foregroundStyle(.white)
+        }
+        .accessibilityLabel("Codex task complete")
     }
 }
 
