@@ -53,23 +53,14 @@ private struct ToolActivityIndicator: View {
             .frame(height: 34)
 
             VStack(spacing: 5) {
-                ShimmeringStatusText(
-                    text: activity.status,
-                    isFailure: activity.phase == .failed,
-                    style: activity.toolName == "Web Search" ? .google : (activity.toolName == "Nex Memory" ? .obsidian : .white)
-                )
-
-                if let query = activity.query, activity.toolName == "Web Search" {
-                    Text("Query: \(query)")
-                        .font(.system(size: 10.5, weight: .medium, design: .rounded))
-                        .foregroundStyle(.white.opacity(0.54))
-                        .lineLimit(1)
-                        .truncationMode(.middle)
-                        .frame(maxWidth: .infinity)
-                }
-
                 if activity.toolName == "Web Search", !activity.sources.isEmpty {
                     SearchResultTicker(sources: activity.sources)
+                } else {
+                    ShimmeringStatusText(
+                        text: activity.status,
+                        isFailure: activity.phase == .failed,
+                        style: activity.toolName == "Web Search" ? .google : (activity.toolName == "Nex Memory" ? .obsidian : .white)
+                    )
                 }
             }
             .padding(.horizontal, 24)
