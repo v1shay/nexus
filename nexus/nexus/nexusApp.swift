@@ -290,9 +290,7 @@ final class NotchController: ObservableObject {
             resize(to: listeningSize(for: screen), animated: true)
         }
         speechTranscriber.start(
-            engine: settings.speechEngine,
-            endpoint: settings.localSpeechEndpoint,
-            model: settings.localSpeechModel
+            engine: settings.speechEngine
         ) { [weak self] text in
             Task { @MainActor in self?.interaction.updateTranscript(text) }
         }
@@ -333,9 +331,10 @@ final class NotchController: ObservableObject {
         let generation = UUID()
         responseGeneration = generation
         responseSpeechCursor = StreamedSpeechCursor()
-        let immediateStatus = settings.statusMode == .deterministic
-            ? NexusStatusLineGenerator.instant(for: prompt)
-            : "Standing by…"
+        // A status must never wait for a model. Optional primary/secondary
+        // generators may refine this before the compact transition, but the
+        // user always sees a request-related line immediately.
+        let immediateStatus = NexusStatusLineGenerator.instant(for: prompt)
         interaction.acknowledge(immediateStatus)
         if let screen { resize(to: expandedSize(for: screen), animated: true) }
         responseSpeaker.speakImmediately(immediateStatus)

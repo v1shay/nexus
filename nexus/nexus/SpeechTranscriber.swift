@@ -1,4 +1,5 @@
 import AVFoundation
+import FluidAudio
 import Speech
 
 final class SpeechTranscriber: NSObject, @unchecked Sendable {
@@ -11,21 +12,19 @@ final class SpeechTranscriber: NSObject, @unchecked Sendable {
     private var onUpdate: ((String) -> Void)?
     private var localRecordingURL: URL?
     private var localRecordingFile: AVAudioFile?
-    private var localEndpoint: URL?
-    private var localModel = ""
     private var localSessionID = UUID()
+    private var parakeetManager: AsrManager?
+    private var parakeetLoadingTask: Task<AsrManager, Error>?
 
     func start(
         engine: NexusSpeechEngine = .appleSpeech,
-        endpoint: String = "",
-        model: String = "",
         onUpdate: @escaping (String) -> Void
     ) {
         wantsRecording = true
         self.onUpdate = onUpdate
 
-        if engine == .parakeetEndpoint {
-            startLocalEndpointRecording(endpoint: endpoint, model: model)
+        if engine == .parakeetLocal {
+            startLocalParakeetRecording()
             return
         }
 
@@ -59,18 +58,14 @@ final class SpeechTranscriber: NSObject, @unchecked Sendable {
         }
     }
 
-    /// Stops a local endpoint recording and awaits its final transcript.
+    /// Stops a local Parakeet recording and awaits its final transcript.
     /// Apple Speech remains streaming and therefore returns nil here.
     func stopAndTranscribe() async -> String? {
         wantsRecording = false
         guard let localJob = stopRecording() else { return nil }
         defer { try? FileManager.default.removeItem(at: localJob.recording) }
         do {
-            return try await Self.transcribe(
-                recording: localJob.recording,
-                endpoint: localJob.endpoint,
-                model: localJob.model
-            )
+            return try await transcribe(recording: localJob.recording)
         } catch {
             onUpdate?("Local Parakeet transcription failed: \(error.localizedDescription)")
             return nil
@@ -121,20 +116,17 @@ final class SpeechTranscriber: NSObject, @unchecked Sendable {
         hasInputTap = false
     }
 
-    private func startLocalEndpointRecording(endpoint: String, model: String) {
-        guard let endpointURL = URL(string: endpoint),
-              endpointURL.scheme == "http" || endpointURL.scheme == "https" else {
-            onUpdate?("Enter a valid local Parakeet transcription endpoint in Nexus Settings.")
-            return
-        }
+    private func startLocalParakeetRecording() {
         recognitionTask?.cancel()
         recognitionTask = nil
         if audioEngine.isRunning { audioEngine.stop() }
         removeInputTap()
 
         localSessionID = UUID()
-        localEndpoint = endpointURL
-        localModel = model.trimmingCharacters(in: .whitespacesAndNewlines)
+        // Start model preparation in parallel with microphone capture. The
+        // first run downloads Hugging Face CoreML weights; later runs reuse
+        // the loaded ANE-backed model without an HTTP transcription service.
+        Task { [weak self] in _ = try? await self?.preparedParakeetManager() }
         let url = FileManager.default.temporaryDirectory
             .appendingPathComponent("nex-dictation-\(localSessionID.uuidString).wav")
         let inputNode = audioEngine.inputNode
@@ -163,8 +155,6 @@ final class SpeechTranscriber: NSObject, @unchecked Sendable {
 
     private struct LocalTranscriptionJob {
         let recording: URL
-        let endpoint: URL
-        let model: String
     }
 
     private func stopRecording() -> LocalTranscriptionJob? {
@@ -172,47 +162,42 @@ final class SpeechTranscriber: NSObject, @unchecked Sendable {
         removeInputTap()
         recognitionRequest?.endAudio()
 
-        guard let recording = localRecordingURL,
-              let endpoint = localEndpoint,
-              !localModel.isEmpty else { return nil }
-        let model = localModel
+        guard let recording = localRecordingURL else { return nil }
         localRecordingFile = nil
         localRecordingURL = nil
-        localEndpoint = nil
-        localModel = ""
-        return LocalTranscriptionJob(recording: recording, endpoint: endpoint, model: model)
+        return LocalTranscriptionJob(recording: recording)
     }
 
-    private static func transcribe(recording: URL, endpoint: URL, model: String) async throws -> String {
-        let boundary = "NexBoundary-\(UUID().uuidString)"
-        var body = Data()
-        func append(_ value: String) { body.append(Data(value.utf8)) }
-        append("--\(boundary)\r\n")
-        append("Content-Disposition: form-data; name=\"model\"\r\n\r\n")
-        append("\(model)\r\n")
-        append("--\(boundary)\r\n")
-        append("Content-Disposition: form-data; name=\"file\"; filename=\"dictation.wav\"\r\n")
-        append("Content-Type: audio/wav\r\n\r\n")
-        body.append(try Data(contentsOf: recording))
-        append("\r\n--\(boundary)--\r\n")
+    private func preparedParakeetManager() async throws -> AsrManager {
+        if let parakeetManager { return parakeetManager }
+        if let parakeetLoadingTask { return try await parakeetLoadingTask.value }
+        let task = Task<AsrManager, Error> {
+            let models = try await AsrModels.downloadAndLoad()
+            let manager = AsrManager()
+            try await manager.initialize(models: models)
+            return manager
+        }
+        parakeetLoadingTask = task
+        do {
+            let manager = try await task.value
+            parakeetManager = manager
+            parakeetLoadingTask = nil
+            return manager
+        } catch {
+            parakeetLoadingTask = nil
+            throw error
+        }
+    }
 
-        var request = URLRequest(url: endpoint)
-        request.httpMethod = "POST"
-        request.timeoutInterval = 45
-        request.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
-        let (data, response) = try await URLSession.shared.upload(for: request, from: body)
-        guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
-            throw LocalizedErrorMessage("The local endpoint did not return a transcription.")
+    private func transcribe(recording: URL) async throws -> String {
+        let manager = try await preparedParakeetManager()
+        let result = try await manager.transcribe(recording, source: .microphone)
+        guard !result.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            throw LocalizedErrorMessage("Parakeet returned an empty transcript.")
         }
-        let decoded = try JSONDecoder().decode(LocalTranscriptionResponse.self, from: data)
-        guard !decoded.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
-            throw LocalizedErrorMessage("The local endpoint returned empty text.")
-        }
-        return decoded.text
+        return result.text
     }
 }
-
-private struct LocalTranscriptionResponse: Decodable { let text: String }
 private struct LocalizedErrorMessage: LocalizedError {
     let message: String
     init(_ message: String) { self.message = message }

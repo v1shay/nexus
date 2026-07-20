@@ -57,6 +57,7 @@
 		Q100000330075C29006660E4 /* NexMemoryTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = Q100000430075C29006660E4 /* NexMemoryTests.swift */; };
 		T100000330075C29006660E4 /* NexWebSearchTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = T100000430075C29006660E4 /* NexWebSearchTests.swift */; };
 		W100000330075C29006660E4 /* NexPrimaryToolPlannerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = W100000430075C29006660E4 /* NexPrimaryToolPlannerTests.swift */; };
+		Z100000130075C29006660E4 /* FluidAudio in Frameworks */ = {isa = PBXBuildFile; productRef = Z100000230075C29006660E4 /* FluidAudio */; };
 		156AB6C030075C2A006660E4 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 156AB6BF30075C2A006660E4 /* Assets.xcassets */; };
 		156AB6C430075C2A006660E4 /* Preview Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 156AB6C330075C2A006660E4 /* Preview Assets.xcassets */; };
 		156AB6CE30075C2A006660E4 /* nexusTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 156AB6CD30075C2A006660E4 /* nexusTests.swift */; };
@@ -148,6 +149,7 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				Z100000130075C29006660E4 /* FluidAudio in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -289,6 +291,9 @@
 			dependencies = (
 			);
 			name = nexus;
+			packageProductDependencies = (
+				Z100000230075C29006660E4 /* FluidAudio */,
+			);
 			productName = nexus;
 			productReference = 156AB6B830075C29006660E4 /* nexus.app */;
 			productType = "com.apple.product-type.application";
@@ -364,6 +369,9 @@
 			productRefGroup = 156AB6B930075C29006660E4 /* Products */;
 			projectDirPath = "";
 			projectRoot = "";
+			packageReferences = (
+				Z100000330075C29006660E4 /* XCRemoteSwiftPackageReference "FluidAudio" */,
+			);
 			targets = (
 				156AB6B730075C29006660E4 /* nexus */,
 				156AB6C830075C2A006660E4 /* nexusTests */,
@@ -400,6 +408,25 @@
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 /* End PBXResourcesBuildPhase section */
+
+/* Begin XCRemoteSwiftPackageReference section */
+		Z100000330075C29006660E4 /* XCRemoteSwiftPackageReference "FluidAudio" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/FluidInference/FluidAudio.git";
+			requirement = {
+				kind = exactVersion;
+				version = 0.5.2;
+			};
+		};
+/* End XCRemoteSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		Z100000230075C29006660E4 /* FluidAudio */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = Z100000330075C29006660E4 /* XCRemoteSwiftPackageReference "FluidAudio" */;
+			productName = FluidAudio;
+		};
+/* End XCSwiftPackageProductDependency section */
 
 /* Begin PBXSourcesBuildPhase section */
 		156AB6B430075C29006660E4 /* Sources */ = {

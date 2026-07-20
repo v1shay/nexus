@@ -75,13 +75,6 @@ private struct NexusSettingsPage: View {
     @ObservedObject var settings: NexusAppSettings
     @ObservedObject var viewModel: ModelDownloadViewModel
 
-    private var speechCandidates: [LocalModel] {
-        viewModel.installedModels.filter {
-            let name = ($0.name + " " + $0.identifier).lowercased()
-            return name.contains("parakeet") || name.contains("whisper") || name.contains("canary") || name.contains("speech") || name.contains("asr") || name.contains("stt")
-        }
-    }
-
     var body: some View {
         Form {
             Section("Status") {
@@ -106,19 +99,9 @@ private struct NexusSettingsPage: View {
                         Text(engine.title).tag(engine)
                     }
                 }
-                if settings.speechEngine == .parakeetEndpoint {
-                    TextField("Local transcription endpoint", text: $settings.localSpeechEndpoint)
-                    TextField("Model", text: $settings.localSpeechModel)
-                    if speechCandidates.isEmpty {
-                        Text("No local STT models were detected in Ollama or LM Studio.")
-                            .foregroundStyle(.secondary)
-                    } else {
-                        Picker("Detected local model", selection: $settings.localSpeechModel) {
-                            ForEach(speechCandidates) { model in
-                                Text(model.name).tag(model.identifier)
-                            }
-                        }
-                    }
+                if settings.speechEngine == .parakeetLocal {
+                    Text("Runs the open-source Parakeet CoreML model locally. Its Hugging Face weights download once on first use; no transcription endpoint or API key is used.")
+                        .foregroundStyle(.secondary)
                 }
             }
         }

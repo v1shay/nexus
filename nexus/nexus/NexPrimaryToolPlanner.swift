@@ -20,6 +20,8 @@ struct NexPrimaryToolPlan: Codable, Equatable, Sendable {
         let content: String
     }
 
+    /// Retained for backward-compatible plans, but deliberately optional at
+    /// decode time: status presentation is independent of tool selection.
     let status: String
     let actions: [Action]
     let memoryWrite: MemoryWrite?
@@ -27,6 +29,19 @@ struct NexPrimaryToolPlan: Codable, Equatable, Sendable {
     enum CodingKeys: String, CodingKey {
         case status, actions
         case memoryWrite = "memory_write"
+    }
+
+    init(status: String = "Thinking…", actions: [Action] = [], memoryWrite: MemoryWrite? = nil) {
+        self.status = status
+        self.actions = actions
+        self.memoryWrite = memoryWrite
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        status = try container.decodeIfPresent(String.self, forKey: .status) ?? "Thinking…"
+        actions = try container.decodeIfPresent([Action].self, forKey: .actions) ?? []
+        memoryWrite = try container.decodeIfPresent(MemoryWrite.self, forKey: .memoryWrite)
     }
 
     static let fallback = Self(status: "Thinking…", actions: [], memoryWrite: nil)
@@ -70,7 +85,7 @@ enum NexPrimaryToolPlanner {
         `memory_write` is an advisory for Nex's validated background memory policy. Set it only for stable, user-supported preferences, corrections, decisions, or explicit forgetting. Do not set it for requests, temporary facts, speculation, or assistant-generated claims. Do not call write-capable tools directly.
 
         Return ONLY one JSON object, with no Markdown or explanation:
-        {"status":"natural status describing work beginning","actions":[{"tool":"registered tool name","arguments":{"field":"value"}}],"memory_write":null}
+        {"actions":[{"tool":"registered tool name","arguments":{"field":"value"}}],"memory_write":null}
 
         Today is \(formatter.string(from: date)).
         Available tools:

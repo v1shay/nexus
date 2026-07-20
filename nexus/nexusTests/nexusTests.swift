@@ -291,6 +291,26 @@ final class NexusGeometryTests: XCTestCase {
         XCTAssertNil(NexusStatusLineGenerator.sanitize("natural status describing work"))
     }
 
+    func testToolPlanAcceptsModelsThatOmitPresentationStatus() {
+        let tools = [NexRegisteredTool(
+            name: "web_search",
+            description: "Search the live web.",
+            statusLabel: "Searching the web…",
+            completionLabel: "Used search",
+            spokenStatus: "Searching the web.",
+            iconSystemName: "globe",
+            permission: .network,
+            schema: .init(fields: ["query": .init(.string, required: true)]),
+            handler: { _, _ in .null }
+        )]
+        let plan = NexPrimaryToolPlanner.parse(
+            #"{"actions":[{"tool":"web_search","arguments":{"query":"latest Swift programming language release changes"}}],"memory_write":null}"#,
+            registeredTools: tools
+        )
+        XCTAssertEqual(plan.actions.count, 1)
+        XCTAssertEqual(plan.actions.first?.tool, "web_search")
+    }
+
     func testResponseModePreventsCodeLeakageIntoOrdinaryRequests() {
         let ordinaryPrompts = [
             "Give me an ab workout I can do on my bed",

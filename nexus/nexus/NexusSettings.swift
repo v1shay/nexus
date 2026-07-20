@@ -18,13 +18,13 @@ enum NexusStatusGenerationMode: String, CaseIterable, Identifiable, Codable {
 
 enum NexusSpeechEngine: String, CaseIterable, Identifiable, Codable {
     case appleSpeech
-    case parakeetEndpoint
+    case parakeetLocal
 
     var id: String { rawValue }
     var title: String {
         switch self {
         case .appleSpeech: "Apple Speech"
-        case .parakeetEndpoint: "NVIDIA Parakeet (local endpoint)"
+        case .parakeetLocal: "Parakeet (local)"
         }
     }
 }
