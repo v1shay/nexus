@@ -54,7 +54,7 @@ private struct ToolActivityIndicator: View {
                         NexusPetView(pet: notch.selectedPet, activity: .tool, height: 31)
                     }
                 }
-                .frame(width: isCodex ? 126 : NotchGeometry.wingWidth)
+                .frame(width: isCodex ? 96 : NotchGeometry.wingWidth)
                 Color.clear.frame(maxWidth: .infinity)
                 Group {
                     if isCodex, activity.phase == .completed {
@@ -104,10 +104,21 @@ private struct ToolActivityIndicator: View {
 private struct CodexSessionPicker: View {
     @EnvironmentObject private var notch: NotchController
     let selectedSessionID: String?
+    @State private var isUsagePopoverPresented = false
 
     var body: some View {
-        HStack(spacing: 6) {
-            CodexAvatarView()
+        ZStack(alignment: .trailing) {
+            Button {
+                isUsagePopoverPresented.toggle()
+            } label: {
+                CodexAvatarView()
+            }
+            .buttonStyle(.plain)
+            .popover(isPresented: $isUsagePopoverPresented, arrowEdge: .top) {
+                CodexUsagePopover(usage: notch.codexUsageLimit)
+            }
+            .accessibilityLabel("Show Codex usage")
+
             if notch.codexSessions.count > 1 {
                 HStack(spacing: 4) {
                     ForEach(Array(notch.codexSessions.prefix(2).enumerated()), id: \.element.id) { index, session in
@@ -126,15 +137,33 @@ private struct CodexSessionPicker: View {
                     }
                 }
             }
-            if let usage = notch.codexUsageLimit {
-                Text(usage.compactLabel)
-                    .font(.system(size: 10, weight: .semibold, design: .rounded))
-                    .monospacedDigit()
-                    .foregroundStyle(.cyan.opacity(0.9))
-                    .fixedSize()
-                    .accessibilityLabel("Codex weekly limit: \(Int(usage.usedPercent.rounded())) percent used, resets \(usage.resetsAt.formatted(date: .abbreviated, time: .omitted))")
+        }
+        .frame(width: 96, height: 29)
+    }
+}
+
+private struct CodexUsagePopover: View {
+    let usage: CodexUsageLimit?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 7) {
+            Text("Codex usage")
+                .font(.system(size: 13, weight: .semibold, design: .rounded))
+            if let usage {
+                Text("\(Int(usage.usedPercent.rounded()))% used")
+                    .font(.system(size: 23, weight: .bold, design: .rounded))
+                    .foregroundStyle(.blue)
+                Text("Weekly limit · resets \(usage.resetsAt.formatted(date: .abbreviated, time: .omitted))")
+                    .font(.system(size: 11, weight: .medium, design: .rounded))
+                    .foregroundStyle(.secondary)
+            } else {
+                Text("Waiting for Codex’s next usage update.")
+                    .font(.system(size: 11, weight: .medium, design: .rounded))
+                    .foregroundStyle(.secondary)
             }
         }
+        .padding(14)
+        .frame(width: 210, alignment: .leading)
     }
 }
 
