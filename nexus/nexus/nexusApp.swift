@@ -168,6 +168,8 @@ final class NotchController: ObservableObject {
     private lazy var toolOrchestrator = NexToolOrchestrator(registry: memory.registry)
     private var memoryObservation: AnyCancellable?
     private var toolEventTask: Task<Void, Never>?
+    private var codexProgressMonitor: CodexProgressMonitor?
+    private var codexProgressDismissTask: Task<Void, Never>?
     private var responseIsStreaming = false
     private var hoverSession = NotchHoverSession()
     private var suppressAutomaticResponseReveal = false
@@ -214,6 +216,7 @@ final class NotchController: ObservableObject {
         self.panel = panel
         if startServices {
             startToolEventListener()
+            startCodexProgressMonitor()
             memory.start()
             Task { [weak self] in
                 guard let self else { return }
@@ -767,6 +770,9 @@ final class NotchController: ObservableObject {
         memoryWriterTask?.cancel()
         responseSpeaker.stop()
         toolEventTask?.cancel()
+        codexProgressDismissTask?.cancel()
+        codexProgressMonitor?.stop()
+        codexProgressMonitor = nil
         memory.stop()
         commandHoldMonitor = nil
         modelDownloadViewModel.shutdown()
@@ -794,6 +800,47 @@ final class NotchController: ObservableObject {
                 guard !Task.isCancelled else { return }
                 handleToolEvent(event)
             }
+        }
+    }
+
+    /// Codex Desktop writes a local append-only JSONL session stream. This is
+    /// intentionally a passive observer: Nexus displays progress but cannot
+    /// submit, cancel, or alter a Codex task.
+    private func startCodexProgressMonitor() {
+        guard codexProgressMonitor == nil else { return }
+        let monitor = CodexProgressMonitor()
+        monitor.start { [weak self] update in
+            self?.handleCodexProgress(update)
+        }
+        codexProgressMonitor = monitor
+    }
+
+    private func handleCodexProgress(_ update: CodexProgressUpdate) {
+        // Never let an external developer task obscure live dictation, a Nex
+        // response, or a user-opened answer. Codex resumes appearing as soon
+        // as Nexus returns to its idle notch.
+        let codexAlreadyVisible = interaction.toolActivity?.toolName == "Codex"
+        guard codexAlreadyVisible || (!isListening && !isThinking && !responseIsStreaming && !isExpanded) else {
+            return
+        }
+
+        let activity = ToolActivity.codex(update)
+        switch update.phase {
+        case .completed, .failed:
+            guard codexAlreadyVisible else { return }
+            interaction.completeToolActivity(activity)
+            if let screen { resize(to: toolActivitySize(for: screen), animated: true) }
+            codexProgressDismissTask?.cancel()
+            codexProgressDismissTask = Task { [weak self] in
+                try? await Task.sleep(for: .seconds(update.phase == .failed ? 2.4 : 1.3))
+                guard let self, self.interaction.toolActivity?.toolName == "Codex" else { return }
+                self.interaction.dismiss()
+                if let screen = self.screen { self.resize(to: self.closedSize(for: screen), animated: true) }
+            }
+        case .started, .progress:
+            codexProgressDismissTask?.cancel()
+            interaction.beginToolActivity(activity)
+            if let screen { resize(to: toolActivitySize(for: screen), animated: true) }
         }
     }
 

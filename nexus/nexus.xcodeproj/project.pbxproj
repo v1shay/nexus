@@ -35,6 +35,7 @@
 		T100000130075C29006660E4 /* NexWebSearch.swift in Sources */ = {isa = PBXBuildFile; fileRef = T100000230075C29006660E4 /* NexWebSearch.swift */; };
 		V100000130075C29006660E4 /* NexMemoryGraph.swift in Sources */ = {isa = PBXBuildFile; fileRef = V100000230075C29006660E4 /* NexMemoryGraph.swift */; };
 		W100000130075C29006660E4 /* NexPrimaryToolPlanner.swift in Sources */ = {isa = PBXBuildFile; fileRef = W100000230075C29006660E4 /* NexPrimaryToolPlanner.swift */; };
+		C0D3A00130075C29006660E4 /* CodexProgressMonitor.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0D3A00230075C29006660E4 /* CodexProgressMonitor.swift */; };
 		X100000130075C29006660E4 /* NexusAPIProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = X100000230075C29006660E4 /* NexusAPIProvider.swift */; };
 		Y100000130075C29006660E4 /* NexusSettings.swift in Sources */ = {isa = PBXBuildFile; fileRef = Y100000230075C29006660E4 /* NexusSettings.swift */; };
 		G100000330075C29006660E4 /* NexusConnectFraming.swift in Sources */ = {isa = PBXBuildFile; fileRef = G100000430075C29006660E4 /* NexusConnectFraming.swift */; };
@@ -112,6 +113,7 @@
 		T100000230075C29006660E4 /* NexWebSearch.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NexWebSearch.swift; sourceTree = "<group>"; };
 		V100000230075C29006660E4 /* NexMemoryGraph.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NexMemoryGraph.swift; sourceTree = "<group>"; };
 		W100000230075C29006660E4 /* NexPrimaryToolPlanner.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NexPrimaryToolPlanner.swift; sourceTree = "<group>"; };
+		C0D3A00230075C29006660E4 /* CodexProgressMonitor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CodexProgressMonitor.swift; sourceTree = "<group>"; };
 		X100000230075C29006660E4 /* NexusAPIProvider.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NexusAPIProvider.swift; sourceTree = "<group>"; };
 		Y100000230075C29006660E4 /* NexusSettings.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NexusSettings.swift; sourceTree = "<group>"; };
 		G100000430075C29006660E4 /* NexusConnectFraming.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NexusConnectFraming.swift; sourceTree = "<group>"; };
@@ -207,6 +209,7 @@
 				T100000230075C29006660E4 /* NexWebSearch.swift */,
 				V100000230075C29006660E4 /* NexMemoryGraph.swift */,
 				W100000230075C29006660E4 /* NexPrimaryToolPlanner.swift */,
+				C0D3A00230075C29006660E4 /* CodexProgressMonitor.swift */,
 				X100000230075C29006660E4 /* NexusAPIProvider.swift */,
 				Y100000230075C29006660E4 /* NexusSettings.swift */,
 				G100000430075C29006660E4 /* NexusConnectFraming.swift */,
@@ -447,6 +450,7 @@
 				T100000130075C29006660E4 /* NexWebSearch.swift in Sources */,
 				V100000130075C29006660E4 /* NexMemoryGraph.swift in Sources */,
 				W100000130075C29006660E4 /* NexPrimaryToolPlanner.swift in Sources */,
+				C0D3A00130075C29006660E4 /* CodexProgressMonitor.swift in Sources */,
 				X100000130075C29006660E4 /* NexusAPIProvider.swift in Sources */,
 				Y100000130075C29006660E4 /* NexusSettings.swift in Sources */,
 				G100000330075C29006660E4 /* NexusConnectFraming.swift in Sources */,

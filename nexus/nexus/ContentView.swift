@@ -40,14 +40,27 @@ private struct ToolActivityIndicator: View {
     @EnvironmentObject private var notch: NotchController
     let activity: ToolActivity
 
+    private var isCodex: Bool { activity.toolName == "Codex" }
+    private var liveLine: String { activity.detail ?? activity.status }
+
     var body: some View {
         ZStack(alignment: .top) {
             NotchSurface(cornerRadius: 18).fill(.black)
             HStack(spacing: 0) {
-                NexusPetView(pet: notch.selectedPet, activity: .tool, height: 31)
-                    .frame(width: NotchGeometry.wingWidth)
+                Group {
+                    if isCodex {
+                        CodexAvatarView()
+                    } else {
+                        NexusPetView(pet: notch.selectedPet, activity: .tool, height: 31)
+                    }
+                }
+                .frame(width: NotchGeometry.wingWidth)
                 Color.clear.frame(maxWidth: .infinity)
-                AnimatedToolIcon(source: activity.icon, isFailure: activity.phase == .failed)
+                AnimatedToolIcon(
+                    source: activity.icon,
+                    isFailure: activity.phase == .failed,
+                    isCodex: isCodex
+                )
                     .frame(width: NotchGeometry.wingWidth)
             }
             .frame(height: 34)
@@ -57,9 +70,11 @@ private struct ToolActivityIndicator: View {
                     SearchResultTicker(sources: activity.sources)
                 } else {
                     ShimmeringStatusText(
-                        text: activity.status,
+                        text: liveLine,
                         isFailure: activity.phase == .failed,
-                        style: activity.toolName == "Web Search" ? .google : (activity.toolName == "Nex Memory" ? .obsidian : .white)
+                        style: activity.toolName == "Web Search"
+                            ? .google
+                            : (activity.toolName == "Nex Memory" ? .obsidian : (isCodex ? .codex : .white))
                     )
                 }
             }
@@ -67,7 +82,28 @@ private struct ToolActivityIndicator: View {
             .padding(.top, 43)
         }
         .accessibilityElement(children: .combine)
-        .accessibilityLabel("\(activity.toolName). \(activity.status)")
+        .accessibilityLabel("\(activity.toolName). \(liveLine)")
+    }
+}
+
+private struct CodexAvatarView: View {
+    var body: some View {
+        Group {
+            if let image = NSImage(contentsOf: CodexProgressAssets.avatarURL) {
+                Image(nsImage: image)
+                    .resizable()
+                    .interpolation(.high)
+                    .scaledToFit()
+            } else {
+                Image(systemName: "chevron.left.forwardslash.chevron.right")
+                    .resizable()
+                    .scaledToFit()
+            }
+        }
+        .frame(width: 29, height: 29)
+        .clipShape(Circle())
+        .shadow(color: .blue.opacity(0.9), radius: 6)
+        .accessibilityLabel("Codex")
     }
 }
 
@@ -112,12 +148,26 @@ private struct AnimatedToolIcon: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     let source: ToolIconSource
     let isFailure: Bool
+    var isCodex = false
 
     @ViewBuilder
     var body: some View {
         if reduceMotion || isFailure {
-            ToolIconView(source: source)
-                .foregroundStyle(isFailure ? .red.opacity(0.9) : .white.opacity(0.82))
+            if isCodex {
+                codexIcon
+            } else {
+                ToolIconView(source: source)
+                    .foregroundStyle(isFailure ? .red.opacity(0.9) : .white.opacity(0.82))
+            }
+        } else if isCodex {
+            TimelineView(.animation(minimumInterval: 1 / 30)) { timeline in
+                let phase = timeline.date.timeIntervalSinceReferenceDate
+                    .truncatingRemainder(dividingBy: 1.8) / 1.8
+                let glow = (sin(phase * .pi * 2) + 1) / 2
+                codexIcon
+                    .shadow(color: .blue.opacity(glow * 0.9), radius: 4 + glow * 5)
+                    .scaleEffect(0.96 + glow * 0.04)
+            }
         } else {
             TimelineView(.animation(minimumInterval: 1 / 30)) { timeline in
                 let phase = timeline.date.timeIntervalSinceReferenceDate
@@ -128,6 +178,18 @@ private struct AnimatedToolIcon: View {
                     .shadow(color: .cyan.opacity(glow * 0.8), radius: 4 + glow * 4)
                     .scaleEffect(0.96 + glow * 0.04)
             }
+        }
+    }
+
+    private var codexIcon: some View {
+        ZStack {
+            ToolIconView(source: source).opacity(0.24)
+            LinearGradient(
+                colors: [.cyan.opacity(0.92), .blue, .indigo.opacity(0.94)],
+                startPoint: .topLeading,
+                endPoint: .bottomTrailing
+            )
+            .mask(ToolIconView(source: source))
         }
     }
 }
@@ -163,12 +225,14 @@ private enum StatusShimmerStyle {
     case white
     case google
     case obsidian
+    case codex
 
     var colors: [Color] {
         switch self {
         case .white: [.clear, .white.opacity(0.88), .white, .white.opacity(0.88), .clear]
         case .google: [.clear, .red.opacity(0.9), .yellow.opacity(0.95), .green.opacity(0.92), .blue.opacity(0.95), .clear]
         case .obsidian: [.clear, .purple.opacity(0.7), .indigo.opacity(0.98), .purple.opacity(0.82), .clear]
+        case .codex: [.clear, .cyan.opacity(0.78), .blue.opacity(0.98), .indigo.opacity(0.9), .cyan.opacity(0.78), .clear]
         }
     }
 }

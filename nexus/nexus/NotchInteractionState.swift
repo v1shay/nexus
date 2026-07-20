@@ -28,6 +28,9 @@ struct ToolActivity: Equatable, Sendable {
     let icon: ToolIconSource
     var phase: NexToolLifecyclePhase = .started
     var progress: Double?
+    /// A live external-worker line. When present it is rendered verbatim in
+    /// the compact notch beneath the worker's current activity.
+    var detail: String? = nil
     /// The exact validated query sent to a retrieval tool.
     var query: String?
     var sources: [ToolReceiptSource] = []
@@ -76,6 +79,17 @@ struct ToolActivity: Equatable, Sendable {
         )
     }
 
+    static func codex(_ update: CodexProgressUpdate) -> ToolActivity {
+        ToolActivity(
+            toolName: "Codex",
+            status: update.kind.label,
+            spokenStatus: "",
+            icon: CodexProgressAssets.icon(for: update.kind),
+            phase: update.phase,
+            detail: update.detail
+        )
+    }
+
     private static func webSources(from result: NexJSONValue?) -> [ToolReceiptSource] {
         guard case .object(let object) = result,
               case .array(let values) = object["results"] else { return [] }
@@ -120,6 +134,27 @@ struct ToolActivity: Equatable, Sendable {
     </svg>
     """
 
+}
+
+enum CodexProgressAssets {
+    private static let downloadsURL = FileManager.default.homeDirectoryForCurrentUser
+        .appendingPathComponent("Downloads", isDirectory: true)
+
+    static let avatarURL = downloadsURL.appendingPathComponent("codex.webp")
+
+    static func icon(for kind: CodexProgressKind) -> ToolIconSource {
+        let fileName: String = switch kind {
+        case .thinking: "codex.svg"
+        case .terminal: "terminal-svgrepo-com.svg"
+        case .writing: "code-svgrepo-com.svg"
+        case .git: "code-merge-svgrepo-com.svg"
+        }
+        let url = downloadsURL.appendingPathComponent(fileName)
+        if let data = try? Data(contentsOf: url) {
+            return .svg(data: data, fallbackSystemName: kind.fallbackSymbol)
+        }
+        return .systemSymbol(kind.fallbackSymbol)
+    }
 }
 
 struct NotchInteractionState: Equatable {

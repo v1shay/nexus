@@ -508,6 +508,44 @@ final class NexusGeometryTests: XCTestCase {
         }
     }
 
+    func testCodexProgressMapsCommentaryCommandsPatchesAndGit() throws {
+        let commentary = #"{"type":"event_msg","payload":{"type":"agent_message","phase":"commentary","message":"I’m tracing the streaming path."}}"#
+        let git = #"{"type":"response_item","payload":{"type":"custom_tool_call","name":"exec","input":"const r = await tools.exec_command({\"cmd\":\"git status --short\",\"workdir\":\"/repo\"});"}}"#
+        let patch = #"{"type":"response_item","payload":{"type":"custom_tool_call","name":"apply_patch","input":"*** Begin Patch\n*** Update File: /repo/nexus/ContentView.swift\n*** End Patch"}}"#
+        let complete = #"{"type":"event_msg","payload":{"type":"task_complete"}}"#
+
+        XCTAssertEqual(CodexProgressParser.parse(line: commentary), .init(
+            kind: .thinking,
+            detail: "I’m tracing the streaming path.",
+            phase: .progress
+        ))
+        XCTAssertEqual(CodexProgressParser.parse(line: git), .init(
+            kind: .git,
+            detail: "git status --short",
+            phase: .progress
+        ))
+        XCTAssertEqual(CodexProgressParser.parse(line: patch), .init(
+            kind: .writing,
+            detail: "Updating /repo/nexus/ContentView.swift",
+            phase: .progress
+        ))
+        XCTAssertEqual(CodexProgressParser.parse(line: complete)?.phase, .completed)
+    }
+
+    func testCodexActivityPreservesTheExactLiveLineForTheNotch() {
+        let progress = CodexProgressUpdate(
+            kind: .terminal,
+            detail: "xcodebuild -project nexus/nexus.xcodeproj test",
+            phase: .progress
+        )
+        let activity = ToolActivity.codex(progress)
+
+        XCTAssertEqual(activity.toolName, "Codex")
+        XCTAssertEqual(activity.status, "Running command")
+        XCTAssertEqual(activity.detail, "xcodebuild -project nexus/nexus.xcodeproj test")
+        XCTAssertEqual(activity.phase, .progress)
+    }
+
     func testCompletedToolReceiptSurvivesThinkingAndStreamingUntilNewDictation() {
         let executionID = UUID()
         let started = NexToolLifecycleEvent(
