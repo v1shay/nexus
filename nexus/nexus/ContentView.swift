@@ -152,49 +152,60 @@ private struct AdaptiveNotchGlass: View {
 
     @ViewBuilder
     var body: some View {
-        #if compiler(>=6.2)
-        if #available(macOS 26.0, *) {
-            NativeLiquidGlassNotch(isExpanded: isExpanded)
-        } else {
-            LegacyNotchGlass(isExpanded: isExpanded)
+        SimulatedGlassNotch(isExpanded: isExpanded)
+    }
+}
+
+/// Clear custom glass that uses no macOS 26-only APIs.
+private struct SimulatedGlassNotch: View {
+    let isExpanded: Bool
+
+    var body: some View {
+        let shape = NotchSurface(cornerRadius: isExpanded ? 29 : 10)
+
+        ZStack {
+            // Closed: merges seamlessly with the physical camera housing.
+            shape
+                .fill(.black)
+                .opacity(isExpanded ? 0 : 1)
+
+            // Expanded: black at the top, then nearly transparent.
+            shape
+                .fill(
+                    LinearGradient(
+                        colors: [
+                            .black.opacity(0.94),
+                            .black.opacity(0.62),
+                            .black.opacity(0.20),
+                            .black.opacity(0.035)
+                        ],
+                        startPoint: .top,
+                        endPoint: UnitPoint(x: 0.5, y: 0.66)
+                    )
+                )
+                .opacity(isExpanded ? 1 : 0)
+
+            // Crisp specular edge, without blur or frosted material.
+            shape
+                .stroke(
+                    LinearGradient(
+                        colors: [
+                            .white.opacity(0.42),
+                            .white.opacity(0.16),
+                            .white.opacity(0.30)
+                        ],
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing
+                    ),
+                    lineWidth: 0.85
+                )
+                .opacity(isExpanded ? 1 : 0)
         }
-        #else
-        LegacyNotchGlass(isExpanded: isExpanded)
-        #endif
-    }
-}
-
-#if compiler(>=6.2)
-@available(macOS 26.0, *)
-private struct NativeLiquidGlassNotch: View {
-    let isExpanded: Bool
-
-    var body: some View {
-        let shape = NotchSurface(cornerRadius: isExpanded ? 29 : 10)
-        shape
-            .fill(.black.opacity(isExpanded ? 0.56 : 1))
-            .glassEffect(
-                .regular.tint(.black.opacity(isExpanded ? 0.42 : 0.72)).interactive(isExpanded),
-                in: shape
-            )
-            .overlay {
-                shape.stroke(.white.opacity(isExpanded ? 0.22 : 0), lineWidth: 0.8)
-            }
-    }
-}
-#endif
-
-private struct LegacyNotchGlass: View {
-    let isExpanded: Bool
-
-    var body: some View {
-        let shape = NotchSurface(cornerRadius: isExpanded ? 29 : 10)
-        shape
-            .fill(.black.opacity(isExpanded ? 0.82 : 1))
-            .background(.ultraThinMaterial, in: shape)
-            .overlay {
-                shape.stroke(.white.opacity(isExpanded ? 0.18 : 0), lineWidth: 0.8)
-            }
+        .overlay {
+            shape.stroke(.white.opacity(isExpanded ? 0.10 : 0), lineWidth: 2)
+                .blur(radius: 1.2)
+        }
+        .shadow(color: .black.opacity(isExpanded ? 0.26 : 0), radius: 14, y: 5)
     }
 }
 
