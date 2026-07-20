@@ -122,6 +122,7 @@ final class NexusAPIProviderStore: ObservableObject {
 }
 
 enum NexusAPIProviderClient {
+    private static let inferenceRequestTimeout: TimeInterval = 7 * 24 * 60 * 60
     private struct OpenAIRequest: Encodable {
         struct Message: Encodable { let role: String; let content: String }
         let model: String
@@ -181,6 +182,7 @@ enum NexusAPIProviderClient {
         if !url.path.hasSuffix("/chat/completions") { url.appendPathComponent("chat/completions") }
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
+        request.timeoutInterval = inferenceRequestTimeout
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.setValue("Bearer \(configuration.apiKey)", forHTTPHeaderField: "Authorization")
         request.httpBody = try JSONEncoder().encode(OpenAIRequest(
@@ -222,6 +224,7 @@ enum NexusAPIProviderClient {
         components.queryItems = [.init(name: "alt", value: "sse")]
         var request = URLRequest(url: components.url!)
         request.httpMethod = "POST"
+        request.timeoutInterval = inferenceRequestTimeout
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.setValue(configuration.apiKey, forHTTPHeaderField: "x-goog-api-key")
         let system = ([NexusResponseInstructions.conciseSystemPrompt]

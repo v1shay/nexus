@@ -20,6 +20,12 @@ final class SpeechTranscriber: NSObject, @unchecked Sendable {
     private var automaticSilenceDuration: TimeInterval?
     private var automaticSubmit: (() -> Void)?
     private var hasDetectedSpeech = false
+    /// Apple Speech publishes a provisional transcript while recording, then
+    /// may correct its final words only after `endAudio()`. The model must use
+    /// that finalized value, never the earlier overlay value.
+    private var latestAppleTranscript = ""
+    private var appleRecognitionFinished = false
+    private var appleFinalContinuation: CheckedContinuation<String?, Never>?
 
     func start(
         engine: NexusSpeechEngine = .appleSpeech,
@@ -27,6 +33,7 @@ final class SpeechTranscriber: NSObject, @unchecked Sendable {
         onAutomaticSubmit: (() -> Void)? = nil,
         onUpdate: @escaping (String) -> Void
     ) {
+        resolveAppleFinalTranscript(nil)
         wantsRecording = true
         self.onUpdate = onUpdate
         dictationSessionID = UUID()
@@ -35,6 +42,8 @@ final class SpeechTranscriber: NSObject, @unchecked Sendable {
         automaticSilenceDuration = automaticallySubmitAfterSilence
         automaticSubmit = onAutomaticSubmit
         hasDetectedSpeech = false
+        latestAppleTranscript = ""
+        appleRecognitionFinished = false
 
         if engine == .parakeetLocal {
             startLocalParakeetRecording()
@@ -65,6 +74,9 @@ final class SpeechTranscriber: NSObject, @unchecked Sendable {
     func stop() {
         wantsRecording = false
         cancelAutomaticSubmit()
+        recognitionTask?.cancel()
+        recognitionTask = nil
+        resolveAppleFinalTranscript(nil)
         if let localJob = stopRecording() {
             // Dismissal and shutdown intentionally discard endpoint audio.
             // A completed dictation turn uses `stopAndTranscribe()` instead.
@@ -72,22 +84,27 @@ final class SpeechTranscriber: NSObject, @unchecked Sendable {
         }
     }
 
-    /// Stops a local Parakeet recording and awaits its final transcript.
-    /// Apple Speech remains streaming and therefore returns nil here.
+    /// Stops dictation and returns the transcript that is safe to give the
+    /// model. Apple Speech is asked to finalize before returning, so endpoint
+    /// words cannot be visible in the overlay but missing from the prompt.
     func stopAndTranscribe() async -> String? {
         wantsRecording = false
         cancelAutomaticSubmit()
-        guard let localJob = stopRecording() else { return nil }
-        defer { try? FileManager.default.removeItem(at: localJob.recording) }
-        do {
-            return try await transcribe(recording: localJob.recording)
-        } catch {
-            onUpdate?("Local Parakeet transcription failed: \(error.localizedDescription)")
-            return nil
+        if localRecordingURL != nil {
+            guard let localJob = stopRecording() else { return nil }
+            defer { try? FileManager.default.removeItem(at: localJob.recording) }
+            do {
+                return try await transcribe(recording: localJob.recording)
+            } catch {
+                onUpdate?("Local Parakeet transcription failed: \(error.localizedDescription)")
+                return nil
+            }
         }
+        return await finishAppleRecognition()
     }
 
     private func beginRecording() {
+        resolveAppleFinalTranscript(nil)
         recognitionTask?.cancel()
         recognitionTask = nil
         if audioEngine.isRunning { audioEngine.stop() }
@@ -96,6 +113,9 @@ final class SpeechTranscriber: NSObject, @unchecked Sendable {
         let request = SFSpeechAudioBufferRecognitionRequest()
         request.shouldReportPartialResults = true
         recognitionRequest = request
+        latestAppleTranscript = ""
+        appleRecognitionFinished = false
+        let session = dictationSessionID
 
         let inputNode = audioEngine.inputNode
         let format = inputNode.outputFormat(forBus: 0)
@@ -107,7 +127,15 @@ final class SpeechTranscriber: NSObject, @unchecked Sendable {
 
         recognitionTask = recognizer?.recognitionTask(with: request) { [weak self] result, error in
             if let text = result?.bestTranscription.formattedString, !text.isEmpty {
-                DispatchQueue.main.async { self?.onUpdate?(text) }
+                self?.latestAppleTranscript = text
+                DispatchQueue.main.async { [weak self] in
+                    guard self?.dictationSessionID == session else { return }
+                    self?.onUpdate?(text)
+                }
+            }
+            guard self?.dictationSessionID == session else { return }
+            if result?.isFinal == true || error != nil {
+                self?.completeAppleRecognition()
             }
             if error != nil {
                 DispatchQueue.main.async { [weak self] in
@@ -124,6 +152,48 @@ final class SpeechTranscriber: NSObject, @unchecked Sendable {
             removeInputTap()
             onUpdate?("Nexus could not start the microphone.")
         }
+    }
+
+    private func finishAppleRecognition() async -> String? {
+        guard recognitionTask != nil || recognitionRequest != nil else {
+            return finalizedAppleTranscript
+        }
+        if appleRecognitionFinished {
+            return finalizedAppleTranscript
+        }
+        return await withCheckedContinuation { continuation in
+            resolveAppleFinalTranscript(nil)
+            appleFinalContinuation = continuation
+            if appleRecognitionFinished {
+                completeAppleRecognition()
+                return
+            }
+            if audioEngine.isRunning { audioEngine.stop() }
+            removeInputTap()
+            recognitionRequest?.endAudio()
+            if recognitionTask == nil { completeAppleRecognition() }
+        }
+    }
+
+    private func completeAppleRecognition() {
+        guard !appleRecognitionFinished else { return }
+        appleRecognitionFinished = true
+        recognitionRequest = nil
+        recognitionTask = nil
+        resolveAppleFinalTranscript(
+            finalizedAppleTranscript
+        )
+    }
+
+    private var finalizedAppleTranscript: String? {
+        let transcript = latestAppleTranscript.trimmingCharacters(in: .whitespacesAndNewlines)
+        return transcript.isEmpty ? nil : transcript
+    }
+
+    private func resolveAppleFinalTranscript(_ text: String?) {
+        let continuation = appleFinalContinuation
+        appleFinalContinuation = nil
+        continuation?.resume(returning: text)
     }
 
     private func removeInputTap() {

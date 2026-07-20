@@ -32,6 +32,10 @@ enum NexAssistantIdentityIntent {
 final class OllamaManager: @unchecked Sendable {
     static let serverURL = URL(string: "http://127.0.0.1:11434")!
     static let officialMacDownloadURL = URL(string: "https://ollama.com/download/Ollama-darwin.zip")!
+    /// Inference can legitimately take a long time before emitting an answer,
+    /// especially with native reasoning enabled. This is deliberately far
+    /// beyond normal model work; user cancellation remains immediate.
+    static let inferenceRequestTimeout: TimeInterval = 7 * 24 * 60 * 60
 
     private let session: URLSession
     private let fileManager: FileManager
@@ -192,6 +196,7 @@ final class OllamaManager: @unchecked Sendable {
         try await ensureServerRunning()
         var request = URLRequest(url: Self.serverURL.appendingPathComponent("api/chat"))
         request.httpMethod = "POST"
+        request.timeoutInterval = Self.inferenceRequestTimeout
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.httpBody = try JSONEncoder().encode(
             OllamaChatRequest(
@@ -266,6 +271,7 @@ final class OllamaManager: @unchecked Sendable {
 
         var request = URLRequest(url: Self.serverURL.appendingPathComponent("api/chat"))
         request.httpMethod = "POST"
+        request.timeoutInterval = Self.inferenceRequestTimeout
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.httpBody = try JSONEncoder().encode(
             OllamaToolPlanningRequest(
@@ -692,6 +698,7 @@ final class LMStudioManager: @unchecked Sendable {
         let resolvedModel = await resolvedModelIdentifier(preferred: model)
         var request = URLRequest(url: Self.serverURL.appendingPathComponent("v1/chat/completions"))
         request.httpMethod = "POST"
+        request.timeoutInterval = OllamaManager.inferenceRequestTimeout
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.httpBody = try JSONEncoder().encode(
             OpenAIChatRequest(
