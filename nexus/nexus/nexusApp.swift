@@ -128,6 +128,7 @@ final class NotchController: ObservableObject {
     @Published private(set) var selectedPet = NexusPetCatalog.pet(
         withID: UserDefaults.standard.string(forKey: "nexus.selectedPetID")
     )
+    @Published private(set) var codexSessions: [CodexSessionProgress] = []
 
     var presentation: NotchPresentation { interaction.presentation }
     var isExpanded: Bool { interaction.presentation == .overlay }
@@ -170,6 +171,7 @@ final class NotchController: ObservableObject {
     private var toolEventTask: Task<Void, Never>?
     private var codexProgressMonitor: CodexProgressMonitor?
     private var codexProgressDismissTask: Task<Void, Never>?
+    private var selectedCodexSessionID: String?
     private var responseIsStreaming = false
     private var hoverSession = NotchHoverSession()
     private var suppressAutomaticResponseReveal = false
@@ -809,17 +811,26 @@ final class NotchController: ObservableObject {
     private func startCodexProgressMonitor() {
         guard codexProgressMonitor == nil else { return }
         let monitor = CodexProgressMonitor()
-        monitor.start { [weak self] update in
-            self?.handleCodexProgress(update)
+        monitor.start { [weak self] update, sessions in
+            self?.handleCodexProgress(update, sessions: sessions)
         }
         codexProgressMonitor = monitor
     }
 
-    private func handleCodexProgress(_ update: CodexProgressUpdate) {
+    private func handleCodexProgress(_ update: CodexProgressUpdate, sessions: [CodexSessionProgress]) {
+        codexSessions = sessions
+        let selectedSessionIsComplete = sessions.first(where: { $0.id == selectedCodexSessionID })?.isComplete ?? false
+        if selectedCodexSessionID == nil
+            || !sessions.contains(where: { $0.id == selectedCodexSessionID })
+            || (selectedSessionIsComplete && update.phase != .completed && update.phase != .failed) {
+            selectedCodexSessionID = update.sessionID
+        }
+        guard selectedCodexSessionID == update.sessionID else { return }
+
         // Never let an external developer task obscure live dictation, a Nex
         // response, or a user-opened answer. Codex resumes appearing as soon
         // as Nexus returns to its idle notch.
-        let codexAlreadyVisible = interaction.toolActivity?.toolName == "Codex"
+        let codexAlreadyVisible = interaction.toolActivity?.codexSessionID == update.sessionID
         guard codexAlreadyVisible || (!isListening && !isThinking && !responseIsStreaming && !isExpanded) else {
             return
         }
@@ -834,14 +845,26 @@ final class NotchController: ObservableObject {
             codexProgressDismissTask = Task { [weak self] in
                 try? await Task.sleep(for: .seconds(update.phase == .failed ? 2.4 : 1.3))
                 guard let self, self.interaction.toolActivity?.toolName == "Codex" else { return }
-                self.interaction.dismiss()
-                if let screen = self.screen { self.resize(to: self.closedSize(for: screen), animated: true) }
+                if let nextLiveSession = self.codexSessions.first(where: { !$0.isComplete }) {
+                    self.selectCodexSession(nextLiveSession.id)
+                } else {
+                    self.interaction.dismiss()
+                    if let screen = self.screen { self.resize(to: self.closedSize(for: screen), animated: true) }
+                }
             }
         case .started, .progress:
             codexProgressDismissTask?.cancel()
             interaction.beginToolActivity(activity)
             if let screen { resize(to: toolActivitySize(for: screen), animated: true) }
         }
+    }
+
+    func selectCodexSession(_ id: String) {
+        guard let session = codexSessions.first(where: { $0.id == id }) else { return }
+        selectedCodexSessionID = id
+        codexProgressDismissTask?.cancel()
+        interaction.beginToolActivity(.codex(session.latestUpdate))
+        if let screen { resize(to: toolActivitySize(for: screen), animated: true) }
     }
 
     private func handleToolEvent(_ event: NexToolLifecycleEvent) {

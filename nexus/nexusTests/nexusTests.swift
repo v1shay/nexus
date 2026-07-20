@@ -546,6 +546,14 @@ final class NexusGeometryTests: XCTestCase {
         XCTAssertEqual(activity.phase, .progress)
     }
 
+    func testCodexProgressMapsFileReadsAndImageViewingToDistinctActivities() {
+        let read = #"{"type":"response_item","payload":{"type":"custom_tool_call","name":"exec","input":"const r = await tools.exec_command({\"cmd\":\"sed -n '1,160p' nexus/ContentView.swift\",\"workdir\":\"/repo\"});"}}"#
+        let image = #"{"type":"response_item","payload":{"type":"custom_tool_call","name":"view_image","input":"{\"path\":\"/tmp/reference.png\"}"}}"#
+
+        XCTAssertEqual(CodexProgressParser.parse(line: read)?.kind, .reading)
+        XCTAssertEqual(CodexProgressParser.parse(line: image)?.kind, .image)
+    }
+
     func testCompletedToolReceiptSurvivesThinkingAndStreamingUntilNewDictation() {
         let executionID = UUID()
         let started = NexToolLifecycleEvent(

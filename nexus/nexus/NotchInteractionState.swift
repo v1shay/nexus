@@ -31,6 +31,10 @@ struct ToolActivity: Equatable, Sendable {
     /// A live external-worker line. When present it is rendered verbatim in
     /// the compact notch beneath the worker's current activity.
     var detail: String? = nil
+    /// Present only for a Codex activity so the notch can select another live
+    /// local Codex chat without conflating their progress streams.
+    var codexSessionID: String? = nil
+    var codexTaskTitle: String? = nil
     /// The exact validated query sent to a retrieval tool.
     var query: String?
     var sources: [ToolReceiptSource] = []
@@ -86,7 +90,9 @@ struct ToolActivity: Equatable, Sendable {
             spokenStatus: "",
             icon: CodexProgressAssets.icon(for: update.kind),
             phase: update.phase,
-            detail: update.detail
+            detail: update.detail,
+            codexSessionID: update.sessionID,
+            codexTaskTitle: update.taskTitle
         )
     }
 
@@ -147,6 +153,8 @@ enum CodexProgressAssets {
         case .thinking: "codex.svg"
         case .terminal: "terminal-svgrepo-com.svg"
         case .writing: "code-svgrepo-com.svg"
+        case .reading: "read-svgrepo-com.svg"
+        case .image: "image-01-svgrepo-com.svg"
         case .git: "code-merge-svgrepo-com.svg"
         }
         let url = downloadsURL.appendingPathComponent(fileName)

@@ -49,7 +49,7 @@ private struct ToolActivityIndicator: View {
             HStack(spacing: 0) {
                 Group {
                     if isCodex {
-                        CodexAvatarView()
+                        CodexSessionPicker(selectedSessionID: activity.codexSessionID)
                     } else {
                         NexusPetView(pet: notch.selectedPet, activity: .tool, height: 31)
                     }
@@ -86,21 +86,43 @@ private struct ToolActivityIndicator: View {
     }
 }
 
+private struct CodexSessionPicker: View {
+    @EnvironmentObject private var notch: NotchController
+    let selectedSessionID: String?
+
+    var body: some View {
+        HStack(spacing: 2) {
+            CodexAvatarView()
+            if notch.codexSessions.count > 1 {
+                ForEach(Array(notch.codexSessions.prefix(2).enumerated()), id: \.element.id) { index, session in
+                    Button {
+                        notch.selectCodexSession(session.id)
+                    } label: {
+                        Text("\(index + 1)")
+                            .font(.system(size: 8, weight: .bold, design: .rounded))
+                            .foregroundStyle(session.id == selectedSessionID ? .white : .white.opacity(0.62))
+                            .frame(width: 12, height: 12)
+                            .background(session.id == selectedSessionID ? Color.blue.opacity(0.9) : Color.white.opacity(0.12))
+                            .clipShape(Circle())
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Show Codex task \(index + 1): \(session.title)")
+                }
+            }
+        }
+    }
+}
+
 private struct CodexAvatarView: View {
     var body: some View {
         Group {
             if let image = NSImage(contentsOf: CodexProgressAssets.avatarURL) {
-                Image(nsImage: image)
-                    .resizable()
-                    .interpolation(.high)
-                    .scaledToFit()
+                Image(nsImage: image).resizable().interpolation(.high).scaledToFit()
             } else {
-                Image(systemName: "chevron.left.forwardslash.chevron.right")
-                    .resizable()
-                    .scaledToFit()
+                Image(systemName: "chevron.left.forwardslash.chevron.right").resizable().scaledToFit()
             }
         }
-        .frame(width: 29, height: 29)
+        .frame(width: 25, height: 25)
         .clipShape(Circle())
         .shadow(color: .blue.opacity(0.9), radius: 6)
         .accessibilityLabel("Codex")
