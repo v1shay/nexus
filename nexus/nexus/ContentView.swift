@@ -107,7 +107,7 @@ private struct CodexSessionPicker: View {
     @State private var isUsagePopoverPresented = false
 
     var body: some View {
-        ZStack(alignment: .trailing) {
+        HStack(spacing: 6) {
             Button {
                 isUsagePopoverPresented.toggle()
             } label: {
@@ -138,7 +138,7 @@ private struct CodexSessionPicker: View {
                 }
             }
         }
-        .frame(width: 96, height: 29)
+        .frame(width: 96, height: 29, alignment: .center)
     }
 }
 
