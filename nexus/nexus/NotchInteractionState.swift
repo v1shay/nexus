@@ -35,6 +35,7 @@ struct ToolActivity: Equatable, Sendable {
     /// local Codex chat without conflating their progress streams.
     var codexSessionID: String? = nil
     var codexTaskTitle: String? = nil
+    var codexKind: CodexProgressKind? = nil
     /// The exact validated query sent to a retrieval tool.
     var query: String?
     var sources: [ToolReceiptSource] = []
@@ -92,7 +93,8 @@ struct ToolActivity: Equatable, Sendable {
             phase: update.phase,
             detail: update.detail,
             codexSessionID: update.sessionID,
-            codexTaskTitle: update.taskTitle
+            codexTaskTitle: update.taskTitle,
+            codexKind: update.kind
         )
     }
 

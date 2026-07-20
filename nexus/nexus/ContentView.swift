@@ -56,12 +56,20 @@ private struct ToolActivityIndicator: View {
                 }
                 .frame(width: NotchGeometry.wingWidth)
                 Color.clear.frame(maxWidth: .infinity)
-                AnimatedToolIcon(
-                    source: activity.icon,
-                    isFailure: activity.phase == .failed,
-                    isCodex: isCodex
-                )
-                    .frame(width: NotchGeometry.wingWidth)
+                Group {
+                    if isCodex, activity.codexKind == .thinking {
+                        // Codex thinking deliberately uses Nex's existing
+                        // three-dot motion rather than a separate SVG.
+                        ThinkingIndicator()
+                    } else {
+                        AnimatedToolIcon(
+                            source: activity.icon,
+                            isFailure: activity.phase == .failed,
+                            isCodex: isCodex
+                        )
+                    }
+                }
+                .frame(width: NotchGeometry.wingWidth)
             }
             // Keep both activity marks clear of the curved notch edges, and
             // align their visual centre with the space above the live line.
