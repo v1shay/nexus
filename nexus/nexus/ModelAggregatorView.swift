@@ -12,6 +12,7 @@ struct ModelAggregatorView: View {
     @ObservedObject var viewModel: ModelDownloadViewModel
     @ObservedObject var connect: NexusConnectController
     @ObservedObject var memory: NexMemoryController
+    @ObservedObject var settings: NexusAppSettings
     @State private var page: NexusAppPage = .models
 
     var body: some View {
@@ -25,6 +26,8 @@ struct ModelAggregatorView: View {
                     NexusConnectPage(controller: connect)
                 case .memory:
                     NexusMemoryPage(memory: memory)
+                case .settings:
+                    NexusSettingsPage(settings: settings, viewModel: viewModel)
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -55,6 +58,7 @@ private enum NexusAppPage: String, CaseIterable, Identifiable {
     case models
     case connect
     case memory
+    case settings
 
     var id: String { rawValue }
     var icon: String {
@@ -62,7 +66,64 @@ private enum NexusAppPage: String, CaseIterable, Identifiable {
         case .models: "cube.transparent"
         case .connect: "point.3.connected.trianglepath.dotted"
         case .memory: "circle.hexagongrid"
+        case .settings: "gearshape"
         }
+    }
+}
+
+private struct NexusSettingsPage: View {
+    @ObservedObject var settings: NexusAppSettings
+    @ObservedObject var viewModel: ModelDownloadViewModel
+
+    private var speechCandidates: [LocalModel] {
+        viewModel.installedModels.filter {
+            let name = ($0.name + " " + $0.identifier).lowercased()
+            return name.contains("parakeet") || name.contains("whisper") || name.contains("canary") || name.contains("speech") || name.contains("asr") || name.contains("stt")
+        }
+    }
+
+    var body: some View {
+        Form {
+            Section("Status") {
+                Picker("Generator", selection: $settings.statusMode) {
+                    ForEach(NexusStatusGenerationMode.allCases) { mode in
+                        Text(mode.title).tag(mode)
+                    }
+                }
+                if settings.statusMode == .secondaryModel {
+                    Picker("Status model", selection: $settings.secondaryStatusModelID) {
+                        Text("Choose a local model").tag("")
+                        ForEach(viewModel.installedModels) { model in
+                            Text(model.name).tag(model.id)
+                        }
+                    }
+                }
+            }
+
+            Section("Dictation") {
+                Picker("Engine", selection: $settings.speechEngine) {
+                    ForEach(NexusSpeechEngine.allCases) { engine in
+                        Text(engine.title).tag(engine)
+                    }
+                }
+                if settings.speechEngine == .parakeetEndpoint {
+                    TextField("Local transcription endpoint", text: $settings.localSpeechEndpoint)
+                    TextField("Model", text: $settings.localSpeechModel)
+                    if speechCandidates.isEmpty {
+                        Text("No local STT models were detected in Ollama or LM Studio.")
+                            .foregroundStyle(.secondary)
+                    } else {
+                        Picker("Detected local model", selection: $settings.localSpeechModel) {
+                            ForEach(speechCandidates) { model in
+                                Text(model.name).tag(model.identifier)
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        .formStyle(.grouped)
+        .padding(28)
     }
 }
 

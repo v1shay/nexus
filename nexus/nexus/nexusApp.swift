@@ -158,6 +158,7 @@ final class NotchController: ObservableObject {
     private var responseSpeechCursor = StreamedSpeechCursor()
     private let conversationSession: NexConversationSession
     let memory: NexMemoryController
+    let settings: NexusAppSettings
     private lazy var webSearch = NexWebSearchController(registry: memory.registry)
     private lazy var toolOrchestrator = NexToolOrchestrator(registry: memory.registry)
     private var memoryObservation: AnyCancellable?
@@ -171,6 +172,7 @@ final class NotchController: ObservableObject {
         let conversationSession = NexConversationSession()
         self.connectController = resolvedConnectController
         self.conversationSession = conversationSession
+        settings = NexusAppSettings()
         modelDownloadViewModel = ModelDownloadViewModel(connect: resolvedConnectController)
         memory = NexMemoryController(conversation: conversationSession)
         memoryObservation = memory.objectWillChange.sink { [weak self] _ in
@@ -287,13 +289,19 @@ final class NotchController: ObservableObject {
         if let screen {
             resize(to: listeningSize(for: screen), animated: true)
         }
-        speechTranscriber.start { [weak self] text in
+        speechTranscriber.start(
+            engine: settings.speechEngine,
+            endpoint: settings.localSpeechEndpoint,
+            model: settings.localSpeechModel
+        ) { [weak self] text in
             Task { @MainActor in self?.interaction.updateTranscript(text) }
         }
     }
 
     private func finishGlobalDictation() async {
-        speechTranscriber.stop()
+        if let endpointTranscript = await speechTranscriber.stopAndTranscribe() {
+            interaction.updateTranscript(endpointTranscript)
+        }
         interaction.finishDictation()
         let finalizedPrompt = transcript.trimmingCharacters(in: .whitespacesAndNewlines)
         if !finalizedPrompt.isEmpty, await conversationSession.appendUser(finalizedPrompt) != nil {
@@ -325,6 +333,12 @@ final class NotchController: ObservableObject {
         let generation = UUID()
         responseGeneration = generation
         responseSpeechCursor = StreamedSpeechCursor()
+        let immediateStatus = settings.statusMode == .deterministic
+            ? NexusStatusLineGenerator.instant(for: prompt)
+            : "Standing by…"
+        interaction.acknowledge(immediateStatus)
+        if let screen { resize(to: expandedSize(for: screen), animated: true) }
+        responseSpeaker.speakImmediately(immediateStatus)
         responseTask = Task { [weak self] in
             guard let self else { return }
             guard !Task.isCancelled, responseGeneration == generation else { return }
@@ -332,6 +346,14 @@ final class NotchController: ObservableObject {
             responseIsStreaming = true
             do {
                 let baseMessages = await conversationSession.contextMessages()
+                requestAsyncStatusIfNeeded(prompt: prompt, generation: generation)
+                let presentationTask = Task { [weak self] in
+                    try? await Task.sleep(for: .milliseconds(800))
+                    guard let self, !Task.isCancelled, self.responseGeneration == generation else { return }
+                    self.interaction.beginThinking()
+                    if let screen = self.screen { self.resize(to: self.listeningSize(for: screen), animated: true) }
+                }
+                defer { presentationTask.cancel() }
                 let speculativeBuffer = NexSpeculativePrimaryBuffer()
                 let speculativeTask = Task {
                     try await self.modelDownloadViewModel.response(messages: baseMessages) { delta, accumulated in
@@ -358,10 +380,6 @@ final class NotchController: ObservableObject {
                     "Primary model tool plan: %@",
                     plan.actions.map { "\($0.tool)" }.joined(separator: " | ")
                 )
-                interaction.acknowledge(plan.status)
-                if let screen { resize(to: expandedSize(for: screen), animated: true) }
-                responseSpeaker.speakImmediately(plan.status)
-
                 var plannerAdvisory = plan.memoryWrite
                 let toolResult: NexToolOrchestrationResult?
                 // Keep the acknowledgement readable, then deliberately enter the
@@ -369,10 +387,12 @@ final class NotchController: ObservableObject {
                 // in `speculativeTask`; this only controls the presentation.  Do
                 // not flush buffered answer tokens directly from the status view,
                 // otherwise the pet/thinking transition is never visible.
-                try? await Task.sleep(for: .milliseconds(520))
+                try? await Task.sleep(for: .milliseconds(280))
                 guard !Task.isCancelled, responseGeneration == generation else { return }
-                interaction.beginThinking()
-                if let screen { resize(to: listeningSize(for: screen), animated: true) }
+                if !isThinking && !isUsingTool {
+                    interaction.beginThinking()
+                    if let screen { resize(to: listeningSize(for: screen), animated: true) }
+                }
 
                 if plan.actions.isEmpty {
                     // Make the compact pet-thinking animation perceptible even
@@ -466,6 +486,45 @@ final class NotchController: ObservableObject {
                 automaticRevealIsWaitingForNotchVisit = reveal
                 if reveal, let screen { resize(to: expandedSize(for: screen), animated: true) }
                 armWakePhraseListener()
+            }
+        }
+    }
+
+    private func requestAsyncStatusIfNeeded(prompt: String, generation: UUID) {
+        guard settings.statusMode != .deterministic else { return }
+        Task { [weak self] in
+            guard let self else { return }
+            do {
+                let messages = NexusStatusLineGenerator.prompt(for: prompt)
+                let raw: String
+                switch settings.statusMode {
+                case .primaryModel:
+                    raw = try await modelDownloadViewModel.response(
+                        messages: messages,
+                        temperature: 0.45,
+                        maximumTokens: 32,
+                        onDelta: { _, _ in }
+                    )
+                case .secondaryModel:
+                    guard let model = modelDownloadViewModel.installedModels.first(where: {
+                        $0.id == self.settings.secondaryStatusModelID
+                    }) else { return }
+                    raw = try await modelDownloadViewModel.response(
+                        using: model,
+                        messages: messages,
+                        temperature: 0.45,
+                        maximumTokens: 32,
+                        onDelta: { _, _ in }
+                    )
+                case .deterministic:
+                    return
+                }
+                guard responseGeneration == generation,
+                      presentation == .overlay,
+                      let status = NexusStatusLineGenerator.sanitize(raw) else { return }
+                interaction.acknowledge(status)
+            } catch {
+                // A status model is optional and never allowed to delay Nex.
             }
         }
     }
@@ -645,7 +704,8 @@ final class NotchController: ObservableObject {
         panel.contentView = NSHostingView(rootView: ModelAggregatorView(
             viewModel: modelDownloadViewModel,
             connect: connectController,
-            memory: memory
+            memory: memory,
+            settings: settings
         ))
         panel.collectionBehavior.insert(.fullScreenPrimary)
         if let screen = NSScreen.main ?? NSScreen.screens.first {

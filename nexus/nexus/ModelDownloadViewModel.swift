@@ -345,6 +345,38 @@ final class ModelDownloadViewModel: ObservableObject {
         }
     }
 
+    /// Used only for optional, non-blocking status-line generation. It never
+    /// changes the user's active conversational model or routing selection.
+    func response(
+        using model: LocalModel,
+        messages: [NexusChatMessage],
+        temperature: Double? = nil,
+        maximumTokens: Int? = nil,
+        onDelta: @escaping @Sendable (_ delta: String, _ accumulated: String) async -> Void
+    ) async throws -> String {
+        guard isUsable(model) else {
+            throw LocalModelError.invalidResponse("Choose an installed local status model")
+        }
+        switch model.backend {
+        case .ollama:
+            return try await ollama.streamChat(
+                model: model.identifier,
+                messages: messages,
+                temperature: temperature,
+                maximumTokens: maximumTokens,
+                onDelta: onDelta
+            )
+        case .lmStudio:
+            return try await lmStudio.streamChat(
+                model: model.identifier,
+                messages: messages,
+                temperature: temperature,
+                maximumTokens: maximumTokens,
+                onDelta: onDelta
+            )
+        }
+    }
+
     func shutdown() {
         downloadTasks.values.forEach { $0.cancel() }
         downloadTasks.removeAll()
