@@ -148,7 +148,7 @@ enum CodexProgressAssets {
     private static let downloadsURL = FileManager.default.homeDirectoryForCurrentUser
         .appendingPathComponent("Downloads", isDirectory: true)
 
-    static let avatarURL = downloadsURL.appendingPathComponent("codex-openai-color.svg")
+    static let avatarURL = downloadsURL.appendingPathComponent("codex-removebg-preview.png")
 
     static func icon(for kind: CodexProgressKind) -> ToolIconSource {
         let fileName: String = switch kind {
