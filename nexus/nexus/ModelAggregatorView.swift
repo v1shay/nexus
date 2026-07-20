@@ -140,6 +140,7 @@ private struct NexusModelsPage: View {
     var body: some View {
         VStack(spacing: 0) {
             HStack {
+                activeModelLabel
                 Spacer()
                 Button("API") { isShowingAPISettings = true }
                     .buttonStyle(.plain)
@@ -165,6 +166,29 @@ private struct NexusModelsPage: View {
             }
         }
         .sheet(isPresented: $isShowingAPISettings) { NexusAPIProviderView(store: viewModel.apiProvider) }
+    }
+
+    @ViewBuilder
+    private var activeModelLabel: some View {
+        if viewModel.apiProvider.enabled {
+            Label("Using \(viewModel.apiProvider.model)", systemImage: "bolt.fill")
+                .foregroundStyle(.green)
+                .help("Current model in use via API")
+        } else if let model = viewModel.activeModel {
+            HStack(spacing: 6) {
+                Circle()
+                    .fill(.green)
+                    .frame(width: 6, height: 6)
+                Text("Using \(model.name)")
+                    .lineLimit(1)
+                Text(model.backend.title)
+                    .foregroundStyle(.secondary)
+            }
+            .help("Current model in use")
+        } else {
+            Text("No model selected")
+                .foregroundStyle(.secondary)
+        }
     }
 }
 
