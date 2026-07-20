@@ -60,6 +60,10 @@ final class NexLocalEmbeddingProvider: NexEmbeddingProviding, @unchecked Sendabl
 struct NexMemorySearchOptions: Codable, Equatable, Sendable {
     var limit: Int
     var documentTypes: Set<NexMemoryDocumentType>
+    /// Semantic categories inside canonical Obsidian memory documents, such
+    /// as `project` or `preference`. These are intentionally distinct from
+    /// the storage-level `documentTypes` (`memory` and `chat`).
+    var memoryKinds: Set<String>
     var projects: Set<String>
     var entities: Set<String>
     var includeTranscriptExcerpts: Bool
@@ -73,8 +77,29 @@ struct NexMemorySearchOptions: Codable, Equatable, Sendable {
         includeTranscriptExcerpts: Bool = true,
         evidenceOnly: Bool = false
     ) {
+        self.init(
+            limit: limit,
+            documentTypes: documentTypes,
+            memoryKinds: [],
+            projects: projects,
+            entities: entities,
+            includeTranscriptExcerpts: includeTranscriptExcerpts,
+            evidenceOnly: evidenceOnly
+        )
+    }
+
+    init(
+        limit: Int = 6,
+        documentTypes: Set<NexMemoryDocumentType> = [],
+        memoryKinds: Set<String>,
+        projects: Set<String> = [],
+        entities: Set<String> = [],
+        includeTranscriptExcerpts: Bool = true,
+        evidenceOnly: Bool = false
+    ) {
         self.limit = min(20, max(1, limit))
         self.documentTypes = documentTypes
+        self.memoryKinds = memoryKinds
         self.projects = projects
         self.entities = entities
         self.includeTranscriptExcerpts = includeTranscriptExcerpts
@@ -297,6 +322,7 @@ actor NexMemoryIndex {
         let now = Date()
         var results: [NexMemorySearchResult] = candidates.values.compactMap { candidate in
             guard options.documentTypes.isEmpty || options.documentTypes.contains(candidate.documentType) else { return nil }
+            guard options.memoryKinds.isEmpty || options.memoryKinds.contains(candidate.memoryKind?.rawValue ?? "") else { return nil }
             let isTranscript = candidate.chunkKind == "user_transcript"
                 || candidate.chunkKind == "assistant_transcript"
                 || candidate.chunkKind == "transcript_excerpt"

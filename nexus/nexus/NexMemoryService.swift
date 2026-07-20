@@ -217,7 +217,7 @@ extension NexMemoryService {
     nonisolated private static func memorySearchTool(service: NexMemoryService) -> NexRegisteredTool {
         .init(
             name: "memory_search",
-            description: "Search stored Obsidian memories and explicitly saved chats. Returns stored evidence with stable source IDs.",
+            description: "Search long-term Obsidian memory and explicitly saved past chats. The active conversation is already supplied separately. document_types accepts only memory or chat; use memory_kinds for semantic categories such as project, goal, preference, person, organization, decision, knowledge, or personal_context.",
             statusLabel: "Checking memory…",
             completionLabel: "Used memory",
             spokenStatus: "Checking memory.",
@@ -226,20 +226,27 @@ extension NexMemoryService {
             schema: .init(fields: [
                 "query": .init(.string, required: true),
                 "limit": .init(.integer, minimum: 1, maximum: 12),
-                "document_types": .init(.stringArray),
+                "document_types": .init(.stringArray, allowedValues: NexMemoryDocumentType.allCases.map(\.rawValue)),
+                "memory_kinds": .init(.stringArray, allowedValues: NexMemoryKind.allCases.map(\.rawValue)),
+                "projects": .init(.stringArray),
+                "entities": .init(.stringArray),
                 "include_transcript_excerpts": .init(.boolean),
                 "evidence_only": .init(.boolean)
             ]),
             handler: { arguments, context in
                 let query = arguments["query"]?.string ?? ""
                 let limit = arguments["limit"]?.integer ?? 6
-                let typeNames = arguments["document_types"]?.strings ?? []
-                let unknown = typeNames.first { NexMemoryDocumentType(rawValue: $0) == nil }
-                if let unknown { throw NexToolError.invalidEnum(field: "document_types", allowed: ["memory", "chat"] + ["invalid: \(unknown)"]) }
+                let filters = NexMemorySearchToolFilters(
+                    documentTypeNames: arguments["document_types"]?.strings ?? [],
+                    memoryKindNames: arguments["memory_kinds"]?.strings ?? []
+                )
                 await context.reportProgress("Ranking relevant stored evidence…", 0.55)
                 let options = NexMemorySearchOptions(
                     limit: limit,
-                    documentTypes: Set(typeNames.compactMap(NexMemoryDocumentType.init)),
+                    documentTypes: filters.documentTypes,
+                    memoryKinds: filters.memoryKinds,
+                    projects: Set(arguments["projects"]?.strings ?? []),
+                    entities: Set(arguments["entities"]?.strings ?? []),
                     includeTranscriptExcerpts: arguments["include_transcript_excerpts"] == .bool(false) ? false : true,
                     evidenceOnly: arguments["evidence_only"] == .bool(false) ? false : true
                 )
@@ -426,5 +433,43 @@ extension NexMemoryService {
             "stored_evidence": .bool(result.storedEvidence),
             "source_role": result.sourceRole.map { .string($0.rawValue) } ?? .null
         ])
+    }
+}
+
+/// Normalizes semantic category names produced by models into a safe index
+/// filter. Earlier model calls commonly put `project` in `document_types`;
+/// accepting that legacy shape avoids turning an otherwise valid read into a
+/// response-blocking tool error.
+struct NexMemorySearchToolFilters: Equatable, Sendable {
+    let documentTypes: Set<NexMemoryDocumentType>
+    let memoryKinds: Set<String>
+
+    init(documentTypeNames: [String], memoryKindNames: [String]) {
+        documentTypes = Set(documentTypeNames.compactMap(NexMemoryDocumentType.init))
+        memoryKinds = Set(
+            documentTypeNames.compactMap(Self.memoryKindName)
+                + memoryKindNames.compactMap(Self.memoryKindName)
+        )
+    }
+
+    private static func memoryKindName(_ raw: String) -> String? {
+        let value = raw
+            .lowercased()
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .replacingOccurrences(of: "-", with: "_")
+            .replacingOccurrences(of: " ", with: "_")
+        if let kind = NexMemoryKind(rawValue: value) { return kind.rawValue }
+        let aliases: [String: NexMemoryKind] = [
+            "projects": .project,
+            "goals": .goal,
+            "people": .person,
+            "persons": .person,
+            "organizations": .organization,
+            "decisions": .decision,
+            "preferences": .preference,
+            "profile": .personalContext,
+            "personal": .personalContext
+        ]
+        return aliases[value]?.rawValue
     }
 }

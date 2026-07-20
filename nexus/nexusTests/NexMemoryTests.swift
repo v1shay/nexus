@@ -2,6 +2,26 @@ import XCTest
 @testable import nexus
 
 extension NexusGeometryTests {
+    func testMemorySearchAcceptsProjectAsLegacySemanticCategory() {
+        let filters = NexMemorySearchToolFilters(
+            documentTypeNames: ["project"],
+            memoryKindNames: []
+        )
+
+        XCTAssertTrue(filters.documentTypes.isEmpty)
+        XCTAssertEqual(filters.memoryKinds, ["project"])
+    }
+
+    func testMemorySearchSeparatesStorageTypesFromSemanticCategories() {
+        let filters = NexMemorySearchToolFilters(
+            documentTypeNames: ["memory", "projects"],
+            memoryKindNames: ["decision"]
+        )
+
+        XCTAssertEqual(filters.documentTypes, [.memory])
+        XCTAssertEqual(filters.memoryKinds, ["project", "decision"])
+    }
+
     @MainActor
     func testAutomaticMemoryInferenceRunsForImplicitDurableInformationWithoutKeywords() async throws {
         let fixture = try NexMemoryFixture()

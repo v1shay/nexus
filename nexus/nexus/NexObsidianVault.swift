@@ -24,7 +24,7 @@ enum NexMemoryKind: String, Codable, CaseIterable, Sendable {
     }
 }
 
-enum NexMemoryDocumentType: String, Codable, Hashable, Sendable {
+enum NexMemoryDocumentType: String, Codable, CaseIterable, Hashable, Sendable {
     case chat
     case memory
 }
