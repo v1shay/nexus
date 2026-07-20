@@ -63,7 +63,12 @@ private struct ToolActivityIndicator: View {
                 )
                     .frame(width: NotchGeometry.wingWidth)
             }
+            // Keep both activity marks clear of the curved notch edges, and
+            // align their visual centre with the space above the live line.
+            .padding(.horizontal, 11)
+            .frame(maxWidth: .infinity)
             .frame(height: 34)
+            .offset(y: 5)
 
             VStack(spacing: 5) {
                 if activity.toolName == "Web Search", !activity.sources.isEmpty {
@@ -91,22 +96,24 @@ private struct CodexSessionPicker: View {
     let selectedSessionID: String?
 
     var body: some View {
-        HStack(spacing: 2) {
+        HStack(spacing: 6) {
             CodexAvatarView()
             if notch.codexSessions.count > 1 {
-                ForEach(Array(notch.codexSessions.prefix(2).enumerated()), id: \.element.id) { index, session in
-                    Button {
-                        notch.selectCodexSession(session.id)
-                    } label: {
-                        Text("\(index + 1)")
-                            .font(.system(size: 8, weight: .bold, design: .rounded))
-                            .foregroundStyle(session.id == selectedSessionID ? .white : .white.opacity(0.62))
-                            .frame(width: 12, height: 12)
-                            .background(session.id == selectedSessionID ? Color.blue.opacity(0.9) : Color.white.opacity(0.12))
-                            .clipShape(Circle())
+                HStack(spacing: 4) {
+                    ForEach(Array(notch.codexSessions.prefix(2).enumerated()), id: \.element.id) { index, session in
+                        Button {
+                            notch.selectCodexSession(session.id)
+                        } label: {
+                            Text("\(index + 1)")
+                                .font(.system(size: 8, weight: .bold, design: .rounded))
+                                .foregroundStyle(session.id == selectedSessionID ? .white : .white.opacity(0.62))
+                                .frame(width: 12, height: 12)
+                                .background(session.id == selectedSessionID ? Color.blue.opacity(0.9) : Color.white.opacity(0.12))
+                                .clipShape(Circle())
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel("Show Codex task \(index + 1): \(session.title)")
                     }
-                    .buttonStyle(.plain)
-                    .accessibilityLabel("Show Codex task \(index + 1): \(session.title)")
                 }
             }
         }
