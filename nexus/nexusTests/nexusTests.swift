@@ -178,6 +178,26 @@ final class NexusGeometryTests: XCTestCase {
         XCTAssertEqual(state.answer, "A model running on your own computer.")
     }
 
+    func testStreamedThinkingSentenceUsesCompactThinkingUntilAnswerBegins() {
+        var state = NotchInteractionState()
+        state.beginDictation()
+        state.updateTranscript("Work out 17 times 24")
+        state.finishDictation()
+
+        var chunker = SpeechSentenceChunker()
+        XCTAssertEqual(chunker.append("I will multiply 17 by 24"), [])
+        XCTAssertEqual(chunker.append(" first."), ["I will multiply 17 by 24 first."])
+
+        state.updateThinkingSentence("I will multiply 17 by 24 first.")
+        state.beginThinking()
+        XCTAssertEqual(state.presentation, .thinking)
+        XCTAssertEqual(state.thinkingSentence, "I will multiply 17 by 24 first.")
+
+        state.receivePartialAnswer("17 times 24 is 408.")
+        XCTAssertEqual(state.presentation, .overlay)
+        XCTAssertNil(state.thinkingSentence)
+    }
+
     func testAnswerCanContinueStreamingWhileTheOverlayStaysCollapsed() {
         var state = NotchInteractionState()
         state.beginDictation()

@@ -53,7 +53,11 @@ private struct ToolActivityIndicator: View {
             .frame(height: 34)
 
             VStack(spacing: 5) {
-                ShimmeringStatusText(text: activity.status, isFailure: activity.phase == .failed)
+                ShimmeringStatusText(
+                    text: activity.status,
+                    isFailure: activity.phase == .failed,
+                    style: activity.toolName == "Web Search" ? .google : (activity.toolName == "Nex Memory" ? .obsidian : .white)
+                )
 
                 if let query = activity.query, activity.toolName == "Web Search" {
                     Text("Query: \(query)")
@@ -164,10 +168,25 @@ private struct ToolIconView: View {
     }
 }
 
+private enum StatusShimmerStyle {
+    case white
+    case google
+    case obsidian
+
+    var colors: [Color] {
+        switch self {
+        case .white: [.clear, .white.opacity(0.88), .white, .white.opacity(0.88), .clear]
+        case .google: [.clear, .red.opacity(0.9), .yellow.opacity(0.95), .green.opacity(0.92), .blue.opacity(0.95), .clear]
+        case .obsidian: [.clear, .purple.opacity(0.7), .indigo.opacity(0.98), .purple.opacity(0.82), .clear]
+        }
+    }
+}
+
 private struct ShimmeringStatusText: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     let text: String
     let isFailure: Bool
+    var style: StatusShimmerStyle = .white
 
     @ViewBuilder
     var body: some View {
@@ -184,7 +203,7 @@ private struct ShimmeringStatusText: View {
                 ZStack {
                     Text(text).foregroundStyle(.white.opacity(0.42))
                     LinearGradient(
-                        colors: [.clear, .cyan.opacity(0.7), .white, .cyan.opacity(0.7), .clear],
+                        colors: style.colors,
                         startPoint: UnitPoint(x: phase - 0.38, y: 0.5),
                         endPoint: UnitPoint(x: phase + 0.38, y: 0.5)
                     )
@@ -267,6 +286,14 @@ private struct ListeningWings: View {
     private let wingWidth = NotchGeometry.wingWidth
 
     var body: some View {
+        if isThinking, let sentence = notch.thinkingSentence {
+            StreamingThinkingIndicator(sentence: sentence)
+        } else {
+            compactWings
+        }
+    }
+
+    private var compactWings: some View {
         ZStack {
             NotchSurface(cornerRadius: 13)
                 .fill(.black)
@@ -298,6 +325,32 @@ private struct ListeningWings: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .accessibilityElement(children: .combine)
         .accessibilityLabel(isThinking ? "Nexus is thinking" : "Nexus is dictating")
+    }
+}
+
+/// A model's native reasoning stream is never spoken or saved. It is shown
+/// sentence-by-sentence only while the user has explicitly enabled thinking.
+private struct StreamingThinkingIndicator: View {
+    @EnvironmentObject private var notch: NotchController
+    let sentence: String
+
+    var body: some View {
+        ZStack(alignment: .top) {
+            NotchSurface(cornerRadius: 18).fill(.black)
+            HStack(spacing: 0) {
+                NexusPetView(pet: notch.selectedPet, activity: .thinking, height: 31)
+                    .frame(width: NotchGeometry.wingWidth)
+                Color.clear.frame(maxWidth: .infinity)
+                ThinkingIndicator().frame(width: NotchGeometry.wingWidth)
+            }
+            .frame(height: 34)
+
+            ShimmeringStatusText(text: sentence, isFailure: false, style: .white)
+                .padding(.horizontal, 24)
+                .padding(.top, 45)
+        }
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("Nexus thinking: \(sentence)")
     }
 }
 
@@ -340,6 +393,22 @@ private struct TranscriptContents: View {
                     .buttonStyle(.plain)
                     .foregroundStyle(.white.opacity(0.72))
                     .help("Saved conversations · \(notch.memory.syncState.label)")
+
+                    if notch.activeModelSupportsThinking {
+                        Button { notch.toggleThinkingMode() } label: {
+                            Image(systemName: notch.thinkingModeEnabled ? "brain.head.profile.fill" : "brain.head.profile")
+                                .font(.system(size: 14, weight: .medium))
+                                .frame(width: 30, height: 30)
+                                .background(
+                                    notch.thinkingModeEnabled ? .purple.opacity(0.24) : .white.opacity(0.09),
+                                    in: Circle()
+                                )
+                        }
+                        .buttonStyle(.plain)
+                        .foregroundStyle(notch.thinkingModeEnabled ? .purple.opacity(0.95) : .white.opacity(0.72))
+                        .help(notch.thinkingModeEnabled ? "Stream model thinking" : "Enable streamed model thinking")
+                        .accessibilityLabel(notch.thinkingModeEnabled ? "Disable streamed model thinking" : "Enable streamed model thinking")
+                    }
 
                     BatteryPercentageView()
 

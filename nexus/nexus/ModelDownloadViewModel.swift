@@ -21,6 +21,8 @@ final class ModelDownloadViewModel: ObservableObject {
     @Published var pendingOllamaInstall: LocalModel?
     @Published var pendingRemoteRuntimeInstall: RemoteRuntimeInstallRequest?
     @Published private(set) var activeModel: LocalModel?
+    @Published private(set) var activeModelSupportsThinking = false
+    @Published var thinkingModeEnabled: Bool { didSet { persistThinkingMode() } }
     let apiProvider = NexusAPIProviderStore()
 
     var memoryGB: Int {
@@ -43,6 +45,7 @@ final class ModelDownloadViewModel: ObservableObject {
     private let installedModelsDefaultsKey = "nexus.installed-model-records"
     private let activeModelDefaultsKey = "nexus.active-model"
     private let placementsDefaultsKey = "nexus.model-placements.v2"
+    private let thinkingModeDefaultsKey = "nexus.thinking-mode-enabled"
 
     init(
         ollama: OllamaManager = .init(),
@@ -54,6 +57,7 @@ final class ModelDownloadViewModel: ObservableObject {
         self.lmStudio = lmStudio
         self.catalogService = catalogService
         self.connect = connect
+        thinkingModeEnabled = UserDefaults.standard.bool(forKey: thinkingModeDefaultsKey)
         if let data = UserDefaults.standard.data(forKey: placementsDefaultsKey),
            let saved = try? JSONDecoder().decode([String: [NexusDownloadTarget]].self, from: data) {
             placements = saved.mapValues(Set.init)
@@ -99,6 +103,7 @@ final class ModelDownloadViewModel: ObservableObject {
             await discoverInstalledStudioModels()
             await refreshCatalog(for: .ollama)
             await refreshCatalog(for: .lmStudio)
+            await refreshActiveThinkingCapability()
         }
     }
 
@@ -281,6 +286,7 @@ final class ModelDownloadViewModel: ObservableObject {
         if let data = try? JSONEncoder().encode(model) {
             UserDefaults.standard.set(data, forKey: activeModelDefaultsKey)
         }
+        Task { await refreshActiveThinkingCapability() }
     }
 
     func response(
@@ -297,6 +303,7 @@ final class ModelDownloadViewModel: ObservableObject {
         messages: [NexusChatMessage],
         temperature: Double? = nil,
         maximumTokens: Int? = nil,
+        onThinkingDelta: (@Sendable (_ delta: String, _ accumulated: String) async -> Void)? = nil,
         onDelta: @escaping @Sendable (_ delta: String, _ accumulated: String) async -> Void
     ) async throws -> String {
         if apiProvider.enabled {
@@ -332,6 +339,8 @@ final class ModelDownloadViewModel: ObservableObject {
                 messages: messages,
                 temperature: temperature,
                 maximumTokens: maximumTokens,
+                includeThinking: thinkingModeEnabled && activeModelSupportsThinking,
+                onThinkingDelta: onThinkingDelta,
                 onDelta: onDelta
             )
         case .lmStudio:
@@ -410,6 +419,22 @@ final class ModelDownloadViewModel: ObservableObject {
         downloadTasks.removeAll()
         lmStudio.stopManagedProcesses()
         ollama.stopManagedServer()
+    }
+
+    private func persistThinkingMode() {
+        UserDefaults.standard.set(thinkingModeEnabled, forKey: thinkingModeDefaultsKey)
+    }
+
+    private func refreshActiveThinkingCapability() async {
+        guard let activeModel,
+              activeModel.backend == .ollama,
+              (connect == nil || connect?.modelRoute == .thisMac) else {
+            activeModelSupportsThinking = false
+            thinkingModeEnabled = false
+            return
+        }
+        activeModelSupportsThinking = await ollama.supportsThinking(model: activeModel.identifier)
+        if !activeModelSupportsThinking { thinkingModeEnabled = false }
     }
 
     /// Reconciles preferences with the runtimes themselves. This makes models

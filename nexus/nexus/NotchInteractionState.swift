@@ -130,6 +130,7 @@ struct NotchInteractionState: Equatable {
     /// its compact working state. It is separate from `answer` so status
     /// generation can never overwrite streamed response text.
     private(set) var workingStatus: String?
+    private(set) var thinkingSentence: String?
     private(set) var toolActivity: ToolActivity?
     private(set) var toolReceipt: ToolActivity?
 
@@ -137,6 +138,7 @@ struct NotchInteractionState: Equatable {
         transcript = ""
         answer = ""
         workingStatus = nil
+        thinkingSentence = nil
         toolActivity = nil
         toolReceipt = nil
         presentation = .dictating
@@ -161,8 +163,15 @@ struct NotchInteractionState: Equatable {
         workingStatus = text
     }
 
+    mutating func updateThinkingSentence(_ text: String) {
+        let sentence = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !sentence.isEmpty else { return }
+        thinkingSentence = sentence
+    }
+
     mutating func beginToolActivity(_ activity: ToolActivity) {
         if activity.phase == .started { toolReceipt = nil }
+        thinkingSentence = nil
         toolActivity = activity
         presentation = .tool
     }
@@ -182,6 +191,7 @@ struct NotchInteractionState: Equatable {
     mutating func receiveAnswer(_ text: String, reveal: Bool = true) {
         toolActivity = nil
         workingStatus = nil
+        thinkingSentence = nil
         answer = text
         presentation = reveal ? .overlay : .idle
     }
@@ -189,6 +199,7 @@ struct NotchInteractionState: Equatable {
     mutating func receivePartialAnswer(_ text: String, reveal: Bool = true) {
         toolActivity = nil
         workingStatus = nil
+        thinkingSentence = nil
         answer = text
         presentation = reveal ? .overlay : .idle
     }
@@ -196,6 +207,7 @@ struct NotchInteractionState: Equatable {
     mutating func failResponse(_ message: String, reveal: Bool = true) {
         toolActivity = nil
         workingStatus = nil
+        thinkingSentence = nil
         answer = message
         presentation = reveal ? .overlay : .idle
     }
@@ -204,6 +216,7 @@ struct NotchInteractionState: Equatable {
         self.transcript = transcript
         self.answer = answer
         workingStatus = nil
+        thinkingSentence = nil
         toolActivity = nil
         toolReceipt = nil
         presentation = .overlay
@@ -223,6 +236,7 @@ struct NotchInteractionState: Equatable {
         toolActivity = nil
         toolReceipt = nil
         workingStatus = nil
+        thinkingSentence = nil
         presentation = .idle
     }
 }

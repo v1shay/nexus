@@ -183,6 +183,11 @@ private struct NexusModelsPage: View {
                     .lineLimit(1)
                 Text(model.backend.title)
                     .foregroundStyle(.secondary)
+                if viewModel.activeModelSupportsThinking {
+                    Image(systemName: "brain.head.profile")
+                        .foregroundStyle(.purple.opacity(0.9))
+                        .help("Supports streamed thinking")
+                }
             }
             .help("Current model in use")
         } else {
@@ -300,6 +305,11 @@ private struct NexusModelRow: View {
                 }
                 if viewModel.activeModel?.id == model.id {
                     Image(systemName: "bolt.circle.fill").foregroundStyle(.green).help("In use")
+                    if viewModel.activeModelSupportsThinking {
+                        Image(systemName: "brain.head.profile")
+                            .foregroundStyle(.purple.opacity(0.9))
+                            .help("Supports streamed thinking")
+                    }
                 }
             }
             .font(.caption)

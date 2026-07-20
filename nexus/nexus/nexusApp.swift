@@ -139,6 +139,9 @@ final class NotchController: ObservableObject {
     var transcript: String { interaction.transcript }
     var answer: String { interaction.answer }
     var workingStatus: String? { interaction.workingStatus }
+    var thinkingSentence: String? { interaction.thinkingSentence }
+    var activeModelSupportsThinking: Bool { modelDownloadViewModel.activeModelSupportsThinking }
+    var thinkingModeEnabled: Bool { modelDownloadViewModel.thinkingModeEnabled }
 
     private var panel: NexusNotchPanel?
     private var screen: NSScreen?
@@ -157,6 +160,7 @@ final class NotchController: ObservableObject {
     private var memoryWriterTask: Task<Void, Never>?
     private var responseGeneration = UUID()
     private var responseSpeechCursor = StreamedSpeechCursor()
+    private var thinkingSentenceChunker = SpeechSentenceChunker()
     private let conversationSession: NexConversationSession
     let memory: NexMemoryController
     let settings: NexusAppSettings
@@ -284,6 +288,7 @@ final class NotchController: ObservableObject {
         responseTask?.cancel()
         responseGeneration = UUID()
         responseSpeechCursor = StreamedSpeechCursor()
+        thinkingSentenceChunker = SpeechSentenceChunker()
         responseSpeaker.stop()
         suppressAutomaticResponseReveal = false
         interaction.beginDictation()
@@ -344,6 +349,7 @@ final class NotchController: ObservableObject {
         let generation = UUID()
         responseGeneration = generation
         responseSpeechCursor = StreamedSpeechCursor()
+        thinkingSentenceChunker = SpeechSentenceChunker()
         // A status must never wait for a model. The immediate fallback is
         // intentionally neutral; request-specific wording arrives only from
         // the configured model, never from a duplicate keyword router.
@@ -368,7 +374,12 @@ final class NotchController: ObservableObject {
                 defer { presentationTask.cancel() }
                 let speculativeBuffer = NexSpeculativePrimaryBuffer()
                 let speculativeTask = Task {
-                    try await self.modelDownloadViewModel.response(messages: baseMessages) { delta, accumulated in
+                    try await self.modelDownloadViewModel.response(
+                        messages: baseMessages,
+                        onThinkingDelta: { delta, _ in
+                            await self.receiveThinkingDelta(delta, generation: generation)
+                        }
+                    ) { delta, accumulated in
                         await speculativeBuffer.append(delta: delta, accumulated: accumulated)
                     }
                 }
@@ -587,7 +598,12 @@ final class NotchController: ObservableObject {
         messages: [NexusChatMessage],
         generation: UUID
     ) async throws -> String {
-        try await modelDownloadViewModel.response(messages: messages) { [weak self] delta, accumulated in
+        try await modelDownloadViewModel.response(
+            messages: messages,
+            onThinkingDelta: { [weak self] delta, _ in
+                await self?.receiveThinkingDelta(delta, generation: generation)
+            }
+        ) { [weak self] delta, accumulated in
             guard let self else { return }
             await self.receiveResponseDelta(delta, accumulated: accumulated, generation: generation)
         }
@@ -602,6 +618,20 @@ final class NotchController: ObservableObject {
         automaticRevealIsWaitingForNotchVisit = reveal
         if reveal, let screen { resize(to: expandedSize(for: screen), animated: true) }
         if !speechDelta.isEmpty { responseSpeaker.append(speechDelta) }
+    }
+
+    private func receiveThinkingDelta(_ delta: String, generation: UUID) {
+        guard !Task.isCancelled, responseGeneration == generation else { return }
+        let sentences = thinkingSentenceChunker.append(delta)
+        guard let latest = sentences.last else { return }
+        interaction.updateThinkingSentence(latest)
+        interaction.beginThinking()
+        if let screen { resize(to: thinkingActivitySize(for: screen), animated: true) }
+    }
+
+    func toggleThinkingMode() {
+        guard activeModelSupportsThinking else { return }
+        modelDownloadViewModel.thinkingModeEnabled.toggle()
     }
 
     func toggleVoiceMute() {
@@ -889,6 +919,10 @@ final class NotchController: ObservableObject {
         CGSize(width: min(500, screen.frame.width * 0.42), height: 82)
     }
 
+    private func thinkingActivitySize(for screen: NSScreen) -> CGSize {
+        CGSize(width: min(500, screen.frame.width * 0.42), height: 74)
+    }
+
     private func frame(for size: CGSize, on screen: NSScreen) -> NSRect {
         NotchGeometry.centeredTopFrame(for: size, on: screen.frame)
     }
@@ -899,7 +933,7 @@ final class NotchController: ObservableObject {
         let size: CGSize = switch interaction.presentation {
         case .idle: closedSize(for: screen)
         case .dictating: listeningSize(for: screen)
-        case .thinking: listeningSize(for: screen)
+        case .thinking: interaction.thinkingSentence == nil ? listeningSize(for: screen) : thinkingActivitySize(for: screen)
         case .tool: toolActivitySize(for: screen)
         case .overlay: expandedSize(for: screen)
         }

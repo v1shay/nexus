@@ -38,6 +38,7 @@ final class OllamaManager: @unchecked Sendable {
     private let processLock = NSLock()
     private var managedServerProcess: Process?
     private var toolCapabilityCache: [String: Bool] = [:]
+    private var thinkingCapabilityCache: [String: Bool] = [:]
 
     init(session: URLSession = .shared, fileManager: FileManager = .default) {
         self.session = session
@@ -166,6 +167,28 @@ final class OllamaManager: @unchecked Sendable {
         maximumTokens: Int? = nil,
         onDelta: @escaping @Sendable (_ delta: String, _ accumulated: String) async -> Void
     ) async throws -> String {
+        try await streamChat(
+            model: model,
+            messages: messages,
+            temperature: temperature,
+            maximumTokens: maximumTokens,
+            includeThinking: false,
+            onThinkingDelta: nil,
+            onDelta: onDelta
+        )
+    }
+
+    /// Requests Ollama's optional native reasoning stream. Kept separate from
+    /// the established response overload so existing callers keep their ABI.
+    func streamChat(
+        model: String,
+        messages: [NexusChatMessage],
+        temperature: Double? = nil,
+        maximumTokens: Int? = nil,
+        includeThinking: Bool,
+        onThinkingDelta: (@Sendable (_ delta: String, _ accumulated: String) async -> Void)?,
+        onDelta: @escaping @Sendable (_ delta: String, _ accumulated: String) async -> Void
+    ) async throws -> String {
         try await ensureServerRunning()
         var request = URLRequest(url: Self.serverURL.appendingPathComponent("api/chat"))
         request.httpMethod = "POST"
@@ -176,6 +199,7 @@ final class OllamaManager: @unchecked Sendable {
                 messages: [.init(role: "system", content: NexusResponseInstructions.conciseSystemPrompt)]
                     + messages.map { .init(role: $0.role, content: $0.content) },
                 stream: true,
+                think: includeThinking ? true : nil,
                 options: .init(temperature: temperature, numPredict: maximumTokens)
             )
         )
@@ -185,6 +209,7 @@ final class OllamaManager: @unchecked Sendable {
             $0.role == "system" && $0.content.contains("NEXUS_TOOL_PLANNING_PASS")
         }
         var accumulated = ""
+        var accumulatedThinking = ""
         var nativeActions: [NexPrimaryToolPlan.Action] = []
         for try await line in bytes.lines {
             try Task.checkCancellation()
@@ -194,6 +219,10 @@ final class OllamaManager: @unchecked Sendable {
             if let delta = event.message?.content, !delta.isEmpty {
                 accumulated += delta
                 await onDelta(delta, accumulated)
+            }
+            if let thinking = event.message?.thinking, !thinking.isEmpty {
+                accumulatedThinking += thinking
+                await onThinkingDelta?(thinking, accumulatedThinking)
             }
             if isToolPlanningPass {
                 nativeActions += (event.message?.toolCalls ?? []).map {
@@ -344,6 +373,30 @@ final class OllamaManager: @unchecked Sendable {
         return supported
     }
 
+    func supportsThinking(model: String) async -> Bool {
+        if let cached = thinkingCapabilityCache[model] { return cached }
+        let capabilities = await modelCapabilities(model: model)
+        let supported = capabilities.contains("thinking")
+        thinkingCapabilityCache[model] = supported
+        return supported
+    }
+
+    private func modelCapabilities(model: String) async -> Set<String> {
+        struct ShowRequest: Encodable { let model: String }
+        struct ShowResponse: Decodable { let capabilities: [String]? }
+        var request = URLRequest(url: Self.serverURL.appendingPathComponent("api/show"))
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try? JSONEncoder().encode(ShowRequest(model: model))
+        guard let (data, response) = try? await session.data(for: request),
+              let http = response as? HTTPURLResponse,
+              (200..<300).contains(http.statusCode),
+              let decoded = try? JSONDecoder().decode(ShowResponse.self, from: data) else {
+            return []
+        }
+        return Set(decoded.capabilities ?? [])
+    }
+
     private static func requireSuccess(_ response: URLResponse) throws {
         guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
             throw LocalModelError.invalidResponse("HTTP \((response as? HTTPURLResponse)?.statusCode ?? -1)")
@@ -389,6 +442,7 @@ private struct OllamaChatRequest: Encodable {
     let model: String
     let messages: [Message]
     let stream: Bool
+    let think: Bool?
     let options: Options
 }
 private struct OllamaToolPlanningRequest: Encodable {
@@ -451,10 +505,12 @@ private struct OllamaChatStreamEvent: Decodable {
         }
 
         let content: String
+        let thinking: String?
         let toolCalls: [ToolCall]?
 
         enum CodingKeys: String, CodingKey {
             case content
+            case thinking
             case toolCalls = "tool_calls"
         }
     }
