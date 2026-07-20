@@ -126,12 +126,17 @@ struct NotchInteractionState: Equatable {
     private(set) var presentation: NotchPresentation = .idle
     private(set) var transcript = ""
     private(set) var answer = ""
+    /// A late model-generated status remains visible while the notch is in
+    /// its compact working state. It is separate from `answer` so status
+    /// generation can never overwrite streamed response text.
+    private(set) var workingStatus: String?
     private(set) var toolActivity: ToolActivity?
     private(set) var toolReceipt: ToolActivity?
 
     mutating func beginDictation() {
         transcript = ""
         answer = ""
+        workingStatus = nil
         toolActivity = nil
         toolReceipt = nil
         presentation = .dictating
@@ -151,6 +156,11 @@ struct NotchInteractionState: Equatable {
         presentation = .thinking
     }
 
+    mutating func updateWorkingStatus(_ text: String) {
+        guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+        workingStatus = text
+    }
+
     mutating func beginToolActivity(_ activity: ToolActivity) {
         if activity.phase == .started { toolReceipt = nil }
         toolActivity = activity
@@ -165,23 +175,27 @@ struct NotchInteractionState: Equatable {
 
     mutating func acknowledge(_ text: String) {
         answer = text
+        workingStatus = text
         presentation = .overlay
     }
 
     mutating func receiveAnswer(_ text: String, reveal: Bool = true) {
         toolActivity = nil
+        workingStatus = nil
         answer = text
         presentation = reveal ? .overlay : .idle
     }
 
     mutating func receivePartialAnswer(_ text: String, reveal: Bool = true) {
         toolActivity = nil
+        workingStatus = nil
         answer = text
         presentation = reveal ? .overlay : .idle
     }
 
     mutating func failResponse(_ message: String, reveal: Bool = true) {
         toolActivity = nil
+        workingStatus = nil
         answer = message
         presentation = reveal ? .overlay : .idle
     }
@@ -189,6 +203,7 @@ struct NotchInteractionState: Equatable {
     mutating func restoreConversation(transcript: String, answer: String) {
         self.transcript = transcript
         self.answer = answer
+        workingStatus = nil
         toolActivity = nil
         toolReceipt = nil
         presentation = .overlay
@@ -207,6 +222,7 @@ struct NotchInteractionState: Equatable {
     mutating func dismiss() {
         toolActivity = nil
         toolReceipt = nil
+        workingStatus = nil
         presentation = .idle
     }
 }

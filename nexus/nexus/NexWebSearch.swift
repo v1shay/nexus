@@ -280,6 +280,19 @@ actor NexWebSearchService {
         }
         guard !ranked.isEmpty else { throw NexWebSearchError.noResults }
 
+        // Surface real result titles as they arrive. These are lifecycle
+        // updates from the actual provider response—not a fabricated progress
+        // script—so the compact notch can show what Nex is reviewing before it
+        // starts reading pages.
+        for (index, result) in ranked.prefix(3).enumerated() {
+            let title = String(result.title.prefix(110))
+            await progress("Found: \(title)", 0.36 + Double(index) * 0.06)
+            if index < min(2, ranked.count - 1) {
+                try? await Task.sleep(for: .milliseconds(240))
+                try Task.checkCancellation()
+            }
+        }
+
         await progress("Reading sources…", 0.56)
         let readCount = min(configuration.pageReadLimit, ranked.count)
         var extracted = Array(ranked.prefix(readCount))

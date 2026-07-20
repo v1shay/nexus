@@ -345,6 +345,34 @@ final class ModelDownloadViewModel: ObservableObject {
         }
     }
 
+    /// Planning is routed through native Ollama tools when the active local
+    /// model advertises support. Other providers retain the JSON contract so
+    /// existing local, remote, and API-backed inference stays compatible.
+    func toolPlan(
+        messages: [NexusChatMessage],
+        registeredTools: [NexRegisteredTool]
+    ) async throws -> NexPrimaryToolPlan {
+        guard let activeModel else {
+            throw LocalModelError.invalidResponse("Choose an installed model in the model window first")
+        }
+        if !apiProvider.enabled,
+           activeModel.backend == .ollama,
+           (connect == nil || connect?.modelRoute == .thisMac) {
+            return try await ollama.planTools(
+                model: activeModel.identifier,
+                messages: messages,
+                registeredTools: registeredTools
+            )
+        }
+        let raw = try await response(
+            messages: messages,
+            temperature: 0,
+            maximumTokens: 360,
+            onDelta: { _, _ in }
+        )
+        return NexPrimaryToolPlanner.parse(raw, registeredTools: registeredTools)
+    }
+
     /// Used only for optional, non-blocking status-line generation. It never
     /// changes the user's active conversational model or routing selection.
     func response(

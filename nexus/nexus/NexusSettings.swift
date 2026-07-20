@@ -63,47 +63,47 @@ final class NexusAppSettings: ObservableObject {
 /// Immediate, local status generation. This is deliberately separate from
 /// tool routing so status never holds up the primary model or a tool call.
 enum NexusStatusLineGenerator {
-    static func instant(for prompt: String) -> String {
-        let normalized = prompt.lowercased()
-        let options: [String]
-        if normalized.contains("remember") || normalized.contains("my ") || normalized.contains("i ") {
-            options = ["Searching the archives…", "Replaying old records…", "Checking your vault…", "Following the memory trail…"]
-        } else if normalized.contains("current") || normalized.contains("latest") || normalized.contains("news") || normalized.contains("weather") || normalized.contains("find") {
-            options = ["Scanning the horizon…", "Chasing the signal…", "Tracking that down…", "Surveying the field…"]
-        } else if normalized.contains("code") || normalized.contains("debug") || normalized.contains("build") {
-            options = ["Tinkering with that…", "Tracing the circuitry…", "Inspecting the machinery…", "Patching the matrix…"]
-        } else if normalized.contains("math") || normalized.contains("calculate") || normalized.contains("compare") {
-            options = ["Running the numbers…", "Testing the angles…", "Reading the figures…", "Calibrating the math…"]
-        } else if normalized.contains("write") || normalized.contains("create") || normalized.contains("draft") {
-            options = ["Shaping that up…", "Assembling the pieces…", "Warming up the workshop…", "Sketching the blueprint…"]
-        } else if normalized.contains("explain") || normalized.contains("why") || normalized.contains("how") {
-            options = ["Piecing that together…", "Unpacking the gears…", "Mapping the idea…", "Looking through my neural nets…"]
-        } else {
-            options = ["Looking into that…", "Reading the room…", "Spinning up a thought…", "Following the thread…"]
-        }
-        // `abs(Int.min)` traps. Converting through UInt keeps the stable choice
-        // while making this hot path safe for every possible String hash.
-        let index = Int(UInt(bitPattern: prompt.hashValue) % UInt(options.count))
-        return options[index]
-    }
+    /// The only synchronous fallback.  It deliberately carries no inferred
+    /// meaning: all request-specific status text comes from the selected model.
+    /// This avoids a second, keyword-based routing system that can disagree
+    /// with the model's actual tool decision.
+    static let fallback = "Thinking…"
 
     static func prompt(for request: String) -> [NexusChatMessage] {
         [
             .init(role: "system", content: """
-            Generate one short Nex status line for the request. It must describe work beginning, feel like a capable whimsical JARVIS-style assistant, contain 2–8 words, and never mention models, tools, prompts, or completion. Use a concrete noun from the request only when it is unambiguous. Return only the status line.
+            Generate one short Nex status line for the request. It must describe work beginning, not answer the request. Make it a specific, capable, slightly whimsical JARVIS-style phrase of 2–8 words. The first word must end in "ing" (for example: "Reviewing…", "Mapping…", "Checking…"). Use a concrete noun only when it is unambiguous. Never mention models, tools, prompts, implementation, or completion. Return only JSON: {"status":"…"}.
             """),
             .init(role: "user", content: request)
         ]
     }
 
     static func sanitize(_ raw: String) -> String? {
-        let line = raw
+        let candidate: String
+        if let data = raw.data(using: .utf8),
+           let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+           let status = object["status"] as? String {
+            candidate = status
+        } else {
+            candidate = raw
+        }
+        let line = candidate
+            .replacingOccurrences(of: "_", with: " ")
             .split(whereSeparator: \.isNewline)
             .first
             .map(String.init)?
             .trimmingCharacters(in: CharacterSet(charactersIn: " `\"'“”.,:;")) ?? ""
+        let words = line.split(whereSeparator: \.isWhitespace)
         guard line.count >= 4, line.count <= 100,
+              (2...8).contains(words.count),
               !line.localizedCaseInsensitiveContains("status") else { return nil }
-        return line.hasSuffix("…") ? line : line + "…"
+        if words.first?.lowercased().hasSuffix("ing") == true {
+            return line.hasSuffix("…") ? line : line + "…"
+        }
+        // Some small local models return a concise inferred subject in
+        // snake_case despite the requested surface form. Preserve that model
+        // inference and supply only the grammatical beginning; no request
+        // keywords or tool-routing rules are involved here.
+        return "Reviewing \(line)…"
     }
 }

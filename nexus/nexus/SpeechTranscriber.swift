@@ -15,13 +15,26 @@ final class SpeechTranscriber: NSObject, @unchecked Sendable {
     private var localSessionID = UUID()
     private var parakeetManager: AsrManager?
     private var parakeetLoadingTask: Task<AsrManager, Error>?
+    private var dictationSessionID = UUID()
+    private var automaticSilenceTask: Task<Void, Never>?
+    private var automaticSilenceDuration: TimeInterval?
+    private var automaticSubmit: (() -> Void)?
+    private var hasDetectedSpeech = false
 
     func start(
         engine: NexusSpeechEngine = .appleSpeech,
+        automaticallySubmitAfterSilence: TimeInterval? = nil,
+        onAutomaticSubmit: (() -> Void)? = nil,
         onUpdate: @escaping (String) -> Void
     ) {
         wantsRecording = true
         self.onUpdate = onUpdate
+        dictationSessionID = UUID()
+        automaticSilenceTask?.cancel()
+        automaticSilenceTask = nil
+        automaticSilenceDuration = automaticallySubmitAfterSilence
+        automaticSubmit = onAutomaticSubmit
+        hasDetectedSpeech = false
 
         if engine == .parakeetLocal {
             startLocalParakeetRecording()
@@ -51,6 +64,7 @@ final class SpeechTranscriber: NSObject, @unchecked Sendable {
 
     func stop() {
         wantsRecording = false
+        cancelAutomaticSubmit()
         if let localJob = stopRecording() {
             // Dismissal and shutdown intentionally discard endpoint audio.
             // A completed dictation turn uses `stopAndTranscribe()` instead.
@@ -62,6 +76,7 @@ final class SpeechTranscriber: NSObject, @unchecked Sendable {
     /// Apple Speech remains streaming and therefore returns nil here.
     func stopAndTranscribe() async -> String? {
         wantsRecording = false
+        cancelAutomaticSubmit()
         guard let localJob = stopRecording() else { return nil }
         defer { try? FileManager.default.removeItem(at: localJob.recording) }
         do {
@@ -84,8 +99,9 @@ final class SpeechTranscriber: NSObject, @unchecked Sendable {
 
         let inputNode = audioEngine.inputNode
         let format = inputNode.outputFormat(forBus: 0)
-        inputNode.installTap(onBus: 0, bufferSize: 1_024, format: format) { buffer, _ in
+        inputNode.installTap(onBus: 0, bufferSize: 1_024, format: format) { [weak self] buffer, _ in
             request.append(buffer)
+            self?.observeAudioLevel(buffer)
         }
         hasInputTap = true
 
@@ -141,6 +157,7 @@ final class SpeechTranscriber: NSObject, @unchecked Sendable {
             localRecordingURL = url
             inputNode.installTap(onBus: 0, bufferSize: 1_024, format: format) { [weak self] buffer, _ in
                 try? self?.localRecordingFile?.write(from: buffer)
+                self?.observeAudioLevel(buffer)
             }
             hasInputTap = true
             audioEngine.prepare()
@@ -196,6 +213,51 @@ final class SpeechTranscriber: NSObject, @unchecked Sendable {
             throw LocalizedErrorMessage("Parakeet returned an empty transcript.")
         }
         return result.text
+    }
+
+    /// Wake-initiated dictation is hands-free: after the user has spoken at
+    /// least once, 0.7 s of real microphone silence submits the turn. Manual
+    /// hold-to-talk never enables this path.
+    private func observeAudioLevel(_ buffer: AVAudioPCMBuffer) {
+        guard automaticSilenceDuration != nil,
+              let channel = buffer.floatChannelData?.pointee,
+              buffer.frameLength > 0 else { return }
+        let samples = UnsafeBufferPointer(start: channel, count: Int(buffer.frameLength))
+        let peak = samples.reduce(Float.zero) { max($0, abs($1)) }
+        let audible = peak >= 0.014
+        DispatchQueue.main.async { [weak self] in
+            self?.handleAudioLevel(audible: audible)
+        }
+    }
+
+    private func handleAudioLevel(audible: Bool) {
+        guard wantsRecording, let duration = automaticSilenceDuration else { return }
+        if audible {
+            hasDetectedSpeech = true
+            automaticSilenceTask?.cancel()
+            automaticSilenceTask = nil
+            return
+        }
+        guard hasDetectedSpeech, automaticSilenceTask == nil else { return }
+        let session = dictationSessionID
+        automaticSilenceTask = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(duration))
+            guard !Task.isCancelled,
+                  let self,
+                  self.wantsRecording,
+                  self.hasDetectedSpeech,
+                  self.dictationSessionID == session else { return }
+            self.automaticSilenceTask = nil
+            self.automaticSubmit?()
+        }
+    }
+
+    private func cancelAutomaticSubmit() {
+        automaticSilenceTask?.cancel()
+        automaticSilenceTask = nil
+        automaticSilenceDuration = nil
+        automaticSubmit = nil
+        hasDetectedSpeech = false
     }
 }
 private struct LocalizedErrorMessage: LocalizedError {

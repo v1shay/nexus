@@ -274,7 +274,7 @@ final class NexusGeometryTests: XCTestCase {
         let instructions = NexusResponseInstructions.conciseSystemPrompt
 
         XCTAssertTrue(instructions.contains("Vishay's highly advanced personal assistant"))
-        XCTAssertTrue(instructions.contains("Address Vishay as Sir"))
+        XCTAssertTrue(instructions.localizedCaseInsensitiveContains("address Vishay as Sir"))
         XCTAssertTrue(instructions.contains("natural language by default"))
         XCTAssertTrue(instructions.contains("say so rather than guessing"))
         XCTAssertTrue(instructions.contains("Never turn advice, recommendations, workouts"))
@@ -282,11 +282,12 @@ final class NexusGeometryTests: XCTestCase {
         XCTAssertLessThan(instructions.split(whereSeparator: \.isWhitespace).count, 300)
     }
 
-    func testInstantStatusLinesAreImmediateAndContextual() {
-        XCTAssertTrue(["Tinkering with that…", "Tracing the circuitry…", "Inspecting the machinery…", "Patching the matrix…"].contains(NexusStatusLineGenerator.instant(for: "Debug this Swift build")))
-        XCTAssertTrue(["Piecing that together…", "Unpacking the gears…", "Mapping the idea…", "Looking through my neural nets…"].contains(NexusStatusLineGenerator.instant(for: "Explain neural networks")))
-        XCTAssertTrue(["Running the numbers…", "Testing the angles…", "Reading the figures…", "Calibrating the math…"].contains(NexusStatusLineGenerator.instant(for: "Calculate the best option")))
-        XCTAssertTrue(["Looking into that…", "Reading the room…", "Spinning up a thought…", "Following the thread…"].contains(NexusStatusLineGenerator.instant(for: "Tell me something")))
+    func testStatusFallbackHasNoKeywordRoutingAndSanitizesModelSubjects() {
+        XCTAssertEqual(NexusStatusLineGenerator.fallback, "Thinking…")
+        XCTAssertEqual(
+            NexusStatusLineGenerator.sanitize(#"{"status":"swift_release_changes"}"#),
+            "Reviewing swift release changes…"
+        )
         XCTAssertEqual(NexusStatusLineGenerator.sanitize("Exploring the Atlas project"), "Exploring the Atlas project…")
         XCTAssertNil(NexusStatusLineGenerator.sanitize("natural status describing work"))
     }

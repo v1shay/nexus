@@ -37,6 +37,7 @@ final class OllamaManager: @unchecked Sendable {
     private let fileManager: FileManager
     private let processLock = NSLock()
     private var managedServerProcess: Process?
+    private var toolCapabilityCache: [String: Bool] = [:]
 
     init(session: URLSession = .shared, fileManager: FileManager = .default) {
         self.session = session
@@ -213,6 +214,63 @@ final class OllamaManager: @unchecked Sendable {
         return answer
     }
 
+    /// Uses Ollama's native function-calling protocol when the selected model
+    /// actually advertises that capability. Models without it keep the legacy
+    /// JSON planning fallback; they are never told they searched when they did
+    /// not emit a valid action.
+    func planTools(
+        model: String,
+        messages: [NexusChatMessage],
+        registeredTools: [NexRegisteredTool]
+    ) async throws -> NexPrimaryToolPlan {
+        try await ensureServerRunning()
+        guard await supportsNativeTools(model: model) else {
+            let raw = try await streamChat(
+                model: model,
+                messages: messages,
+                temperature: 0,
+                maximumTokens: 360,
+                onDelta: { _, _ in }
+            )
+            return NexPrimaryToolPlanner.parse(raw, registeredTools: registeredTools)
+        }
+
+        var request = URLRequest(url: Self.serverURL.appendingPathComponent("api/chat"))
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try JSONEncoder().encode(
+            OllamaToolPlanningRequest(
+                model: model,
+                messages: [.init(role: "system", content: NexusResponseInstructions.conciseSystemPrompt)]
+                    + messages.map { .init(role: $0.role, content: $0.content) },
+                stream: true,
+                think: false,
+                options: .init(temperature: 0, numPredict: 160),
+                tools: registeredTools
+                    .filter { $0.permission != .writeMemory && $0.permission != .forgetMemory }
+                    .map(OllamaToolPlanningRequest.Tool.init)
+            )
+        )
+        let (bytes, response) = try await session.bytes(for: request)
+        try Self.requireSuccess(response)
+        var actions: [NexPrimaryToolPlan.Action] = []
+        for try await line in bytes.lines {
+            try Task.checkCancellation()
+            guard let data = line.data(using: .utf8), !data.isEmpty else { continue }
+            let event = try JSONDecoder().decode(OllamaChatStreamEvent.self, from: data)
+            if let error = event.error { throw LocalModelError.invalidResponse(error) }
+            actions += (event.message?.toolCalls ?? []).map {
+                .init(tool: $0.function.name, arguments: $0.function.arguments)
+            }
+        }
+        return NexPrimaryToolPlanner.parse(
+            String(decoding: try JSONEncoder().encode(
+                NexPrimaryToolPlanner.nativeCallPlan(actions)
+            ), as: UTF8.self),
+            registeredTools: registeredTools
+        )
+    }
+
     func generateRaw(
         model: String,
         prompt: String,
@@ -265,6 +323,27 @@ final class OllamaManager: @unchecked Sendable {
         return (200..<300).contains(http.statusCode)
     }
 
+    private func supportsNativeTools(model: String) async -> Bool {
+        if let cached = toolCapabilityCache[model] { return cached }
+        struct ShowRequest: Encodable { let model: String }
+        struct ShowResponse: Decodable { let capabilities: [String]? }
+        var request = URLRequest(url: Self.serverURL.appendingPathComponent("api/show"))
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try? JSONEncoder().encode(ShowRequest(model: model))
+        let supported: Bool
+        if let (data, response) = try? await session.data(for: request),
+           let http = response as? HTTPURLResponse,
+           (200..<300).contains(http.statusCode),
+           let decoded = try? JSONDecoder().decode(ShowResponse.self, from: data) {
+            supported = decoded.capabilities?.contains("tools") == true
+        } else {
+            supported = false
+        }
+        toolCapabilityCache[model] = supported
+        return supported
+    }
+
     private static func requireSuccess(_ response: URLResponse) throws {
         guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
             throw LocalModelError.invalidResponse("HTTP \((response as? HTTPURLResponse)?.statusCode ?? -1)")
@@ -311,6 +390,54 @@ private struct OllamaChatRequest: Encodable {
     let messages: [Message]
     let stream: Bool
     let options: Options
+}
+private struct OllamaToolPlanningRequest: Encodable {
+    struct Message: Encodable { let role: String; let content: String }
+    struct Options: Encodable {
+        let temperature: Double
+        let numPredict: Int
+        enum CodingKeys: String, CodingKey { case temperature; case numPredict = "num_predict" }
+    }
+    struct Tool: Encodable {
+        struct Function: Encodable {
+            struct Parameters: Encodable {
+                struct Property: Encodable {
+                    let type: String
+                    let enumValues: [String]?
+                    enum CodingKeys: String, CodingKey { case type; case enumValues = "enum" }
+                }
+                let type = "object"
+                let properties: [String: Property]
+                let required: [String]
+                let additionalProperties = false
+            }
+            let name: String
+            let description: String
+            let parameters: Parameters
+        }
+        let type = "function"
+        let function: Function
+
+        init(_ registered: NexRegisteredTool) {
+            let properties = Dictionary(uniqueKeysWithValues: registered.schema.fields.map { name, field in
+                (name, Function.Parameters.Property(type: field.type.rawValue, enumValues: field.allowedValues.isEmpty ? nil : field.allowedValues))
+            })
+            function = .init(
+                name: registered.name,
+                description: registered.description,
+                parameters: .init(
+                    properties: properties,
+                    required: registered.schema.fields.compactMap { $0.value.required ? $0.key : nil }.sorted()
+                )
+            )
+        }
+    }
+    let model: String
+    let messages: [Message]
+    let stream: Bool
+    let think: Bool
+    let options: Options
+    let tools: [Tool]
 }
 private struct OllamaChatStreamEvent: Decodable {
     struct Message: Decodable {

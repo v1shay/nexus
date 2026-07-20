@@ -138,6 +138,7 @@ final class NotchController: ObservableObject {
     var toolReceipt: ToolActivity? { interaction.toolReceipt }
     var transcript: String { interaction.transcript }
     var answer: String { interaction.answer }
+    var workingStatus: String? { interaction.workingStatus }
 
     private var panel: NexusNotchPanel?
     private var screen: NSScreen?
@@ -269,7 +270,7 @@ final class NotchController: ObservableObject {
         monitor.install()
     }
 
-    private func startGlobalDictation() async {
+    private func startGlobalDictation(automaticallySubmitAfterSilence: Bool = false) async {
         wakePhraseListener.stop()
         closeTask?.cancel()
         // Foreground speech always wins model capacity. If a prior background
@@ -290,13 +291,25 @@ final class NotchController: ObservableObject {
             resize(to: listeningSize(for: screen), animated: true)
         }
         speechTranscriber.start(
-            engine: settings.speechEngine
+            engine: settings.speechEngine,
+            automaticallySubmitAfterSilence: automaticallySubmitAfterSilence ? 0.7 : nil,
+            onAutomaticSubmit: { [weak self] in
+                Task { @MainActor in await self?.finishGlobalDictation() }
+            }
         ) { [weak self] text in
             Task { @MainActor in self?.interaction.updateTranscript(text) }
         }
     }
 
     private func finishGlobalDictation() async {
+        // FluidAudio's current Parakeet API is batch transcription. Move out
+        // of the listening screen while the local model finalizes audio so it
+        // never looks as though the response model is buffering.
+        if settings.speechEngine == .parakeetLocal {
+            interaction.finishDictation()
+            interaction.acknowledge("Transcribing locally…")
+            if let screen { resize(to: expandedSize(for: screen), animated: true) }
+        }
         if let endpointTranscript = await speechTranscriber.stopAndTranscribe() {
             interaction.updateTranscript(endpointTranscript)
         }
@@ -317,7 +330,7 @@ final class NotchController: ObservableObject {
         wakePhraseListener.start { [weak self] phrase in
             guard let self else { return }
             NSLog("Nex heard wake phrase: %@", phrase.rawValue)
-            Task { @MainActor in await self.startGlobalDictation() }
+            Task { @MainActor in await self.startGlobalDictation(automaticallySubmitAfterSilence: true) }
         }
     }
 
@@ -331,10 +344,10 @@ final class NotchController: ObservableObject {
         let generation = UUID()
         responseGeneration = generation
         responseSpeechCursor = StreamedSpeechCursor()
-        // A status must never wait for a model. Optional primary/secondary
-        // generators may refine this before the compact transition, but the
-        // user always sees a request-related line immediately.
-        let immediateStatus = NexusStatusLineGenerator.instant(for: prompt)
+        // A status must never wait for a model. The immediate fallback is
+        // intentionally neutral; request-specific wording arrives only from
+        // the configured model, never from a duplicate keyword router.
+        let immediateStatus = NexusStatusLineGenerator.fallback
         interaction.acknowledge(immediateStatus)
         if let screen { resize(to: expandedSize(for: screen), animated: true) }
         responseSpeaker.speakImmediately(immediateStatus)
@@ -367,13 +380,10 @@ final class NotchController: ObservableObject {
                     context: baseMessages,
                     tools: definitions
                 )
-                let rawPlan = try await modelDownloadViewModel.response(
+                let plan = try await modelDownloadViewModel.toolPlan(
                     messages: planningMessages,
-                    temperature: 0,
-                    maximumTokens: 360,
-                    onDelta: { _, _ in }
+                    registeredTools: definitions
                 )
-                let plan = NexPrimaryToolPlanner.parse(rawPlan, registeredTools: definitions)
                 guard !Task.isCancelled, responseGeneration == generation else { return }
                 NSLog(
                     "Primary model tool plan: %@",
@@ -430,16 +440,13 @@ final class NotchController: ObservableObject {
                             memoryLookupPerformed: memoryLookupPerformed,
                             webContext: result.context
                         )
-                        let rawFollowUpPlan = try await modelDownloadViewModel.response(
+                        pendingPlan = try await modelDownloadViewModel.toolPlan(
                             messages: NexPrimaryToolPlanner.planningMessages(
                                 context: planningContext,
                                 tools: definitions
                             ),
-                            temperature: 0,
-                            maximumTokens: 360,
-                            onDelta: { _, _ in }
+                            registeredTools: definitions
                         )
-                        pendingPlan = NexPrimaryToolPlanner.parse(rawFollowUpPlan, registeredTools: definitions)
                         if plannerAdvisory == nil { plannerAdvisory = pendingPlan.memoryWrite }
                     }
                     guard !Task.isCancelled, responseGeneration == generation else { return }
@@ -519,9 +526,15 @@ final class NotchController: ObservableObject {
                     return
                 }
                 guard responseGeneration == generation,
-                      presentation == .overlay,
                       let status = NexusStatusLineGenerator.sanitize(raw) else { return }
-                interaction.acknowledge(status)
+                if presentation == .overlay {
+                    interaction.acknowledge(status)
+                } else if isThinking {
+                    // Small models are often slower than the visual hand-off.
+                    // Keep a valid late status visible in the compact notch
+                    // instead of silently discarding it after 800 ms.
+                    interaction.updateWorkingStatus(status)
+                }
             } catch {
                 // A status model is optional and never allowed to delay Nex.
             }

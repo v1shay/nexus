@@ -52,12 +52,64 @@ private struct ToolActivityIndicator: View {
             }
             .frame(height: 34)
 
-            ShimmeringStatusText(text: activity.status, isFailure: activity.phase == .failed)
-                .padding(.horizontal, 24)
-                .padding(.top, 45)
+            VStack(spacing: 5) {
+                ShimmeringStatusText(text: activity.status, isFailure: activity.phase == .failed)
+
+                if let query = activity.query, activity.toolName == "Web Search" {
+                    Text("Query: \(query)")
+                        .font(.system(size: 10.5, weight: .medium, design: .rounded))
+                        .foregroundStyle(.white.opacity(0.54))
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                        .frame(maxWidth: .infinity)
+                }
+
+                if activity.toolName == "Web Search", !activity.sources.isEmpty {
+                    SearchResultTicker(sources: activity.sources)
+                }
+            }
+            .padding(.horizontal, 24)
+            .padding(.top, 43)
         }
         .accessibilityElement(children: .combine)
         .accessibilityLabel("\(activity.toolName). \(activity.status)")
+    }
+}
+
+/// Keeps the live search view informative without reading or exposing URLs.
+/// Titles arrive from the actual completed tool result, not fabricated UI data.
+private struct SearchResultTicker: View {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    let sources: [ToolReceiptSource]
+
+    var body: some View {
+        Group {
+            if reduceMotion {
+                sourceLine(index: 0)
+            } else {
+                TimelineView(.periodic(from: .now, by: 1.35)) { timeline in
+                    let elapsed = max(0, timeline.date.timeIntervalSinceReferenceDate)
+                    sourceLine(index: Int(elapsed / 1.35) % sources.count)
+                        .transition(.opacity)
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func sourceLine(index: Int) -> some View {
+        let source = sources[min(max(0, index), sources.count - 1)]
+        HStack(spacing: 5) {
+            Image(systemName: "newspaper")
+                .font(.system(size: 9, weight: .semibold))
+            Text(source.title)
+                .lineLimit(1)
+                .truncationMode(.tail)
+        }
+        .font(.system(size: 10.5, weight: .medium, design: .rounded))
+        .foregroundStyle(.cyan.opacity(0.82))
+        .frame(maxWidth: .infinity, alignment: .center)
+        .accessibilityLabel("Search result: \(source.title)")
     }
 }
 
@@ -227,8 +279,15 @@ private struct ListeningWings: View {
                 )
                     .frame(width: wingWidth)
 
-                Color.clear
-                    .frame(maxWidth: .infinity)
+                Group {
+                    if isThinking, let status = notch.workingStatus {
+                        ShimmeringStatusText(text: status, isFailure: false)
+                            .padding(.horizontal, 8)
+                    } else {
+                        Color.clear
+                    }
+                }
+                .frame(maxWidth: .infinity)
 
                 Group {
                     if isThinking { ThinkingIndicator() } else { DictationBars() }
