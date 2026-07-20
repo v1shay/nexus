@@ -54,7 +54,7 @@ private struct ToolActivityIndicator: View {
                         NexusPetView(pet: notch.selectedPet, activity: .tool, height: 31)
                     }
                 }
-                .frame(width: NotchGeometry.wingWidth)
+                .frame(width: isCodex ? 126 : NotchGeometry.wingWidth)
                 Color.clear.frame(maxWidth: .infinity)
                 Group {
                     if isCodex, activity.phase == .completed {
@@ -125,6 +125,14 @@ private struct CodexSessionPicker: View {
                         .accessibilityLabel("Show Codex task \(index + 1): \(session.title)")
                     }
                 }
+            }
+            if let usage = notch.codexUsageLimit {
+                Text(usage.compactLabel)
+                    .font(.system(size: 10, weight: .semibold, design: .rounded))
+                    .monospacedDigit()
+                    .foregroundStyle(.cyan.opacity(0.9))
+                    .fixedSize()
+                    .accessibilityLabel("Codex weekly limit: \(Int(usage.usedPercent.rounded())) percent used, resets \(usage.resetsAt.formatted(date: .abbreviated, time: .omitted))")
             }
         }
     }

@@ -129,6 +129,7 @@ final class NotchController: ObservableObject {
         withID: UserDefaults.standard.string(forKey: "nexus.selectedPetID")
     )
     @Published private(set) var codexSessions: [CodexSessionProgress] = []
+    @Published private(set) var codexUsageLimit: CodexUsageLimit?
 
     var presentation: NotchPresentation { interaction.presentation }
     var isExpanded: Bool { interaction.presentation == .overlay }
@@ -811,9 +812,14 @@ final class NotchController: ObservableObject {
     private func startCodexProgressMonitor() {
         guard codexProgressMonitor == nil else { return }
         let monitor = CodexProgressMonitor()
-        monitor.start { [weak self] update, sessions in
-            self?.handleCodexProgress(update, sessions: sessions)
-        }
+        monitor.start(
+            onUpdate: { [weak self] update, sessions in
+                self?.handleCodexProgress(update, sessions: sessions)
+            },
+            onUsage: { [weak self] usage in
+                self?.codexUsageLimit = usage
+            }
+        )
         codexProgressMonitor = monitor
     }
 

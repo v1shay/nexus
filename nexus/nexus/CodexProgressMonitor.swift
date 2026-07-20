@@ -65,6 +65,31 @@ struct CodexSessionProgress: Identifiable, Equatable, Sendable {
     var isComplete: Bool { latestUpdate.phase == .completed || latestUpdate.phase == .failed }
 }
 
+/// The primary Codex rolling quota emitted in the local JSONL stream. This is
+/// read-only account telemetry; Nexus never requests, changes, or estimates it.
+struct CodexUsageLimit: Equatable, Sendable {
+    let usedPercent: Double
+    let resetsAt: Date
+
+    var compactLabel: String {
+        let date = Calendar.current.dateComponents([.month, .day], from: resetsAt)
+        return "\(Int(usedPercent.rounded()))% · \(date.month ?? 0)/\(date.day ?? 0)"
+    }
+
+    static func parse(line: String) -> CodexUsageLimit? {
+        guard let data = line.data(using: .utf8),
+              let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let payload = root["payload"] as? [String: Any],
+              payload["type"] as? String == "token_count",
+              let info = payload["info"] as? [String: Any],
+              let limits = info["rate_limits"] as? [String: Any],
+              let primary = limits["primary"] as? [String: Any],
+              let used = primary["used_percent"] as? Double,
+              let reset = primary["resets_at"] as? TimeInterval else { return nil }
+        return CodexUsageLimit(usedPercent: min(max(used, 0), 100), resetsAt: Date(timeIntervalSince1970: reset))
+    }
+}
+
 enum CodexProgressParser {
     static func parse(line: String) -> CodexProgressUpdate? {
         guard let data = line.data(using: .utf8),
@@ -168,6 +193,7 @@ enum CodexProgressParser {
 @MainActor
 final class CodexProgressMonitor {
     typealias UpdateHandler = (CodexProgressUpdate, [CodexSessionProgress]) -> Void
+    typealias UsageHandler = (CodexUsageLimit) -> Void
 
     private struct SessionState {
         let url: URL
@@ -183,6 +209,7 @@ final class CodexProgressMonitor {
     private var sessions: [URL: SessionState] = [:]
     private var lastDiscovery = Date.distantPast
     private var handler: UpdateHandler?
+    private var usageHandler: UsageHandler?
 
     init(
         sessionsRoot: URL? = nil,
@@ -193,9 +220,10 @@ final class CodexProgressMonitor {
             .appendingPathComponent(".codex/sessions", isDirectory: true)
     }
 
-    func start(onUpdate: @escaping UpdateHandler) {
+    func start(onUpdate: @escaping UpdateHandler, onUsage: @escaping UsageHandler) {
         guard task == nil else { return }
         handler = onUpdate
+        usageHandler = onUsage
         task = Task { [weak self] in
             while !Task.isCancelled {
                 self?.poll()
@@ -208,6 +236,7 @@ final class CodexProgressMonitor {
         task?.cancel()
         task = nil
         handler = nil
+        usageHandler = nil
     }
 
     private func poll() {
@@ -258,6 +287,7 @@ final class CodexProgressMonitor {
             guard let text = String(data: completedData, encoding: .utf8) else { return }
             text.split(separator: "\n", omittingEmptySubsequences: true).forEach {
                 let line = String($0)
+                if let usage = CodexUsageLimit.parse(line: line) { usageHandler?(usage) }
                 if let title = CodexProgressParser.taskTitle(line: line) { state.title = title }
                 guard var update = CodexProgressParser.parse(line: line) else { return }
                 update = .init(

@@ -554,6 +554,15 @@ final class NexusGeometryTests: XCTestCase {
         XCTAssertEqual(CodexProgressParser.parse(line: image)?.kind, .image)
     }
 
+    func testCodexUsageLimitUsesThePrimaryWeeklyLimitAndResetDate() {
+        let tokenCount = #"{"type":"event_msg","payload":{"type":"token_count","info":{"rate_limits":{"primary":{"used_percent":32.0,"window_minutes":10080,"resets_at":1785000000}}}}}"#
+
+        let usage = CodexUsageLimit.parse(line: tokenCount)
+        XCTAssertEqual(usage?.usedPercent, 32)
+        XCTAssertEqual(usage?.resetsAt.timeIntervalSince1970, 1_785_000_000)
+        XCTAssertTrue(usage?.compactLabel.contains("32% ·") == true)
+    }
+
     func testCompletedToolReceiptSurvivesThinkingAndStreamingUntilNewDictation() {
         let executionID = UUID()
         let started = NexToolLifecycleEvent(
