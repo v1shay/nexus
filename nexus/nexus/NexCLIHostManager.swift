@@ -80,6 +80,7 @@ struct NexCLIHostManager: @unchecked Sendable {
     }
 
     var statusURL: URL { supportDirectory.appendingPathComponent("status.json") }
+    var lockURL: URL { supportDirectory.appendingPathComponent("worker.lock") }
     var standardOutputURL: URL { supportDirectory.appendingPathComponent("worker.log") }
     var standardErrorURL: URL { supportDirectory.appendingPathComponent("worker-error.log") }
 
@@ -106,6 +107,31 @@ struct NexCLIHostManager: @unchecked Sendable {
               let status = try? NexusPayloadCoder.decoder.decode(NexCLIHostStatus.self, from: data),
               status.isLive else { return nil }
         return status
+    }
+
+    /// The app-side client calls this immediately before creating a task. It
+    /// reuses a healthy daemon and otherwise asks launchd to start exactly one
+    /// managed worker, then waits for its authenticated Nex health endpoint.
+    func ensureReady() async throws {
+        let password = try NexCLILoopbackCredential.loadOrCreate()
+        if await Self.isHealthy(password: password) { return }
+        try installAndStart()
+        for _ in 0..<25 {
+            try await Task.sleep(for: .milliseconds(400))
+            if await Self.isHealthy(password: password) { return }
+        }
+        throw NexusConnectError.unavailable("Nex local daemon did not become healthy. Check the NexCLI worker log and try again.")
+    }
+
+    static func isHealthy(password: String) async -> Bool {
+        guard let url = URL(string: "http://127.0.0.1:4096/global/health") else { return false }
+        var request = URLRequest(url: url)
+        request.timeoutInterval = 1
+        request.setValue("Basic \(Data("opencode:\(password)".utf8).base64EncodedString())", forHTTPHeaderField: "Authorization")
+        do {
+            let (_, response) = try await URLSession.shared.data(for: request)
+            return (response as? HTTPURLResponse)?.statusCode == 200
+        } catch { return false }
     }
 
     func launchAgentPropertyList() -> Data {
@@ -150,6 +176,7 @@ final class NexCLIHostDaemon {
     private var worker: Process?
     private var monitor: Task<Void, Never>?
     private var isStopping = false
+    private var ownsLock = false
 
     init(manager: NexCLIHostManager = .shared, fileManager: FileManager = .default) {
         self.manager = manager
@@ -159,11 +186,22 @@ final class NexCLIHostDaemon {
     func start() async {
         do {
             let password = try NexCLILoopbackCredential.loadOrCreate()
+            if await NexCLIHostManager.isHealthy(password: password) {
+                writeStatus(state: "ready", detail: nil, runtime: "existing Nex daemon")
+                monitor = Task { [weak self] in await self?.monitorWorker(runtime: nil, password: password) }
+                return
+            }
+            guard try acquireLock() else {
+                writeStatus(state: "starting", detail: "Another Nex daemon is starting.", runtime: nil)
+                monitor = Task { [weak self] in await self?.monitorWorker(runtime: nil, password: password) }
+                return
+            }
             let runtime = try resolveRuntime()
             try startWorker(runtime: runtime, password: password)
             writeStatus(state: "starting", detail: nil, runtime: runtime.description)
             monitor = Task { [weak self] in await self?.monitorWorker(runtime: runtime, password: password) }
         } catch {
+            releaseLock()
             writeStatus(state: "failed", detail: error.localizedDescription, runtime: nil)
         }
     }
@@ -174,6 +212,7 @@ final class NexCLIHostDaemon {
         monitor = nil
         worker?.terminate()
         worker = nil
+        releaseLock()
     }
 
     private func resolveRuntime() throws -> NexCLIManagedRuntime {
@@ -217,6 +256,8 @@ final class NexCLIHostDaemon {
         process.arguments = runtime.arguments + ["--hostname", "127.0.0.1", "--port", "4096"]
         var environment = ProcessInfo.processInfo.environment
         environment["OPENCODE_SERVER_PASSWORD"] = password
+        environment["OPENCODE_CONFIG_DIR"] = fileManager.homeDirectoryForCurrentUser
+            .appendingPathComponent(".config/nex", isDirectory: true).path
         environment["NO_COLOR"] = "1"
         process.environment = environment
         process.currentDirectoryURL = fileManager.homeDirectoryForCurrentUser
@@ -226,31 +267,51 @@ final class NexCLIHostDaemon {
         worker = process
     }
 
-    private func monitorWorker(runtime: NexCLIManagedRuntime, password: String) async {
+    private func monitorWorker(runtime: NexCLIManagedRuntime?, password: String) async {
         for attempt in 0..<Int.max where !Task.isCancelled && !isStopping {
-            if await workerResponds() {
-                writeStatus(state: "ready", detail: nil, runtime: runtime.description)
+            if await workerResponds(password: password) {
+                writeStatus(state: "ready", detail: nil, runtime: runtime?.description ?? "existing Nex daemon")
             } else if worker?.isRunning == true {
-                writeStatus(state: "starting", detail: "Starting local NexCLI…", runtime: runtime.description)
-            } else {
+                writeStatus(state: "starting", detail: "Starting local NexCLI…", runtime: runtime?.description)
+            } else if let runtime {
                 writeStatus(state: "restarting", detail: "Restarting local NexCLI…", runtime: runtime.description)
                 try? await Task.sleep(for: .seconds(min(20, max(1, attempt + 1))))
                 guard !Task.isCancelled, !isStopping else { return }
                 do { try startWorker(runtime: runtime, password: password) }
                 catch { writeStatus(state: "failed", detail: error.localizedDescription, runtime: runtime.description) }
+            } else {
+                writeStatus(state: "starting", detail: "Waiting for the existing Nex daemon.", runtime: nil)
             }
             try? await Task.sleep(for: .seconds(1))
         }
     }
 
-    private func workerResponds() async -> Bool {
-        guard let url = URL(string: "http://127.0.0.1:4096/global/health") else { return false }
-        var request = URLRequest(url: url)
-        request.timeoutInterval = 0.8
-        do {
-            let (_, response) = try await URLSession.shared.data(for: request)
-            return (response as? HTTPURLResponse)?.statusCode == 200
-        } catch { return false }
+    private func workerResponds(password: String) async -> Bool {
+        await NexCLIHostManager.isHealthy(password: password)
+    }
+
+    private func acquireLock() throws -> Bool {
+        try fileManager.createDirectory(at: manager.supportDirectory, withIntermediateDirectories: true)
+        let descriptor = open(manager.lockURL.path, O_CREAT | O_EXCL | O_WRONLY, S_IRUSR | S_IWUSR)
+        if descriptor >= 0 {
+            let pid = "\(ProcessInfo.processInfo.processIdentifier)".data(using: .utf8)!
+            _ = pid.withUnsafeBytes { write(descriptor, $0.baseAddress, pid.count) }
+            close(descriptor)
+            ownsLock = true
+            return true
+        }
+        guard errno == EEXIST,
+              let contents = try? String(contentsOf: manager.lockURL),
+              let pid = Int32(contents.trimmingCharacters(in: .whitespacesAndNewlines)) else { return false }
+        if Darwin.kill(pid, 0) == 0 || errno == EPERM { return false }
+        try? fileManager.removeItem(at: manager.lockURL)
+        return try acquireLock()
+    }
+
+    private func releaseLock() {
+        guard ownsLock else { return }
+        try? fileManager.removeItem(at: manager.lockURL)
+        ownsLock = false
     }
 
     private func writeStatus(state: String, detail: String?, runtime: String?) {

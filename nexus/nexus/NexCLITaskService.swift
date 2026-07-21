@@ -29,6 +29,34 @@ final class NexCLITaskController: ObservableObject {
     }
 }
 
+private actor NexCLITaskRecordStore {
+    private var record: NexCLITaskRecord
+
+    init(_ record: NexCLITaskRecord) { self.record = record }
+
+    func apply(_ event: NexApiClient.Event) -> NexCLITaskRecord {
+        record.status = event.message
+        let toolLabel = event.tool.map { $0.title ?? $0.name }
+        if event.kind == .textDelta, let delta = event.data["delta"]?.stringValue {
+            record.finalText += delta
+            record.detail = "NEX > \(record.finalText.suffix(180))"
+        } else {
+            record.detail = toolLabel.map { "NEX > \($0)" } ?? "NEX > \(event.message)"
+        }
+        record.state = switch event.status {
+        case "awaiting_permission": .awaitingPermission
+        case "completed": .completed
+        case "failed": .failed
+        case "cancelled": .cancelled
+        default: .running
+        }
+        record.updatedAt = Date()
+        return record
+    }
+
+    func current() -> NexCLITaskRecord { record }
+}
+
 /// Configuration is deliberately app-owned. A model is never allowed to
 /// select a filesystem path, task server, or credential.
 @MainActor
@@ -93,7 +121,8 @@ final class NexCLITaskSettings: ObservableObject {
                 baseURL: URL(string: "http://127.0.0.1:4096")!,
                 directory: directory,
                 username: "opencode",
-                password: try NexCLILoopbackCredential.loadOrCreate()
+                password: try NexCLILoopbackCredential.loadOrCreate(),
+                model: .localCodingDefault
             )
         }
         guard let baseURL = URL(string: normalizedBaseURL()) else {
@@ -108,7 +137,7 @@ final class NexCLITaskSettings: ObservableObject {
         } else {
             password = nil
         }
-        return .init(baseURL: baseURL, directory: directory, username: username, password: password)
+        return .init(baseURL: baseURL, directory: directory, username: username, password: password, model: .localCodingDefault)
     }
 
     private func normalizedBaseURL() -> String {
@@ -137,39 +166,7 @@ private struct NexCLITaskConfiguration: Sendable {
     let directory: String
     let username: String
     let password: String?
-}
-
-private struct NexCLITaskAccepted: Decodable { let taskId: String; let streamUrl: String; let resultUrl: String }
-private struct NexCLISnapshot: Decodable {
-    let taskId: String
-    let status: String
-    let finalText: String
-    let directory: String
-    let filesChanged: [String]
-    let error: String?
-}
-private struct NexCLIEvent: Decodable {
-    struct Tool: Decodable { let name: String; let title: String?; let state: String }
-    let taskId: String
-    let type: String
-    let status: String
-    let message: String
-    let tool: Tool?
-    let data: [String: JSONValue]?
-}
-
-private enum JSONValue: Decodable {
-    case string(String), number(Double), bool(Bool), object([String: JSONValue]), array([JSONValue]), null
-
-    init(from decoder: Decoder) throws {
-        let container = try decoder.singleValueContainer()
-        if container.decodeNil() { self = .null }
-        else if let value = try? container.decode(String.self) { self = .string(value) }
-        else if let value = try? container.decode(Double.self) { self = .number(value) }
-        else if let value = try? container.decode(Bool.self) { self = .bool(value) }
-        else if let value = try? container.decode([String: JSONValue].self) { self = .object(value) }
-        else { self = .array(try container.decode([JSONValue].self)) }
-    }
+    let model: NexApiClient.Model
 }
 
 /// Client for the Nex task gateway. It deliberately has no shell fallback:
@@ -206,22 +203,24 @@ actor NexCLITaskService {
 
     private func run(prompt: String, title: String?, context: NexToolExecutionContext) async throws -> NexJSONValue {
         let configuration = try await MainActor.run { try NexCLITaskSettings.shared.configuration() }
-        var request = URLRequest(url: configuration.baseURL.appending(path: "/nex/tasks"))
-        request.httpMethod = "POST"
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.setValue(configuration.directory, forHTTPHeaderField: "x-opencode-directory")
-        authenticate(&request, configuration: configuration)
-        let payload: [String: Any] = [
-            "directory": configuration.directory,
-            "prompt": prompt,
-            "title": title ?? "Nex task",
-            "permissionMode": "ask",
-            "idempotencyKey": context.executionID.uuidString
-        ]
-        request.httpBody = try JSONSerialization.data(withJSONObject: payload)
-        let (data, response) = try await session.data(for: request)
-        try validate(response: response, data: data)
-        let accepted = try JSONDecoder().decode(NexCLITaskAccepted.self, from: data)
+        if configuration.baseURL.host == "127.0.0.1", configuration.baseURL.port == 4096 {
+            try await NexCLIHostManager.shared.ensureReady()
+        }
+        let client = NexApiClient(
+            baseURL: configuration.baseURL,
+            username: configuration.username,
+            password: configuration.password,
+            session: session
+        )
+        let directory = URL(fileURLWithPath: configuration.directory)
+        let accepted = try await client.create(.init(
+            directory: directory,
+            prompt: prompt,
+            title: title,
+            agent: "nex-local",
+            model: configuration.model,
+            idempotencyKey: context.executionID
+        ))
         var record = NexCLITaskRecord(
             id: accepted.taskId,
             title: title ?? "Nex CLI task",
@@ -231,8 +230,14 @@ actor NexCLITaskService {
         )
         await update(record)
         await context.reportProgress(record.detail, nil)
-        try await stream(accepted: accepted, configuration: configuration, record: &record, context: context)
-        let snapshot = try await fetchSnapshot(accepted: accepted, configuration: configuration)
+        let recordStore = NexCLITaskRecordStore(record)
+        try await client.events(for: accepted, directory: directory) { event in
+            let updated = await recordStore.apply(event)
+            await self.update(updated)
+            await context.reportProgress(updated.detail, event.status == "completed" ? 1 : nil)
+        }
+        let snapshot = try await client.result(for: accepted, directory: directory)
+        record = await recordStore.current()
         let completedWorkspace = try await MainActor.run {
             try NexCLIWorkspaceManager.shared.completeBuild(
                 title: title ?? prompt,
@@ -259,59 +264,7 @@ actor NexCLITaskService {
         return .object(result)
     }
 
-    private func stream(
-        accepted: NexCLITaskAccepted,
-        configuration: NexCLITaskConfiguration,
-        record: inout NexCLITaskRecord,
-        context: NexToolExecutionContext
-    ) async throws {
-        guard let url = URL(string: accepted.streamUrl, relativeTo: configuration.baseURL) else {
-            throw LocalModelError.invalidResponse("Nex CLI returned an invalid event stream URL")
-        }
-        var request = URLRequest(url: url)
-        request.setValue("text/event-stream", forHTTPHeaderField: "Accept")
-        request.setValue(configuration.directory, forHTTPHeaderField: "x-opencode-directory")
-        authenticate(&request, configuration: configuration)
-        let (bytes, response) = try await session.bytes(for: request)
-        try validate(response: response, data: nil)
-        for try await line in bytes.lines {
-            guard line.hasPrefix("data:"), let data = line.dropFirst(5).trimmingCharacters(in: .whitespaces).data(using: .utf8),
-                  let event = try? JSONDecoder().decode(NexCLIEvent.self, from: data) else { continue }
-            guard event.taskId == accepted.taskId else { continue }
-            apply(event: event, to: &record)
-            await update(record)
-            await context.reportProgress(record.detail, event.status == "completed" ? 1 : nil)
-            if ["task.completed", "task.failed", "task.cancelled"].contains(event.type) { return }
-        }
-    }
-
-    private func fetchSnapshot(accepted: NexCLITaskAccepted, configuration: NexCLITaskConfiguration) async throws -> NexCLISnapshot {
-        guard let url = URL(string: accepted.resultUrl, relativeTo: configuration.baseURL) else {
-            throw LocalModelError.invalidResponse("Nex CLI returned an invalid task result URL")
-        }
-        var request = URLRequest(url: url)
-        request.setValue(configuration.directory, forHTTPHeaderField: "x-opencode-directory")
-        authenticate(&request, configuration: configuration)
-        let (data, response) = try await session.data(for: request)
-        try validate(response: response, data: data)
-        return try JSONDecoder().decode(NexCLISnapshot.self, from: data)
-    }
-
-    private func apply(event: NexCLIEvent, to record: inout NexCLITaskRecord) {
-        record.status = event.message
-        let toolLabel = event.tool.map { $0.title ?? $0.name }
-        record.detail = toolLabel.map { "NEX > \($0)" } ?? "NEX > \(event.message)"
-        record.state = switch event.status {
-        case "awaiting_permission": .awaitingPermission
-        case "completed": .completed
-        case "failed": .failed
-        case "cancelled": .cancelled
-        default: .running
-        }
-        record.updatedAt = Date()
-    }
-
-    private func playableOutput(from snapshot: NexCLISnapshot, workspaceURL: URL) -> URL? {
+    private func playableOutput(from snapshot: NexApiClient.Result, workspaceURL: URL) -> URL? {
         guard let file = snapshot.filesChanged.first(where: { $0.lowercased().hasSuffix("index.html") }) else { return nil }
         let relative: String
         if file.hasPrefix(snapshot.directory + "/") {
@@ -326,17 +279,4 @@ actor NexCLITaskService {
         await MainActor.run { NexCLITaskController.shared.receive(record) }
     }
 
-    private func authenticate(_ request: inout URLRequest, configuration: NexCLITaskConfiguration) {
-        guard let password = configuration.password, !password.isEmpty else { return }
-        let raw = "\(configuration.username):\(password)"
-        request.setValue("Basic \(Data(raw.utf8).base64EncodedString())", forHTTPHeaderField: "Authorization")
-    }
-
-    private func validate(response: URLResponse, data: Data?) throws {
-        guard let http = response as? HTTPURLResponse else { throw LocalModelError.invalidResponse("Nex CLI returned no HTTP response") }
-        guard (200..<300).contains(http.statusCode) else {
-            let message = data.flatMap { String(data: $0, encoding: .utf8) }?.prefix(240) ?? ""
-            throw LocalModelError.invalidResponse("Nex CLI task server returned \(http.statusCode). \(message)")
-        }
-    }
 }

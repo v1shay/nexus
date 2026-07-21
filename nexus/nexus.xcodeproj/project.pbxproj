@@ -34,6 +34,7 @@
 		A1B2C3D4E5F60718293A4B5C /* NexCLITaskService.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1B2C3D4E5F60718293A4B5C /* NexCLITaskService.swift */; };
 		C1D2E3F4A5B60718293A4B5C /* NexCLIHostManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = D1D2E3F4A5B60718293A4B5C /* NexCLIHostManager.swift */; };
 		E1D2E3F4A5B60718293A4B5C /* NexCLIWorkspaceManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = F1D2E3F4A5B60718293A4B5C /* NexCLIWorkspaceManager.swift */; };
+		A2D2E3F4A5B60718293A4B5C /* NexApiClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = B2D2E3F4A5B60718293A4B5C /* NexApiClient.swift */; };
 		S100000130075C29006660E4 /* NexMemoryController.swift in Sources */ = {isa = PBXBuildFile; fileRef = S100000230075C29006660E4 /* NexMemoryController.swift */; };
 		T100000130075C29006660E4 /* NexWebSearch.swift in Sources */ = {isa = PBXBuildFile; fileRef = T100000230075C29006660E4 /* NexWebSearch.swift */; };
 		V100000130075C29006660E4 /* NexMemoryGraph.swift in Sources */ = {isa = PBXBuildFile; fileRef = V100000230075C29006660E4 /* NexMemoryGraph.swift */; };
@@ -61,6 +62,7 @@
 		Q100000330075C29006660E4 /* NexMemoryTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = Q100000430075C29006660E4 /* NexMemoryTests.swift */; };
 		T100000330075C29006660E4 /* NexWebSearchTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = T100000430075C29006660E4 /* NexWebSearchTests.swift */; };
 		W100000330075C29006660E4 /* NexPrimaryToolPlannerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = W100000430075C29006660E4 /* NexPrimaryToolPlannerTests.swift */; };
+		X100000330075C29006660E4 /* NexApiClientTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = X100000430075C29006660E4 /* NexApiClientTests.swift */; };
 		Z100000130075C29006660E4 /* FluidAudio in Frameworks */ = {isa = PBXBuildFile; productRef = Z100000230075C29006660E4 /* FluidAudio */; };
 		156AB6C030075C2A006660E4 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 156AB6BF30075C2A006660E4 /* Assets.xcassets */; };
 		156AB6C430075C2A006660E4 /* Preview Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 156AB6C330075C2A006660E4 /* Preview Assets.xcassets */; };
@@ -115,6 +117,7 @@
 		B1B2C3D4E5F60718293A4B5C /* NexCLITaskService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NexCLITaskService.swift; sourceTree = "<group>"; };
 		D1D2E3F4A5B60718293A4B5C /* NexCLIHostManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NexCLIHostManager.swift; sourceTree = "<group>"; };
 		F1D2E3F4A5B60718293A4B5C /* NexCLIWorkspaceManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NexCLIWorkspaceManager.swift; sourceTree = "<group>"; };
+		B2D2E3F4A5B60718293A4B5C /* NexApiClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NexApiClient.swift; sourceTree = "<group>"; };
 		S100000230075C29006660E4 /* NexMemoryController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NexMemoryController.swift; sourceTree = "<group>"; };
 		T100000230075C29006660E4 /* NexWebSearch.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NexWebSearch.swift; sourceTree = "<group>"; };
 		V100000230075C29006660E4 /* NexMemoryGraph.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NexMemoryGraph.swift; sourceTree = "<group>"; };
@@ -142,6 +145,7 @@
 		Q100000430075C29006660E4 /* NexMemoryTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NexMemoryTests.swift; sourceTree = "<group>"; };
 		T100000430075C29006660E4 /* NexWebSearchTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NexWebSearchTests.swift; sourceTree = "<group>"; };
 		W100000430075C29006660E4 /* NexPrimaryToolPlannerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NexPrimaryToolPlannerTests.swift; sourceTree = "<group>"; };
+		X100000430075C29006660E4 /* NexApiClientTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NexApiClientTests.swift; sourceTree = "<group>"; };
 		156AB6BF30075C2A006660E4 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		156AB6C130075C2A006660E4 /* nexus.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = nexus.entitlements; sourceTree = "<group>"; };
 		156AB6C330075C2A006660E4 /* Preview Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = "Preview Assets.xcassets"; sourceTree = "<group>"; };
@@ -214,6 +218,7 @@
 				B1B2C3D4E5F60718293A4B5C /* NexCLITaskService.swift */,
 				D1D2E3F4A5B60718293A4B5C /* NexCLIHostManager.swift */,
 				F1D2E3F4A5B60718293A4B5C /* NexCLIWorkspaceManager.swift */,
+				B2D2E3F4A5B60718293A4B5C /* NexApiClient.swift */,
 				S100000230075C29006660E4 /* NexMemoryController.swift */,
 				T100000230075C29006660E4 /* NexWebSearch.swift */,
 				V100000230075C29006660E4 /* NexMemoryGraph.swift */,
@@ -274,6 +279,7 @@
 				Q100000430075C29006660E4 /* NexMemoryTests.swift */,
 				T100000430075C29006660E4 /* NexWebSearchTests.swift */,
 				W100000430075C29006660E4 /* NexPrimaryToolPlannerTests.swift */,
+				X100000430075C29006660E4 /* NexApiClientTests.swift */,
 			);
 			path = nexusTests;
 			sourceTree = "<group>";
@@ -458,6 +464,7 @@
 				A1B2C3D4E5F60718293A4B5C /* NexCLITaskService.swift in Sources */,
 				C1D2E3F4A5B60718293A4B5C /* NexCLIHostManager.swift in Sources */,
 				E1D2E3F4A5B60718293A4B5C /* NexCLIWorkspaceManager.swift in Sources */,
+				A2D2E3F4A5B60718293A4B5C /* NexApiClient.swift in Sources */,
 				S100000130075C29006660E4 /* NexMemoryController.swift in Sources */,
 				T100000130075C29006660E4 /* NexWebSearch.swift in Sources */,
 				V100000130075C29006660E4 /* NexMemoryGraph.swift in Sources */,
@@ -504,6 +511,7 @@
 				Q100000330075C29006660E4 /* NexMemoryTests.swift in Sources */,
 				T100000330075C29006660E4 /* NexWebSearchTests.swift in Sources */,
 				W100000330075C29006660E4 /* NexPrimaryToolPlannerTests.swift in Sources */,
+				X100000330075C29006660E4 /* NexApiClientTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
