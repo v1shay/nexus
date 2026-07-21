@@ -50,15 +50,19 @@ final class NexCLITaskSettings: ObservableObject {
     init() {
         let saved = defaults.dictionary(forKey: settingsKey) ?? [:]
         baseURL = saved["baseURL"] as? String ?? "http://127.0.0.1:4096"
-        directory = saved["directory"] as? String ?? FileManager.default.homeDirectoryForCurrentUser.path
         username = saved["username"] as? String ?? "opencode"
         let isManaged = saved["usesManagedLocalService"] as? Bool ?? true
         usesManagedLocalService = isManaged
+        directory = saved["directory"] as? String ?? FileManager.default.homeDirectoryForCurrentUser.path
+        if isManaged, let workspace = try? NexCLIWorkspaceManager.shared.currentWorkspace() {
+            directory = workspace.url.path
+        }
         hasPassword = isManaged || (saved["hasPassword"] as? Bool ?? false)
     }
 
     func save() throws {
         if usesManagedLocalService {
+            directory = try NexCLIWorkspaceManager.shared.currentWorkspace().url.path
             try NexCLIHostManager.shared.installAndStart()
             persist()
             return
@@ -78,6 +82,9 @@ final class NexCLITaskSettings: ObservableObject {
     }
 
     fileprivate func configuration() throws -> NexCLITaskConfiguration {
+        if usesManagedLocalService {
+            directory = try NexCLIWorkspaceManager.shared.currentWorkspace().url.path
+        }
         guard directory.hasPrefix("/") else {
             throw LocalModelError.invalidResponse("Choose an absolute Nex CLI workspace folder")
         }
@@ -116,6 +123,12 @@ final class NexCLITaskSettings: ObservableObject {
             "usesManagedLocalService": usesManagedLocalService,
             "hasPassword": hasPassword
         ], forKey: settingsKey)
+    }
+
+    func refreshManagedWorkspace() {
+        guard usesManagedLocalService,
+              let workspace = try? NexCLIWorkspaceManager.shared.currentWorkspace() else { return }
+        directory = workspace.url.path
     }
 }
 
@@ -172,7 +185,7 @@ actor NexCLITaskService {
     func register(in registry: NexToolRegistry) async throws {
         try await registry.register(.init(
             name: "nex_cli_task",
-            description: "Delegate a multi-file coding or app-building task to the configured Nex CLI workspace. Use when the user asks Nex to actually create, edit, run, or validate a project. The task runs under Nex's own permission prompts; do not use for an explanation or a small code snippet.",
+            description: "Delegate any requested code, app, website, file-based build, code modification, run, test, or validation to NexCLI in Nexus's app-owned workspace. Use this instead of writing code in chat whenever the user wants an implementation or artifact. The task runs under Nex's own permission prompts; do not use it for explanations, brainstorming, or prose-only rewriting.",
             statusLabel: "Starting Nex CLI…",
             completionLabel: "Nex CLI task completed",
             spokenStatus: "Starting the coding task.",
@@ -196,6 +209,7 @@ actor NexCLITaskService {
         var request = URLRequest(url: configuration.baseURL.appending(path: "/nex/tasks"))
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.setValue(configuration.directory, forHTTPHeaderField: "x-opencode-directory")
         authenticate(&request, configuration: configuration)
         let payload: [String: Any] = [
             "directory": configuration.directory,
@@ -219,11 +233,17 @@ actor NexCLITaskService {
         await context.reportProgress(record.detail, nil)
         try await stream(accepted: accepted, configuration: configuration, record: &record, context: context)
         let snapshot = try await fetchSnapshot(accepted: accepted, configuration: configuration)
+        let completedWorkspace = try await MainActor.run {
+            try NexCLIWorkspaceManager.shared.completeBuild(
+                title: title ?? prompt,
+                filesChanged: snapshot.filesChanged
+            )
+        }
         record.finalText = snapshot.finalText
         record.state = snapshot.status == "completed" ? .completed : (snapshot.status == "cancelled" ? .cancelled : .failed)
         record.status = record.state == .completed ? "Task completed" : (snapshot.error ?? "Task did not complete")
         record.detail = record.status
-        record.outputURL = playableOutput(from: snapshot)
+        record.outputURL = playableOutput(from: snapshot, workspaceURL: completedWorkspace.url)
         record.updatedAt = Date()
         await update(record)
         await context.reportProgress(record.status, 1)
@@ -231,7 +251,8 @@ actor NexCLITaskService {
             "task_id": .string(snapshot.taskId),
             "final_text": .string(snapshot.finalText),
             "files_changed": .array(snapshot.filesChanged.map(NexJSONValue.string)),
-            "status": .string(snapshot.status)
+            "status": .string(snapshot.status),
+            "workspace_folder": .string(completedWorkspace.url.path)
         ]
         if let outputURL = record.outputURL { result["output_url"] = .string(outputURL.absoluteString) }
         if let error = snapshot.error { result["error"] = .string(error) }
@@ -249,6 +270,7 @@ actor NexCLITaskService {
         }
         var request = URLRequest(url: url)
         request.setValue("text/event-stream", forHTTPHeaderField: "Accept")
+        request.setValue(configuration.directory, forHTTPHeaderField: "x-opencode-directory")
         authenticate(&request, configuration: configuration)
         let (bytes, response) = try await session.bytes(for: request)
         try validate(response: response, data: nil)
@@ -268,6 +290,7 @@ actor NexCLITaskService {
             throw LocalModelError.invalidResponse("Nex CLI returned an invalid task result URL")
         }
         var request = URLRequest(url: url)
+        request.setValue(configuration.directory, forHTTPHeaderField: "x-opencode-directory")
         authenticate(&request, configuration: configuration)
         let (data, response) = try await session.data(for: request)
         try validate(response: response, data: data)
@@ -288,10 +311,15 @@ actor NexCLITaskService {
         record.updatedAt = Date()
     }
 
-    private func playableOutput(from snapshot: NexCLISnapshot) -> URL? {
+    private func playableOutput(from snapshot: NexCLISnapshot, workspaceURL: URL) -> URL? {
         guard let file = snapshot.filesChanged.first(where: { $0.lowercased().hasSuffix("index.html") }) else { return nil }
-        let candidate = file.hasPrefix("/") ? file : (snapshot.directory as NSString).appendingPathComponent(file)
-        return URL(fileURLWithPath: candidate)
+        let relative: String
+        if file.hasPrefix(snapshot.directory + "/") {
+            relative = String(file.dropFirst(snapshot.directory.count + 1))
+        } else {
+            relative = file.hasPrefix("/") ? URL(fileURLWithPath: file).lastPathComponent : file
+        }
+        return workspaceURL.appendingPathComponent(relative)
     }
 
     private func update(_ record: NexCLITaskRecord) async {

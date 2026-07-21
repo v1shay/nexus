@@ -4,6 +4,27 @@ import WebKit
 
 final class NexusGeometryTests: XCTestCase {
     @MainActor
+    func testManagedNexCLIWorkspaceSealsAndRotatesOnlyOnNextLaunch() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("nexus-cli-workspace-test-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let manager = NexCLIWorkspaceManager(fileManager: .default, vaultURLProvider: { root })
+
+        let first = try manager.prepareForNexusLaunch()
+        XCTAssertEqual(first.url.lastPathComponent, "Folder 1")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: first.url.path))
+        XCTAssertEqual(try manager.currentWorkspace(), first)
+
+        let completed = try manager.completeBuild(title: "Snake Game", filesChanged: ["index.html", "game.js"])
+        XCTAssertEqual(completed.url.lastPathComponent, "Snake Game")
+        XCTAssertEqual(try manager.currentWorkspace(), completed)
+
+        let second = try manager.prepareForNexusLaunch()
+        XCTAssertEqual(second.url.lastPathComponent, "Folder 2")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: second.url.path))
+    }
+
+    @MainActor
     func testWakePhraseListenerMatchesOnlyIntentionalMultiWordPhrases() {
         XCTAssertEqual(WakePhraseListener.match(in: "Hey, next!"), .heyNext)
         XCTAssertEqual(WakePhraseListener.match(in: "Wake up next"), .wakeUpNext)

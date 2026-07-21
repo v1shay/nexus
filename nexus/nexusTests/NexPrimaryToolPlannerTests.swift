@@ -34,6 +34,24 @@ final class NexPrimaryToolPlannerTests: XCTestCase {
         XCTAssertTrue(followUp.actions.isEmpty)
     }
 
+    func testPlannerMakesNexCLITheOnlyImplementationPath() {
+        let instructions = NexPrimaryToolPlanner.planningMessages(
+            context: [.init(role: "user", content: "Build me a playable Snake game in a browser.")],
+            tools: tools() + [cliTool()]
+        ).first?.content ?? ""
+        XCTAssertTrue(instructions.contains("Every request whose desired outcome is code or a file-based artifact must use nex_cli_task"))
+        XCTAssertTrue(instructions.contains("standalone implementation brief"))
+
+        let plan = NexPrimaryToolPlanner.parse(
+            """
+            {"actions":[{"tool":"nex_cli_task","arguments":{"title":"Snake Game","prompt":"Build a playable browser Snake game in the current Nexus workspace. Use HTML, CSS, and JavaScript, include keyboard controls and score handling, then validate that index.html opens locally."}}],"memory_write":null}
+            """,
+            registeredTools: tools() + [cliTool()]
+        )
+        XCTAssertEqual(plan.actions.map(\.tool), ["nex_cli_task"])
+        XCTAssertGreaterThan(plan.actions[0].arguments["prompt"]?.string?.split(separator: " ").count ?? 0, 12)
+    }
+
     func testStressParsesVagueStandaloneWebQueriesWithoutOneWordFragments() {
         let cases = [
             ("Look up that new model everyone is talking about.", "latest notable open-weight AI model releases July 2026"),
@@ -154,5 +172,20 @@ final class NexPrimaryToolPlannerTests: XCTestCase {
                 schema: .init(fields: ["query": .init(.string, required: true)])
             ) { _, _ in .null }
         ]
+    }
+
+    private func cliTool() -> NexRegisteredTool {
+        .init(
+            name: "nex_cli_task",
+            description: "Build a code artifact in Nexus's managed workspace.",
+            statusLabel: "Starting Nex CLI…",
+            spokenStatus: "Starting the coding task.",
+            iconSystemName: "terminal",
+            permission: .codeExecution,
+            schema: .init(fields: [
+                "prompt": .init(.string, required: true),
+                "title": .init(.string)
+            ])
+        ) { _, _ in .null }
     }
 }

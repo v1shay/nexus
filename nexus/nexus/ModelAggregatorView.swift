@@ -101,14 +101,19 @@ private struct NexCLIWorkspacePage: View {
             .frame(height: 56)
 
             VStack(alignment: .leading, spacing: 10) {
-                TextField("Workspace", text: $settings.directory).textFieldStyle(.roundedBorder)
                 Toggle("Managed local NexCLI", isOn: $settings.usesManagedLocalService)
                     .toggleStyle(.switch)
                 if settings.usesManagedLocalService {
+                    Text(settings.directory)
+                        .font(.caption.monospaced())
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
                     Text(managedServiceDetail)
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 } else {
+                    TextField("Workspace", text: $settings.directory).textFieldStyle(.roundedBorder)
                     TextField("Nex server", text: $settings.baseURL).textFieldStyle(.roundedBorder)
                     HStack {
                         TextField("Username", text: $settings.username).textFieldStyle(.roundedBorder)

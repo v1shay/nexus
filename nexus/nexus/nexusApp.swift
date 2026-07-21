@@ -52,6 +52,7 @@ final class NexusAppDelegate: NSObject, NSApplicationDelegate {
         launchTask = Task { @MainActor [weak self] in
             await Self.retireOlderInstances()
             guard !Task.isCancelled else { return }
+            _ = try? NexCLIWorkspaceManager.shared.prepareForNexusLaunch()
             try? NexCLIHostManager.shared.installAndStart()
             let notch = NotchController()
             self?.notch = notch
