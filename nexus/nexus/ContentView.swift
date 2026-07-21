@@ -41,6 +41,7 @@ private struct ToolActivityIndicator: View {
     let activity: ToolActivity
 
     private var isCodex: Bool { activity.toolName == "Codex" }
+    private var isNexCLI: Bool { activity.toolName == "Nex CLI" }
     private var liveLine: String { activity.detail ?? activity.status }
 
     var body: some View {
@@ -50,6 +51,8 @@ private struct ToolActivityIndicator: View {
                 Group {
                     if isCodex {
                         CodexSessionPicker(selectedSessionID: activity.codexSessionID)
+                    } else if isNexCLI {
+                        NexCLIActivityMark()
                     } else {
                         NexusPetView(pet: notch.selectedPet, activity: .tool, height: 31)
                     }
@@ -98,6 +101,21 @@ private struct ToolActivityIndicator: View {
         }
         .accessibilityElement(children: .combine)
         .accessibilityLabel("\(activity.toolName). \(liveLine)")
+    }
+}
+
+/// Compact worker mark: a small, high-contrast ASCII logo rather than a
+/// second pet. Its neutral grey/white treatment shares the thinking shimmer.
+private struct NexCLIActivityMark: View {
+    var body: some View {
+        Text("NEX")
+            .font(.system(size: 10, weight: .black, design: .monospaced))
+            .tracking(-1.2)
+            .foregroundStyle(.white.opacity(0.92))
+            .padding(.horizontal, 7)
+            .padding(.vertical, 6)
+            .background(.white.opacity(0.10), in: Capsule())
+            .accessibilityLabel("Nex CLI")
     }
 }
 

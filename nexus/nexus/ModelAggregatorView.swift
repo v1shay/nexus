@@ -13,6 +13,8 @@ struct ModelAggregatorView: View {
     @ObservedObject var connect: NexusConnectController
     @ObservedObject var memory: NexMemoryController
     @ObservedObject var settings: NexusAppSettings
+    @ObservedObject var cli: NexCLITaskController
+    @ObservedObject var cliSettings: NexCLITaskSettings
     @State private var page: NexusAppPage = .models
 
     var body: some View {
@@ -28,6 +30,8 @@ struct ModelAggregatorView: View {
                     NexusMemoryPage(memory: memory)
                 case .settings:
                     NexusSettingsPage(settings: settings, viewModel: viewModel)
+                case .cli:
+                    NexCLIWorkspacePage(controller: cli, settings: cliSettings)
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -59,6 +63,7 @@ private enum NexusAppPage: String, CaseIterable, Identifiable {
     case connect
     case memory
     case settings
+    case cli
 
     var id: String { rawValue }
     var icon: String {
@@ -67,6 +72,91 @@ private enum NexusAppPage: String, CaseIterable, Identifiable {
         case .connect: "point.3.connected.trianglepath.dotted"
         case .memory: "circle.hexagongrid"
         case .settings: "gearshape"
+        case .cli: "terminal"
+        }
+    }
+}
+
+/// The in-app task surface mirrors the same durable Nex sessions used by the
+/// compact notch. It intentionally renders structured live task output, not a
+/// scraped terminal; the real TUI remains available through Nex itself.
+private struct NexCLIWorkspacePage: View {
+    @ObservedObject var controller: NexCLITaskController
+    @ObservedObject var settings: NexCLITaskSettings
+    @State private var error: String?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(spacing: 10) {
+                Text("NEX")
+                    .font(.system(size: 18, weight: .black, design: .monospaced))
+                    .tracking(-2)
+                    .foregroundStyle(.white)
+                Spacer()
+                Text("CLI")
+                    .font(.system(size: 12, weight: .semibold, design: .monospaced))
+                    .foregroundStyle(.secondary)
+            }
+            .padding(.horizontal, 26)
+            .frame(height: 56)
+
+            VStack(alignment: .leading, spacing: 10) {
+                TextField("Nex server", text: $settings.baseURL).textFieldStyle(.roundedBorder)
+                TextField("Workspace", text: $settings.directory).textFieldStyle(.roundedBorder)
+                HStack {
+                    TextField("Username", text: $settings.username).textFieldStyle(.roundedBorder)
+                    SecureField(settings.hasPassword ? "Password saved" : "Server password", text: $settings.passwordInput)
+                        .textFieldStyle(.roundedBorder)
+                    Button("Save") {
+                        do { try settings.save(); error = nil }
+                        catch let failure { error = failure.localizedDescription }
+                    }
+                }
+                if let error { Text(error).font(.caption).foregroundStyle(.red) }
+            }
+            .padding(.horizontal, 26)
+            .padding(.bottom, 18)
+
+            Divider().opacity(0.25)
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 0) {
+                    ForEach(controller.tasks) { task in
+                        HStack(alignment: .top, spacing: 12) {
+                            Image(systemName: icon(for: task.state))
+                                .foregroundStyle(task.state == .failed ? .red : .white.opacity(0.78))
+                                .frame(width: 18)
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text(task.title).font(.system(size: 13, weight: .semibold))
+                                Text(task.detail)
+                                    .font(.system(size: 11, design: .monospaced))
+                                    .foregroundStyle(.secondary)
+                                    .lineLimit(2)
+                                if !task.finalText.isEmpty {
+                                    Text(task.finalText).font(.system(size: 12)).foregroundStyle(.white.opacity(0.85)).lineLimit(5)
+                                }
+                            }
+                            Spacer()
+                            if let outputURL = task.outputURL {
+                                Link("Open", destination: outputURL).font(.caption.weight(.semibold))
+                            }
+                        }
+                        .padding(.horizontal, 26)
+                        .padding(.vertical, 14)
+                        Divider().opacity(0.16)
+                    }
+                }
+            }
+        }
+        .background(Color.black.opacity(0.18))
+    }
+
+    private func icon(for state: NexCLITaskRecord.State) -> String {
+        switch state {
+        case .queued, .running: "terminal"
+        case .awaitingPermission: "hand.raised"
+        case .completed: "checkmark.circle.fill"
+        case .failed: "exclamationmark.triangle.fill"
+        case .cancelled: "xmark.circle"
         }
     }
 }

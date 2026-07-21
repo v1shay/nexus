@@ -753,7 +753,9 @@ final class NotchController: ObservableObject {
             viewModel: modelDownloadViewModel,
             connect: connectController,
             memory: memory,
-            settings: settings
+            settings: settings,
+            cli: .shared,
+            cliSettings: .shared
         ))
         panel.collectionBehavior.insert(.fullScreenPrimary)
         if let screen = NSScreen.main ?? NSScreen.screens.first {

@@ -70,6 +70,9 @@ actor NexMemoryService {
         try await registry.register(Self.memoryProposeTool(service: self))
         try await registry.register(Self.memoryForgetTool(service: self))
         try await registry.register(Self.conversationRecallTool(service: self))
+        // Coding tasks are registered beside memory and web tools, so the
+        // primary model receives the same strict schema and lifecycle events.
+        try await NexCLITaskService.shared.register(in: registry)
         toolsRegistered = true
     }
 

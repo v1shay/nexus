@@ -53,14 +53,17 @@ struct ToolActivity: Equatable, Sendable {
     static func lifecycle(_ event: NexToolLifecycleEvent) -> ToolActivity {
         let isMemory = event.toolName.hasPrefix("memory_") || event.toolName == "conversation_recall"
         let isWebSearch = event.toolName == "web_search"
+        let isNexCLI = event.toolName == "nex_cli_task"
         let title = isMemory
             ? "Nex Memory"
-            : (isWebSearch ? "Web Search" : event.toolName.replacingOccurrences(of: "_", with: " ").capitalized)
+            : (isWebSearch ? "Web Search" : (isNexCLI ? "Nex CLI" : event.toolName.replacingOccurrences(of: "_", with: " ").capitalized))
         let icon: ToolIconSource
         if isMemory {
             icon = .asset(name: "Obsidian", fallbackSystemName: "diamond.fill")
         } else if isWebSearch {
             icon = .asset(name: "Chrome", fallbackSystemName: "globe")
+        } else if isNexCLI {
+            icon = .systemSymbol("terminal")
         } else {
             icon = .systemSymbol("wrench.and.screwdriver")
         }
@@ -79,6 +82,7 @@ struct ToolActivity: Equatable, Sendable {
             icon: icon,
             phase: event.phase,
             progress: event.progress,
+            detail: isNexCLI ? "NEX > \(event.message)" : nil,
             query: query,
             sources: isMemory ? memorySources(from: event.result) : (isWebSearch ? webSources(from: event.result) : [])
         )
