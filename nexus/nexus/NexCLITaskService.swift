@@ -38,6 +38,7 @@ final class NexCLITaskSettings: ObservableObject {
     @Published var baseURL: String { didSet { persist() } }
     @Published var directory: String { didSet { persist() } }
     @Published var username: String { didSet { persist() } }
+    @Published var usesManagedLocalService: Bool { didSet { persist() } }
     @Published var passwordInput = ""
     @Published private(set) var hasPassword: Bool
 
@@ -51,10 +52,17 @@ final class NexCLITaskSettings: ObservableObject {
         baseURL = saved["baseURL"] as? String ?? "http://127.0.0.1:4096"
         directory = saved["directory"] as? String ?? FileManager.default.homeDirectoryForCurrentUser.path
         username = saved["username"] as? String ?? "opencode"
-        hasPassword = saved["hasPassword"] as? Bool ?? false
+        let isManaged = saved["usesManagedLocalService"] as? Bool ?? true
+        usesManagedLocalService = isManaged
+        hasPassword = isManaged || (saved["hasPassword"] as? Bool ?? false)
     }
 
     func save() throws {
+        if usesManagedLocalService {
+            try NexCLIHostManager.shared.installAndStart()
+            persist()
+            return
+        }
         guard URL(string: normalizedBaseURL()) != nil else {
             throw LocalModelError.invalidResponse("Enter a valid Nex CLI server URL")
         }
@@ -70,6 +78,17 @@ final class NexCLITaskSettings: ObservableObject {
     }
 
     fileprivate func configuration() throws -> NexCLITaskConfiguration {
+        guard directory.hasPrefix("/") else {
+            throw LocalModelError.invalidResponse("Choose an absolute Nex CLI workspace folder")
+        }
+        if usesManagedLocalService {
+            return .init(
+                baseURL: URL(string: "http://127.0.0.1:4096")!,
+                directory: directory,
+                username: "opencode",
+                password: try NexCLILoopbackCredential.loadOrCreate()
+            )
+        }
         guard let baseURL = URL(string: normalizedBaseURL()) else {
             throw LocalModelError.invalidResponse("Nex CLI server URL is invalid")
         }
@@ -94,6 +113,7 @@ final class NexCLITaskSettings: ObservableObject {
             "baseURL": normalizedBaseURL(),
             "directory": directory.trimmingCharacters(in: .whitespacesAndNewlines),
             "username": username.trimmingCharacters(in: .whitespacesAndNewlines),
+            "usesManagedLocalService": usesManagedLocalService,
             "hasPassword": hasPassword
         ], forKey: settingsKey)
     }

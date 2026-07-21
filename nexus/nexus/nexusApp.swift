@@ -20,6 +20,7 @@ struct NexusApp: App {
 final class NexusAppDelegate: NSObject, NSApplicationDelegate {
     private var notch: NotchController?
     private var connectHost: NexusConnectHostDaemon?
+    private var nexCLIHost: NexCLIHostDaemon?
     private var launchTask: Task<Void, Never>?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -34,6 +35,13 @@ final class NexusAppDelegate: NSObject, NSApplicationDelegate {
             launchTask = Task { @MainActor in await host.start() }
             return
         }
+        if NexCLIHostProcess.isCurrentProcess {
+            NSApp.setActivationPolicy(.prohibited)
+            let host = NexCLIHostDaemon()
+            nexCLIHost = host
+            launchTask = Task { @MainActor in await host.start() }
+            return
+        }
         NSApp.setActivationPolicy(.regular)
         if CommandLine.arguments.contains("--nexus-ui-testing") {
             let notch = NotchController()
@@ -44,6 +52,7 @@ final class NexusAppDelegate: NSObject, NSApplicationDelegate {
         launchTask = Task { @MainActor [weak self] in
             await Self.retireOlderInstances()
             guard !Task.isCancelled else { return }
+            try? NexCLIHostManager.shared.installAndStart()
             let notch = NotchController()
             self?.notch = notch
             notch.install()
@@ -54,6 +63,7 @@ final class NexusAppDelegate: NSObject, NSApplicationDelegate {
         launchTask?.cancel()
         notch?.shutdown()
         connectHost?.stop()
+        nexCLIHost?.stop()
     }
 
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {

@@ -54,6 +54,24 @@ final class NexusGeometryTests: XCTestCase {
         XCTAssertLessThan(Nexus3DLayout.globeCameraDistance, 2.88)
         XCTAssertGreaterThan(Nexus3DLayout.connectDeviceCameraDistance, 3.70)
     }
+
+    func testNexCLIHostLaunchAgentContainsNoWorkerCredential() throws {
+        let home = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let manager = NexCLIHostManager(
+            homeDirectory: home,
+            executableURL: URL(fileURLWithPath: "/Applications/Nexus.app/Contents/MacOS/nexus")
+        )
+
+        let data = manager.launchAgentPropertyList()
+        let plist = try XCTUnwrap(PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any])
+        let arguments = try XCTUnwrap(plist["ProgramArguments"] as? [String])
+
+        XCTAssertEqual(plist["Label"] as? String, NexCLIHostManager.label)
+        XCTAssertEqual(arguments, ["/Applications/Nexus.app/Contents/MacOS/nexus", NexCLIHostProcess.argument])
+        XCTAssertEqual((plist["EnvironmentVariables"] as? [String: String])?[NexCLIHostProcess.environmentKey], "1")
+        XCTAssertEqual(plist["KeepAlive"] as? Bool, true)
+        XCTAssertFalse(String(decoding: data, as: UTF8.self).contains("OPENCODE_SERVER_PASSWORD"))
+    }
     func testOneWordFollowUpKeepsRecentVerbatimConversationContext() async {
         let session = NexConversationSession()
         await session.appendUser("Use a neural network for the image classifier")

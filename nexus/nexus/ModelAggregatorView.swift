@@ -101,16 +101,24 @@ private struct NexCLIWorkspacePage: View {
             .frame(height: 56)
 
             VStack(alignment: .leading, spacing: 10) {
-                TextField("Nex server", text: $settings.baseURL).textFieldStyle(.roundedBorder)
                 TextField("Workspace", text: $settings.directory).textFieldStyle(.roundedBorder)
-                HStack {
-                    TextField("Username", text: $settings.username).textFieldStyle(.roundedBorder)
-                    SecureField(settings.hasPassword ? "Password saved" : "Server password", text: $settings.passwordInput)
-                        .textFieldStyle(.roundedBorder)
-                    Button("Save") {
-                        do { try settings.save(); error = nil }
-                        catch let failure { error = failure.localizedDescription }
+                Toggle("Managed local NexCLI", isOn: $settings.usesManagedLocalService)
+                    .toggleStyle(.switch)
+                if settings.usesManagedLocalService {
+                    Text(managedServiceDetail)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                } else {
+                    TextField("Nex server", text: $settings.baseURL).textFieldStyle(.roundedBorder)
+                    HStack {
+                        TextField("Username", text: $settings.username).textFieldStyle(.roundedBorder)
+                        SecureField(settings.hasPassword ? "Password saved" : "Server password", text: $settings.passwordInput)
+                            .textFieldStyle(.roundedBorder)
                     }
+                }
+                Button(settings.usesManagedLocalService ? "Start NexCLI" : "Save") {
+                    do { try settings.save(); error = nil }
+                    catch let failure { error = failure.localizedDescription }
                 }
                 if let error { Text(error).font(.caption).foregroundStyle(.red) }
             }
@@ -158,6 +166,13 @@ private struct NexCLIWorkspacePage: View {
         case .failed: "exclamationmark.triangle.fill"
         case .cancelled: "xmark.circle"
         }
+    }
+
+    private var managedServiceDetail: String {
+        guard let status = NexCLIHostManager.shared.currentStatus() else {
+            return "Nexus will start NexCLI automatically in the background."
+        }
+        return status.state == "ready" ? "NexCLI is running locally." : (status.detail ?? "Starting NexCLI…")
     }
 }
 
