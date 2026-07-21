@@ -401,8 +401,8 @@ private struct ModelDownloadRow: View {
 
     private func progressText(progress: Double, completed: Int64?, total: Int64?, status: String) -> String {
         if let completed, let total, total > 100 {
-            return "\(Int(progress * 100))% · \(ByteCountFormatter.string(fromByteCount: completed, countStyle: .file)) / \(ByteCountFormatter.string(fromByteCount: total, countStyle: .file))"
+            return "\(status) · \(Int(progress * 100))% · \(ByteCountFormatter.string(fromByteCount: completed, countStyle: .file)) / \(ByteCountFormatter.string(fromByteCount: total, countStyle: .file))"
         }
-        return progress > 0 ? "\(Int(progress * 100))%" : status
+        return progress > 0 ? "\(status) · \(Int(progress * 100))%" : status
     }
 }

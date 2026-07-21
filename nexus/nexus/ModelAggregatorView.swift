@@ -316,15 +316,16 @@ private struct NexusModelRow: View {
             action
         }
         .padding(.horizontal, 8)
-        .frame(height: 43)
+        .frame(minHeight: 52)
         .foregroundStyle(viewModel.activeModel?.id == model.id ? .white : .white.opacity(0.82))
     }
 
     @ViewBuilder private var action: some View {
         switch viewModel.states[model.id] ?? .idle {
-        case .preparing, .downloading:
-            Button { viewModel.cancel(model) } label: { ProgressView().controlSize(.small) }
-                .buttonStyle(.plain).help("Cancel")
+        case .preparing(let status):
+            activeDownload(status: status, progress: nil, completed: nil, total: nil)
+        case .downloading(let progress, let completed, let total, let status):
+            activeDownload(status: status, progress: progress, completed: completed, total: total)
         case .installed:
             if viewModel.activeModel?.id == model.id {
                 EmptyView()
@@ -338,6 +339,44 @@ private struct NexusModelRow: View {
         case .idle:
             Button("Download") { viewModel.download(model) }.controlSize(.small)
         }
+    }
+
+    private func activeDownload(
+        status: String,
+        progress: Double?,
+        completed: Int64?,
+        total: Int64?
+    ) -> some View {
+        HStack(spacing: 7) {
+            VStack(alignment: .trailing, spacing: 3) {
+                Text(status)
+                    .font(.caption2.weight(.medium))
+                    .foregroundStyle(.cyan.opacity(0.9))
+                    .lineLimit(1)
+                if let progress {
+                    ProgressView(value: progress)
+                        .frame(width: 76)
+                    Text(downloadDetail(progress: progress, completed: completed, total: total))
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                } else {
+                    ProgressView()
+                        .controlSize(.mini)
+                }
+            }
+            Button { viewModel.cancel(model) } label: {
+                Image(systemName: "xmark.circle")
+            }
+            .buttonStyle(.plain)
+            .help("Cancel download")
+        }
+    }
+
+    private func downloadDetail(progress: Double, completed: Int64?, total: Int64?) -> String {
+        if let completed, let total, total > 100 {
+            return "\(Int(progress * 100))% · \(ByteCountFormatter.string(fromByteCount: completed, countStyle: .file)) / \(ByteCountFormatter.string(fromByteCount: total, countStyle: .file))"
+        }
+        return "\(Int(progress * 100))%"
     }
 }
 
