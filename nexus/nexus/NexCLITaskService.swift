@@ -192,7 +192,7 @@ actor NexCLITaskService {
             id: accepted.taskId,
             title: title ?? "Nex CLI task",
             status: "Starting…",
-            detail: "NEX > (title ?? "task")",
+            detail: "NEX > \(title ?? "task")",
             state: .queued
         )
         await update(record)
