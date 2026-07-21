@@ -487,7 +487,10 @@ private struct ListeningWings: View {
                 .frame(maxWidth: .infinity)
 
                 Group {
-                    if isThinking { ThinkingIndicator() } else { DictationBars() }
+                    NexusOrbAnimation(
+                        mode: isThinking ? .thinkingCycle : .composing,
+                        size: 27
+                    )
                 }
                 .frame(width: wingWidth)
             }
@@ -511,7 +514,8 @@ private struct StreamingThinkingIndicator: View {
                 NexusPetView(pet: notch.selectedPet, activity: .thinking, height: 31)
                     .frame(width: NotchGeometry.wingWidth)
                 Color.clear.frame(maxWidth: .infinity)
-                ThinkingIndicator().frame(width: NotchGeometry.wingWidth)
+                NexusOrbAnimation(mode: .thinkingCycle, size: 27)
+                    .frame(width: NotchGeometry.wingWidth)
             }
             .frame(height: 34)
 
