@@ -42,6 +42,13 @@ final class NexusGeometryTests: XCTestCase {
             NotchInteractionState.sanitizedThinkingDisplay("Calling web_search. \"Checking sources.\""),
             "Calling web_search Checking sources"
         )
+        XCTAssertEqual(NexusStatusLineGenerator.classify("Build me a Swift menu bar app"), .code)
+        XCTAssertEqual(NexusStatusLineGenerator.classify("What is the latest Swift release?"), .tool)
+        XCTAssertEqual(NexusStatusLineGenerator.classify("Explain recursion"), .question)
+        XCTAssertEqual(
+            NexusStatusLineGenerator.status(for: "Explain recursion"),
+            NexusStatusLineGenerator.status(for: "Explain recursion")
+        )
     }
 
     func testWebSearchQueryGetsItsOwnCompactRevealLine() {

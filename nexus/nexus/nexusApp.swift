@@ -392,10 +392,13 @@ final class NotchController: ObservableObject {
         responseGeneration = generation
         responseSpeechCursor = StreamedSpeechCursor()
         thinkingSentenceChunker = SpeechSentenceChunker()
-        // A status must never wait for a model. The immediate fallback is
-        // intentionally neutral; request-specific wording arrives only from
-        // the configured model, never from a duplicate keyword router.
-        let immediateStatus = NexusStatusLineGenerator.fallback
+        // This immediate presentation classifier is deliberately independent
+        // from tool routing. It gives the user a useful line without delaying
+        // generation; NexPrimaryToolPlanner remains the only authority that
+        // decides whether a tool actually runs.
+        let immediateStatus = settings.statusMode == .deterministic
+            ? NexusStatusLineGenerator.status(for: prompt)
+            : NexusStatusLineGenerator.fallback
         interaction.acknowledge(immediateStatus)
         if let screen { resize(to: expandedSize(for: screen), animated: true) }
         responseSpeaker.speakImmediately(immediateStatus)

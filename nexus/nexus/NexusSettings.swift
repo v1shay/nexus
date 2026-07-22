@@ -63,11 +63,72 @@ final class NexusAppSettings: ObservableObject {
 /// Immediate, local status generation. This is deliberately separate from
 /// tool routing so status never holds up the primary model or a tool call.
 enum NexusStatusLineGenerator {
-    /// The only synchronous fallback.  It deliberately carries no inferred
-    /// meaning: all request-specific status text comes from the selected model.
-    /// This avoids a second, keyword-based routing system that can disagree
-    /// with the model's actual tool decision.
-    static let fallback = "Thinking…"
+    /// A status is presentation-only. It must never decide which tools run or
+    /// alter the primary-model request; the actual tool planner still owns
+    /// that decision. This tiny local classifier simply makes the first line
+    /// useful before either model has emitted a token.
+    enum Category: String, Sendable {
+        case code
+        case tool
+        case question
+    }
+
+    private static let codeSignals = [
+        "code", "coding", "build", "create", "implement", "debug", "fix",
+        "refactor", "script", "app", "website", "web site", "game", "swift",
+        "python", "javascript", "typescript", "html", "css"
+    ]
+    private static let toolSignals = [
+        "search", "look up", "find", "latest", "current", "today", "tomorrow",
+        "news", "weather", "price", "stock", "memory", "remember", "forget",
+        "obsidian", "previous", "last project", "earlier chat", "school schedule"
+    ]
+
+    private static let lines: [Category: [String]] = [
+        .code: [
+            "Coding that for you now, Sir…",
+            "Building that now, Sir…",
+            "Tinkering with that now, Sir…",
+            "Engineering that for you, Sir…"
+        ],
+        .tool: [
+            "Getting that for you now, Sir…",
+            "Tracking that down now, Sir…",
+            "Checking the archives, Sir…",
+            "Pulling that signal now, Sir…"
+        ],
+        .question: [
+            "Answering that for you now, Sir…",
+            "Running that through the circuits, Sir…",
+            "Parsing that now, Sir…",
+            "Connecting the dots, Sir…"
+        ]
+    ]
+
+    static let fallback = "Working on that now, Sir…"
+
+    static func status(for request: String) -> String {
+        let category = classify(request)
+        let choices = lines[category] ?? [fallback]
+        return choices[stableIndex(for: request, count: choices.count)]
+    }
+
+    static func classify(_ request: String) -> Category {
+        let normalized = request.lowercased()
+        if codeSignals.contains(where: normalized.contains) { return .code }
+        if toolSignals.contains(where: normalized.contains) { return .tool }
+        return .question
+    }
+
+    private static func stableIndex(for request: String, count: Int) -> Int {
+        guard count > 1 else { return 0 }
+        var hash: UInt64 = 1_469_598_103_934_665_603
+        for byte in request.utf8 {
+            hash ^= UInt64(byte)
+            hash &*= 1_099_511_628_211
+        }
+        return Int(hash % UInt64(count))
+    }
 
     static func prompt(for request: String) -> [NexusChatMessage] {
         [
