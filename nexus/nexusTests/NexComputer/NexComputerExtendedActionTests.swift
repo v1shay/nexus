@@ -67,9 +67,24 @@ final class NexComputerExtendedActionTests: XCTestCase {
         catch is NexVSCodeError { }
     }
 
+    func testCodexCatalogPreservesSpecializedActionFamily() async throws {
+        let tools = NexToolRegistry(), computer = NexComputerRegistry(toolRegistry: tools, permissionManager: NexComputerPermissionManager(backend: AuthorizedPermissions()))
+        try await NexCodexActionCatalog(provider: MockCodexProvider()).register(on: computer)
+        let names = Set(await tools.definitions().map(\.name))
+        XCTAssertTrue(Set(["codex.open", "codex.start_task", "codex.continue_task", "codex.get_status", "codex.cancel_task", "codex.open_session"]).isSubset(of: names))
+    }
+
     private func temporaryFile(_ name: String) -> URL {
         FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString).appendingPathComponent(name)
     }
+}
+
+private actor MockCodexProvider: NexCodexProviding {
+    func open() async throws {}
+    func run(prompt: String, workspace: URL, sessionID: String?, progress: @escaping @Sendable (String) async -> Void) async throws -> NexCodexTaskSnapshot { await progress("Writing files"); return .init(sessionID: sessionID ?? "codex-session", status: "completed", finalText: "Done", filesChanged: ["App.swift"], testSummary: "1 passed", error: nil) }
+    func status(sessionID: String) async -> NexCodexTaskSnapshot? { .init(sessionID: sessionID, status: "completed", finalText: "Done", filesChanged: [], testSummary: "", error: nil) }
+    func cancel(sessionID: String) async throws {}
+    func openSession(sessionID: String) async throws {}
 }
 
 private actor MockPhotosProvider: NexPhotosProviding {
