@@ -35,6 +35,9 @@
 		A2C0000530075C29006660E4 /* NexComputerFoundationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2C0000630075C29006660E4 /* NexComputerFoundationTests.swift */; };
 		A2C0000B30075C29006660E4 /* NexComputerToolSearch.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2C0000C30075C29006660E4 /* NexComputerToolSearch.swift */; };
 		A2C0000D30075C29006660E4 /* NexComputerToolSearchTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2C0000E30075C29006660E4 /* NexComputerToolSearchTests.swift */; };
+		A2C0000F30075C29006660E4 /* NexComputerConfirmationGateway.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2C0001030075C29006660E4 /* NexComputerConfirmationGateway.swift */; };
+		A2C0001130075C29006660E4 /* NexComputerPermissionManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2C0001230075C29006660E4 /* NexComputerPermissionManager.swift */; };
+		A2C0001330075C29006660E4 /* NexComputerConfirmationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2C0001430075C29006660E4 /* NexComputerConfirmationTests.swift */; };
 		R100000330075C29006660E4 /* NexMemoryService.swift in Sources */ = {isa = PBXBuildFile; fileRef = R100000430075C29006660E4 /* NexMemoryService.swift */; };
 		A1B2C3D4E5F60718293A4B5C /* NexCLITaskService.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1B2C3D4E5F60718293A4B5C /* NexCLITaskService.swift */; };
 		C1D2E3F4A5B60718293A4B5C /* NexCLIHostManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = D1D2E3F4A5B60718293A4B5C /* NexCLIHostManager.swift */; };
@@ -126,6 +129,9 @@
 		A2C0000630075C29006660E4 /* NexComputerFoundationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NexComputerFoundationTests.swift; sourceTree = "<group>"; };
 		A2C0000C30075C29006660E4 /* NexComputerToolSearch.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NexComputerToolSearch.swift; sourceTree = "<group>"; };
 		A2C0000E30075C29006660E4 /* NexComputerToolSearchTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NexComputerToolSearchTests.swift; sourceTree = "<group>"; };
+		A2C0001030075C29006660E4 /* NexComputerConfirmationGateway.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NexComputerConfirmationGateway.swift; sourceTree = "<group>"; };
+		A2C0001230075C29006660E4 /* NexComputerPermissionManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NexComputerPermissionManager.swift; sourceTree = "<group>"; };
+		A2C0001430075C29006660E4 /* NexComputerConfirmationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NexComputerConfirmationTests.swift; sourceTree = "<group>"; };
 		R100000430075C29006660E4 /* NexMemoryService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NexMemoryService.swift; sourceTree = "<group>"; };
 		B1B2C3D4E5F60718293A4B5C /* NexCLITaskService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NexCLITaskService.swift; sourceTree = "<group>"; };
 		D1D2E3F4A5B60718293A4B5C /* NexCLIHostManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NexCLIHostManager.swift; sourceTree = "<group>"; };
@@ -223,6 +229,8 @@
 			children = (
 				A2C0000830075C29006660E4 /* Registry */,
 				A2C0000930075C29006660E4 /* Runtime */,
+				A2C0001530075C29006660E4 /* Confirmation */,
+				A2C0001630075C29006660E4 /* Permissions */,
 			);
 			path = NexComputer;
 			sourceTree = "<group>";
@@ -244,11 +252,28 @@
 			path = Runtime;
 			sourceTree = "<group>";
 		};
+		A2C0001530075C29006660E4 /* Confirmation */ = {
+			isa = PBXGroup;
+			children = (
+				A2C0001030075C29006660E4 /* NexComputerConfirmationGateway.swift */,
+			);
+			path = Confirmation;
+			sourceTree = "<group>";
+		};
+		A2C0001630075C29006660E4 /* Permissions */ = {
+			isa = PBXGroup;
+			children = (
+				A2C0001230075C29006660E4 /* NexComputerPermissionManager.swift */,
+			);
+			path = Permissions;
+			sourceTree = "<group>";
+		};
 		A2C0000A30075C29006660E4 /* NexComputer tests */ = {
 			isa = PBXGroup;
 			children = (
 				A2C0000630075C29006660E4 /* NexComputerFoundationTests.swift */,
 				A2C0000E30075C29006660E4 /* NexComputerToolSearchTests.swift */,
+				A2C0001430075C29006660E4 /* NexComputerConfirmationTests.swift */,
 			);
 			name = NexComputer;
 			path = NexComputer;
@@ -520,6 +545,8 @@
 				A2C0000130075C29006660E4 /* NexComputerManifest.swift in Sources */,
 				A2C0000B30075C29006660E4 /* NexComputerToolSearch.swift in Sources */,
 				A2C0000330075C29006660E4 /* NexComputerRuntime.swift in Sources */,
+				A2C0000F30075C29006660E4 /* NexComputerConfirmationGateway.swift in Sources */,
+				A2C0001130075C29006660E4 /* NexComputerPermissionManager.swift in Sources */,
 				R100000330075C29006660E4 /* NexMemoryService.swift in Sources */,
 				A1B2C3D4E5F60718293A4B5C /* NexCLITaskService.swift in Sources */,
 				C1D2E3F4A5B60718293A4B5C /* NexCLIHostManager.swift in Sources */,
@@ -567,6 +594,7 @@
 				156AB6CE30075C2A006660E4 /* nexusTests.swift in Sources */,
 				A2C0000530075C29006660E4 /* NexComputerFoundationTests.swift in Sources */,
 				A2C0000D30075C29006660E4 /* NexComputerToolSearchTests.swift in Sources */,
+				A2C0001330075C29006660E4 /* NexComputerConfirmationTests.swift in Sources */,
 				G100000930075C29006660E4 /* NexusConnectFoundationTests.swift in Sources */,
 				H100000730075C29006660E4 /* NexusConnectDiscoveryTests.swift in Sources */,
 				I100000330075C29006660E4 /* NexusConnectHostServiceTests.swift in Sources */,

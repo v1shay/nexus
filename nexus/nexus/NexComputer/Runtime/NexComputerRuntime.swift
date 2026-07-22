@@ -8,6 +8,8 @@ enum NexComputerExecutionStatus: String, Codable, Sendable {
     case timedOut = "timed_out"
     case dryRun = "dry_run"
     case unavailable
+    case confirmationRequired = "confirmation_required"
+    case permissionRequired = "permission_required"
 }
 
 struct NexComputerStructuredError: Codable, Equatable, Sendable {
@@ -120,13 +122,23 @@ actor NexComputerRegistry {
     private struct Entry: Sendable {
         let manifest: NexComputerActionManifest
         let availability: AvailabilityProbe
+        let handler: NexRegisteredTool.Handler
     }
 
     private let toolRegistry: NexToolRegistry
+    private let confirmationGateway: NexComputerConfirmationGateway
+    private let permissionManager: NexComputerPermissionManager
     private var entries: [String: Entry] = [:]
+    private var controlToolsRegistered = false
 
-    init(toolRegistry: NexToolRegistry) {
+    init(
+        toolRegistry: NexToolRegistry,
+        confirmationGateway: NexComputerConfirmationGateway = NexComputerConfirmationGateway(),
+        permissionManager: NexComputerPermissionManager = NexComputerPermissionManager()
+    ) {
         self.toolRegistry = toolRegistry
+        self.confirmationGateway = confirmationGateway
+        self.permissionManager = permissionManager
     }
 
     func register(
@@ -139,7 +151,9 @@ actor NexComputerRegistry {
             throw NexToolError.duplicateRegistration(manifest.actionID)
         }
 
+        try await registerControlToolsIfNeeded()
         let probe = availability ?? Self.defaultAvailabilityProbe(for: manifest.availabilityCheck)
+        let registry = self
         let tool = NexRegisteredTool(
             name: manifest.actionID,
             description: manifest.description,
@@ -155,10 +169,17 @@ actor NexComputerRegistry {
             aliases: manifest.aliases,
             tags: manifest.tags,
             supportedWorkflows: manifest.examples,
-            handler: handler
+            handler: { arguments, context in
+                try await registry.invoke(
+                    actionID: manifest.actionID,
+                    arguments: arguments,
+                    invocation: .modelReadOnly,
+                    context: context
+                )
+            }
         )
         try await toolRegistry.register(tool)
-        entries[manifest.actionID] = Entry(manifest: manifest, availability: probe)
+        entries[manifest.actionID] = Entry(manifest: manifest, availability: probe, handler: handler)
     }
 
     func manifests() -> [NexComputerActionManifest] {
@@ -189,6 +210,147 @@ actor NexComputerRegistry {
         invocation: NexToolInvocation
     ) async throws -> NexJSONValue {
         try await toolRegistry.execute(name: actionID, arguments: arguments, invocation: invocation)
+    }
+
+    func recoverablePendingActions() async throws -> [NexComputerPendingAction] {
+        try await confirmationGateway.recoverable()
+    }
+
+    private func invoke(
+        actionID: String,
+        arguments: [String: NexJSONValue],
+        invocation: NexToolInvocation,
+        context: NexToolExecutionContext
+    ) async throws -> NexJSONValue {
+        guard let entry = entries[actionID] else { throw NexToolError.notFound(actionID) }
+        try entry.manifest.inputSchema.validate(arguments)
+        let availability = await entry.availability()
+        guard availability.isAvailable else {
+            throw NexComputerActionFailure(
+                code: "UNAVAILABLE",
+                message: availability.reason ?? "Action is unavailable.",
+                recovery: availability.recovery
+            )
+        }
+        do {
+            try await permissionManager.authorize(entry.manifest.requiredPermissions)
+        } catch let failure as NexComputerPermissionFailure {
+            return Self.permissionRequiredJSON(failure.status)
+        }
+        if Self.requiresConfirmation(entry.manifest) {
+            let pending = try await confirmationGateway.request(
+                manifest: entry.manifest,
+                arguments: arguments
+            )
+            return Self.confirmationRequiredJSON(pending)
+        }
+        return try await entry.handler(arguments, context)
+    }
+
+    private func confirm(actionID: UUID, context: NexToolExecutionContext) async throws -> NexJSONValue {
+        guard let preview = await confirmationGateway.pending(id: actionID) else {
+            throw NexComputerConfirmationError.notFound(actionID)
+        }
+        guard let entry = entries[preview.actionID] else {
+            try? await confirmationGateway.fail(id: actionID, code: "action_unavailable_after_restart")
+            throw NexToolError.notFound(preview.actionID)
+        }
+        let pending = try await confirmationGateway.authorize(
+            id: actionID,
+            expectedManifest: entry.manifest,
+            expectedArguments: preview.arguments
+        )
+        do {
+            let result = try await entry.handler(pending.arguments, context)
+            try await confirmationGateway.complete(id: actionID)
+            return result
+        } catch {
+            try? await confirmationGateway.fail(id: actionID, code: "execution_failed")
+            throw error
+        }
+    }
+
+    private func registerControlToolsIfNeeded() async throws {
+        guard !controlToolsRegistered else { return }
+        let registry = self
+        do {
+            try await toolRegistry.register(.init(
+                name: "confirm_action",
+                description: "Confirm and execute one exact pending Nex action. The opaque action_id must come from a confirmation_required result.",
+                statusLabel: "Confirming action…",
+                completionLabel: "Confirmed action",
+                spokenStatus: "Confirming that action.",
+                iconSystemName: "checkmark.circle",
+                permission: .automation,
+                schema: .init(fields: [
+                    "actionId": .init(.string, required: true, description: "Opaque pending action ID returned by Nexus.")
+                ]),
+                application: "Nex",
+                provider: "Nexus Confirmation Gateway",
+                examples: ["Confirm the pending action"],
+                aliases: ["approve action", "confirm pending action"],
+                tags: ["confirmation", "approval", "pending action"]
+            ) { arguments, context in
+                guard let raw = arguments["actionId"]?.string, let id = UUID(uuidString: raw) else {
+                    throw NexToolError.executionFailed(code: "invalid_action_id", message: "The pending action ID is invalid.")
+                }
+                return try await registry.confirm(actionID: id, context: context)
+            })
+            try await toolRegistry.register(.init(
+                name: "cancel_action",
+                description: "Cancel one exact pending Nex action before it executes.",
+                statusLabel: "Cancelling action…",
+                completionLabel: "Cancelled action",
+                spokenStatus: "Cancelling that action.",
+                iconSystemName: "xmark.circle",
+                permission: .automation,
+                schema: .init(fields: [
+                    "actionId": .init(.string, required: true, description: "Opaque pending action ID returned by Nexus.")
+                ]),
+                application: "Nex",
+                provider: "Nexus Confirmation Gateway",
+                examples: ["Cancel the pending action"],
+                aliases: ["reject action", "cancel pending action"],
+                tags: ["confirmation", "cancel", "pending action"]
+            ) { arguments, _ in
+                guard let raw = arguments["actionId"]?.string, let id = UUID(uuidString: raw) else {
+                    throw NexToolError.executionFailed(code: "invalid_action_id", message: "The pending action ID is invalid.")
+                }
+                try await registry.confirmationGateway.cancel(id: id)
+                return .object(["status": .string("cancelled"), "actionId": .string(id.uuidString)])
+            })
+            controlToolsRegistered = true
+        } catch NexToolError.duplicateRegistration(_) {
+            controlToolsRegistered = true
+        }
+    }
+
+    private static func requiresConfirmation(_ manifest: NexComputerActionManifest) -> Bool {
+        if manifest.riskClass == .high { return true }
+        switch manifest.confirmationPolicy {
+        case .always: return true
+        case .whenRequired: return manifest.riskClass != .low
+        case .never: return false
+        }
+    }
+
+    private static func confirmationRequiredJSON(_ pending: NexComputerPendingAction) -> NexJSONValue {
+        .object([
+            "status": .string("confirmation_required"),
+            "actionId": .string(pending.id.uuidString),
+            "summary": .string(pending.summary),
+            "exactEffect": .string(pending.exactEffect),
+            "expiresAt": .string(ISO8601DateFormatter().string(from: pending.expiresAt))
+        ])
+    }
+
+    private static func permissionRequiredJSON(_ status: NexComputerPermissionStatus) -> NexJSONValue {
+        .object([
+            "status": .string("permission_required"),
+            "permission": .string(status.requirementID),
+            "state": .string(status.state.rawValue),
+            "recovery": status.recovery.map(NexJSONValue.string) ?? .null
+        ])
     }
 
     private static func defaultAvailabilityProbe(
@@ -350,6 +512,46 @@ actor NexComputerRuntime {
             let result = try await task.value
             guard case .object(let object) = result else {
                 throw RuntimeFailure.invalidOutput("Action output must be a JSON object.")
+            }
+            if object["status"] == .string("confirmation_required") {
+                return await finish(
+                    executionID: executionID,
+                    actionID: actionID,
+                    arguments: arguments,
+                    status: .confirmationRequired,
+                    data: result,
+                    display: object["summary"]?.string ?? "Confirmation is required.",
+                    warnings: [],
+                    error: .init(
+                        code: "CONFIRMATION_REQUIRED",
+                        message: object["exactEffect"]?.string ?? "Confirm this exact action before it runs.",
+                        permission: nil,
+                        recovery: "Approve or cancel the pending action before it expires.",
+                        retryable: false
+                    ),
+                    startedAt: startedAt,
+                    dryRun: false
+                )
+            }
+            if object["status"] == .string("permission_required") {
+                return await finish(
+                    executionID: executionID,
+                    actionID: actionID,
+                    arguments: arguments,
+                    status: .permissionRequired,
+                    data: result,
+                    display: "Permission is required for \(actionID).",
+                    warnings: [],
+                    error: .init(
+                        code: "PERMISSION_REQUIRED",
+                        message: "The required macOS permission is unavailable.",
+                        permission: object["permission"]?.string,
+                        recovery: object["recovery"]?.string,
+                        retryable: false
+                    ),
+                    startedAt: startedAt,
+                    dryRun: false
+                )
             }
             do {
                 try resolvedManifest.outputSchema.validate(object)
