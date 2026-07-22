@@ -96,6 +96,10 @@ final class NexComputerExtendedActionTests: XCTestCase {
         let available = try await computer.availability(actionID: "system.toggle_focus_mode"); XCTAssertFalse(available.isAvailable); XCTAssertTrue((available.reason ?? "").contains("Focus"))
     }
 
+    func testXcodeCatalogRegistersBuildAndTestActions() async throws {
+        let tools = NexToolRegistry(), computer = NexComputerRegistry(toolRegistry: tools, permissionManager: NexComputerPermissionManager(backend: AuthorizedPermissions())); try await NexXcodeActionCatalog().register(on: computer); let names = Set(await tools.definitions().map(\.name)); XCTAssertTrue(Set(["xcode.open", "xcode.open_project", "xcode.build", "xcode.test", "xcode.run", "xcode.get_build_status", "xcode.open_file"]).isSubset(of: names))
+    }
+
     private func temporaryFile(_ name: String) -> URL {
         FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString).appendingPathComponent(name)
     }

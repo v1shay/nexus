@@ -821,3 +821,45 @@ actor NexSystemActionCatalog {
     private static func result(_ display: String, value: Int = 0, raw: String = "", items: NexJSONValue = .array([])) -> NexJSONValue { .object(["display": .string(display), "status": .string("completed"), "value": .number(Double(value)), "raw": .string(raw), "items": items]) }
     private static func manifest(_ id: String, _ description: String, _ examples: [String], _ fields: [String: NexToolFieldSchema], risk: NexComputerRiskClass, confirmation: NexComputerConfirmationPolicy = .never, availability: NexComputerAvailabilityCheck = .always) -> NexComputerActionManifest { .init(actionID: id, application: "macOS", provider: "System", description: description, examples: examples, aliases: [id.replacingOccurrences(of: ".", with: " ")], tags: ["system", "settings", "macos", "battery", "network", "display", "volume", "focus"], inputSchema: .init(fields: fields), outputSchema: output, implementationMethod: id == "system.open_setting" ? .urlScheme : .nativeAPI, registryPermission: .automation, riskClass: risk, confirmationPolicy: confirmation, availabilityCheck: availability, timeoutSeconds: 20, supportsCancellation: false, dryRunBehavior: .supported("Would perform \(id) without changing privacy or network configuration."), previewRenderer: "system.state", tests: ["NexSystemActionTests"]) }
 }
+
+// MARK: - Phase 15: Xcode
+
+actor NexXcodeProvider {
+    struct Snapshot: Sendable { let status: String; let output: String; let diagnostics: [String]; let tests: String; let artifactPaths: [String] }
+    private var last = Snapshot(status: "idle", output: "", diagnostics: [], tests: "", artifactPaths: [])
+    func open(path: URL?) async throws { if let path { let p = Process(); p.executableURL = URL(fileURLWithPath: "/usr/bin/xed"); p.arguments = [path.path]; try p.run() } else { guard let app = NSWorkspace.shared.urlForApplication(withBundleIdentifier: "com.apple.dt.Xcode") else { throw NexToolError.executionFailed(code: "xcode_unavailable", message: "Xcode is not installed.") }; _ = try await NSWorkspace.shared.openApplication(at: app, configuration: .init()) } }
+    func run(action: String, container: URL, scheme: String, configuration: String, destination: String?, progress: @escaping @Sendable (String) async -> Void) async throws -> Snapshot {
+        guard FileManager.default.fileExists(atPath: container.path) else { throw NexToolError.executionFailed(code: "xcode_container_missing", message: "Xcode project or workspace was not found.") }
+        var args = [container.pathExtension == "xcworkspace" ? "-workspace" : "-project", container.path, "-scheme", scheme, "-configuration", configuration]
+        if let destination, !destination.isEmpty { args += ["-destination", destination] }; args.append(action)
+        let process = Process(), pipe = Pipe(); process.executableURL = URL(fileURLWithPath: "/usr/bin/xcodebuild"); process.arguments = args; process.standardOutput = pipe; process.standardError = pipe; try process.run()
+        var lines: [String] = []; for try await line in pipe.fileHandleForReading.bytes.lines { lines.append(line); if line.contains("warning:") || line.contains("error:") || line.contains("Test Case") { await progress(String(line.prefix(500))) } }; process.waitUntilExit()
+        let output = lines.joined(separator: "\n"), diagnostics = lines.filter { $0.contains("warning:") || $0.contains("error:") }, tests = lines.filter { $0.contains("Test Case") || $0.contains("Executed ") || $0.contains("TEST SUCCEEDED") || $0.contains("TEST FAILED") }.suffix(100).joined(separator: "\n")
+        let artifacts = lines.compactMap { line -> String? in guard let range = line.range(of: #"/[^ ]+\.(app|xcresult)"#, options: .regularExpression) else { return nil }; return String(line[range]) }
+        let snapshot = Snapshot(status: process.terminationStatus == 0 ? "succeeded" : "failed", output: String(output.suffix(100_000)), diagnostics: diagnostics, tests: tests, artifactPaths: Array(Set(artifacts)).sorted()); last = snapshot
+        if process.terminationStatus != 0 { throw NexToolError.executionFailed(code: "xcodebuild_failed", message: String(output.suffix(4_000))) }; return snapshot
+    }
+    func status() -> Snapshot { last }
+}
+
+actor NexXcodeActionCatalog {
+    private let provider: NexXcodeProvider; private var registered = false
+    init(provider: NexXcodeProvider = NexXcodeProvider()) { self.provider = provider }
+    func register(on registry: NexComputerRegistry) async throws {
+        guard !registered else { return }; let provider = provider
+        try await registry.register(manifest: Self.manifest("xcode.open", "Open or activate Xcode.", ["Open Xcode"], [:])) { _, _ in try await provider.open(path: nil); return Self.result("Opened Xcode.") }
+        try await registry.register(manifest: Self.manifest("xcode.open_project", "Open an existing Xcode project or workspace with xed.", ["Open this Xcode project"], ["path": .init(.string, required: true)])) { args, _ in let path = try required(args, "path"); try await provider.open(path: URL(fileURLWithPath: path)); return Self.result("Opened the Xcode project.") }
+        try await registry.register(manifest: Self.manifest("xcode.open_file", "Open an existing source file with xed.", ["Open this file in Xcode"], ["path": .init(.string, required: true)])) { args, _ in let path = try required(args, "path"); try await provider.open(path: URL(fileURLWithPath: path)); return Self.result("Opened the file in Xcode.") }
+        for (id, action) in [("xcode.build", "build"), ("xcode.test", "test"), ("xcode.run", "build")] {
+            try await registry.register(manifest: Self.manifest(id, "Run xcodebuild \(action) with an explicit project/workspace, scheme, configuration, and optional destination.", ["\(action.capitalized) this Xcode scheme"], ["path": .init(.string, required: true), "scheme": .init(.string, required: true), "configuration": .init(.string), "destination": .init(.string)], risk: .medium, confirmation: .always)) { args, context in
+                let snapshot = try await provider.run(action: action, container: URL(fileURLWithPath: try required(args, "path")), scheme: try required(args, "scheme"), configuration: args["configuration"]?.string ?? "Debug", destination: args["destination"]?.string) { await context.reportProgress($0, nil) }; return Self.result(snapshot)
+            }
+        }
+        try await registry.register(manifest: Self.manifest("xcode.get_build_status", "Return the latest structured xcodebuild status and diagnostics.", ["How did the Xcode build go?"], [:])) { _, _ in Self.result(await provider.status()) }
+        registered = true
+    }
+    private static let output = NexToolInputSchema(fields: ["display": .init(.string, required: true), "status": .init(.string, required: true), "output": .init(.string, required: true), "diagnostics": .init(.stringArray, required: true), "tests": .init(.string, required: true), "artifacts": .init(.stringArray, required: true)])
+    private static func result(_ display: String) -> NexJSONValue { .object(["display": .string(display), "status": .string("completed"), "output": .string(""), "diagnostics": .array([]), "tests": .string(""), "artifacts": .array([])]) }
+    private static func result(_ s: NexXcodeProvider.Snapshot) -> NexJSONValue { .object(["display": .string("Xcode \(s.status)."), "status": .string(s.status), "output": .string(s.output), "diagnostics": .array(s.diagnostics.map(NexJSONValue.string)), "tests": .string(s.tests), "artifacts": .array(s.artifactPaths.map(NexJSONValue.string))]) }
+    private static func manifest(_ id: String, _ description: String, _ examples: [String], _ fields: [String: NexToolFieldSchema], risk: NexComputerRiskClass = .low, confirmation: NexComputerConfirmationPolicy = .never) -> NexComputerActionManifest { .init(actionID: id, application: "Xcode", provider: "xcodebuild/xed", bundleIdentifier: "com.apple.dt.Xcode", description: description, examples: examples, aliases: [id.replacingOccurrences(of: ".", with: " ")], tags: ["xcode", "build", "test", "swift", "developer"], inputSchema: .init(fields: fields), outputSchema: output, implementationMethod: .cli, registryPermission: risk == .low ? .files : .codeExecution, riskClass: risk, confirmationPolicy: confirmation, availabilityCheck: .executable(paths: ["/usr/bin/xcodebuild"]), timeoutSeconds: 300, supportsCancellation: true, dryRunBehavior: .supported("Would run \(id) with explicit xcodebuild arguments."), previewRenderer: "xcode.build", tests: ["NexXcodeActionTests"]) }
+}
