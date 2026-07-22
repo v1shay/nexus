@@ -30,6 +30,9 @@
 		P100000130075C29006660E4 /* NexObsidianVault.swift in Sources */ = {isa = PBXBuildFile; fileRef = P100000230075C29006660E4 /* NexObsidianVault.swift */; };
 		Q100000130075C29006660E4 /* NexMemoryIndex.swift in Sources */ = {isa = PBXBuildFile; fileRef = Q100000230075C29006660E4 /* NexMemoryIndex.swift */; };
 		R100000130075C29006660E4 /* NexToolSystem.swift in Sources */ = {isa = PBXBuildFile; fileRef = R100000230075C29006660E4 /* NexToolSystem.swift */; };
+		A2C0000130075C29006660E4 /* NexComputerManifest.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2C0000230075C29006660E4 /* NexComputerManifest.swift */; };
+		A2C0000330075C29006660E4 /* NexComputerRuntime.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2C0000430075C29006660E4 /* NexComputerRuntime.swift */; };
+		A2C0000530075C29006660E4 /* NexComputerFoundationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2C0000630075C29006660E4 /* NexComputerFoundationTests.swift */; };
 		R100000330075C29006660E4 /* NexMemoryService.swift in Sources */ = {isa = PBXBuildFile; fileRef = R100000430075C29006660E4 /* NexMemoryService.swift */; };
 		A1B2C3D4E5F60718293A4B5C /* NexCLITaskService.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1B2C3D4E5F60718293A4B5C /* NexCLITaskService.swift */; };
 		C1D2E3F4A5B60718293A4B5C /* NexCLIHostManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = D1D2E3F4A5B60718293A4B5C /* NexCLIHostManager.swift */; };
@@ -116,6 +119,9 @@
 		P100000230075C29006660E4 /* NexObsidianVault.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NexObsidianVault.swift; sourceTree = "<group>"; };
 		Q100000230075C29006660E4 /* NexMemoryIndex.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NexMemoryIndex.swift; sourceTree = "<group>"; };
 		R100000230075C29006660E4 /* NexToolSystem.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NexToolSystem.swift; sourceTree = "<group>"; };
+		A2C0000230075C29006660E4 /* NexComputerManifest.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NexComputerManifest.swift; sourceTree = "<group>"; };
+		A2C0000430075C29006660E4 /* NexComputerRuntime.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NexComputerRuntime.swift; sourceTree = "<group>"; };
+		A2C0000630075C29006660E4 /* NexComputerFoundationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NexComputerFoundationTests.swift; sourceTree = "<group>"; };
 		R100000430075C29006660E4 /* NexMemoryService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NexMemoryService.swift; sourceTree = "<group>"; };
 		B1B2C3D4E5F60718293A4B5C /* NexCLITaskService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NexCLITaskService.swift; sourceTree = "<group>"; };
 		D1D2E3F4A5B60718293A4B5C /* NexCLIHostManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NexCLIHostManager.swift; sourceTree = "<group>"; };
@@ -208,6 +214,40 @@
 			name = Products;
 			sourceTree = "<group>";
 		};
+		A2C0000730075C29006660E4 /* NexComputer */ = {
+			isa = PBXGroup;
+			children = (
+				A2C0000830075C29006660E4 /* Registry */,
+				A2C0000930075C29006660E4 /* Runtime */,
+			);
+			path = NexComputer;
+			sourceTree = "<group>";
+		};
+		A2C0000830075C29006660E4 /* Registry */ = {
+			isa = PBXGroup;
+			children = (
+				A2C0000230075C29006660E4 /* NexComputerManifest.swift */,
+			);
+			path = Registry;
+			sourceTree = "<group>";
+		};
+		A2C0000930075C29006660E4 /* Runtime */ = {
+			isa = PBXGroup;
+			children = (
+				A2C0000430075C29006660E4 /* NexComputerRuntime.swift */,
+			);
+			path = Runtime;
+			sourceTree = "<group>";
+		};
+		A2C0000A30075C29006660E4 /* NexComputer tests */ = {
+			isa = PBXGroup;
+			children = (
+				A2C0000630075C29006660E4 /* NexComputerFoundationTests.swift */,
+			);
+			name = NexComputer;
+			path = NexComputer;
+			sourceTree = "<group>";
+		};
 		156AB6BA30075C29006660E4 /* nexus */ = {
 			isa = PBXGroup;
 			children = (
@@ -220,6 +260,7 @@
 				P100000230075C29006660E4 /* NexObsidianVault.swift */,
 				Q100000230075C29006660E4 /* NexMemoryIndex.swift */,
 				R100000230075C29006660E4 /* NexToolSystem.swift */,
+				A2C0000730075C29006660E4 /* NexComputer */,
 				R100000430075C29006660E4 /* NexMemoryService.swift */,
 				B1B2C3D4E5F60718293A4B5C /* NexCLITaskService.swift */,
 				D1D2E3F4A5B60718293A4B5C /* NexCLIHostManager.swift */,
@@ -279,6 +320,7 @@
 			isa = PBXGroup;
 			children = (
 				156AB6CD30075C2A006660E4 /* nexusTests.swift */,
+				A2C0000A30075C29006660E4 /* NexComputer tests */,
 				G100000A30075C29006660E4 /* NexusConnectFoundationTests.swift */,
 				H100000830075C29006660E4 /* NexusConnectDiscoveryTests.swift */,
 				I100000430075C29006660E4 /* NexusConnectHostServiceTests.swift */,
@@ -469,6 +511,8 @@
 				P100000130075C29006660E4 /* NexObsidianVault.swift in Sources */,
 				Q100000130075C29006660E4 /* NexMemoryIndex.swift in Sources */,
 				R100000130075C29006660E4 /* NexToolSystem.swift in Sources */,
+				A2C0000130075C29006660E4 /* NexComputerManifest.swift in Sources */,
+				A2C0000330075C29006660E4 /* NexComputerRuntime.swift in Sources */,
 				R100000330075C29006660E4 /* NexMemoryService.swift in Sources */,
 				A1B2C3D4E5F60718293A4B5C /* NexCLITaskService.swift in Sources */,
 				C1D2E3F4A5B60718293A4B5C /* NexCLIHostManager.swift in Sources */,
@@ -514,6 +558,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				156AB6CE30075C2A006660E4 /* nexusTests.swift in Sources */,
+				A2C0000530075C29006660E4 /* NexComputerFoundationTests.swift in Sources */,
 				G100000930075C29006660E4 /* NexusConnectFoundationTests.swift in Sources */,
 				H100000730075C29006660E4 /* NexusConnectDiscoveryTests.swift in Sources */,
 				I100000330075C29006660E4 /* NexusConnectHostServiceTests.swift in Sources */,

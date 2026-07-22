@@ -2,6 +2,12 @@
 
 Status: Phase 0 repository discovery complete on 2026-07-22. No executor or UI phase may skip the checkpoints below.
 
+## Implemented checkpoints
+
+- Phase 0 (`6af5442`): repository discovery, architecture map, security/permission inventory, test baseline, and rollback plan committed and pushed.
+- Phase 1 (`305c70e`): centralized provider artwork resolution, exact embedded 48×48 ChatGPT PNG for GPT/OpenAI models, API-provider icon coverage, focused tests, signed build, and push completed. No Codex, NexCLI, or task-preview layout was changed.
+- Phase 2: `NexComputerActionManifest`, `NexComputerRegistry`, and `NexComputerRuntime` now extend the existing `NexToolRegistry`. The implementation includes versioned strict manifests, implementation priority metadata, required permissions, risk and confirmation metadata, availability probes, bounded retry, cancellation, timeout, no-side-effect dry runs, strict output validation, structured result/error envelopes, and redacted bounded logging. Eight focused foundation tests and the signed build are green; the full unit suite has only the two documented pre-existing prompt-contract failures.
+
 ## Baseline
 
 - Repository: native macOS Swift/SwiftUI application in `nexus/nexus.xcodeproj`.
