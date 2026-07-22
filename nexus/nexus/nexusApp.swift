@@ -444,6 +444,15 @@ final class NotchController: ObservableObject {
             armWakePhraseListener()
             return
         }
+
+        // Media control is the single intentionally deterministic voice path:
+        // while a Nex YouTube player exists, short fullscreen commands should
+        // feel like player controls, not a request that waits on inference.
+        if mediaOverlayTab != nil, NexMediaVoiceCommand.requestsFullscreen(prompt) {
+            presentFullscreenYouTubeImmediately()
+            return
+        }
+
         responseTask?.cancel()
         let generation = UUID()
         responseGeneration = generation
@@ -622,6 +631,22 @@ final class NotchController: ObservableObject {
                 armWakePhraseListener()
             }
         }
+    }
+
+    private func presentFullscreenYouTubeImmediately() {
+        guard mediaOverlayTab != nil, let screen else {
+            armWakePhraseListener()
+            return
+        }
+        responseTask?.cancel()
+        responseIsStreaming = false
+        responseSpeaker.stop()
+        pendingYouTubePlayback = nil
+        pendingYouTubeFullscreen = false
+        isMediaFullscreen = true
+        interaction.showMediaOverlay()
+        resize(to: screen.frame.size, animated: true)
+        armWakePhraseListener()
     }
 
     private func requestAsyncStatusIfNeeded(prompt: String, generation: UUID) {

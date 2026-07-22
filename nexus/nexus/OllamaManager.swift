@@ -201,7 +201,7 @@ final class OllamaManager: @unchecked Sendable {
         request.httpBody = try JSONEncoder().encode(
             OllamaChatRequest(
                 model: model,
-                messages: [.init(role: "system", content: NexusResponseInstructions.conciseSystemPrompt)]
+                messages: [.init(role: "system", content: NexusResponseInstructions.completeSystemPrompt)]
                     + messages.map { .init(role: $0.role, content: $0.content) },
                 stream: true,
                 // `nil` lets thinking-capable models choose their own default.
@@ -279,7 +279,7 @@ final class OllamaManager: @unchecked Sendable {
         request.httpBody = try JSONEncoder().encode(
             OllamaToolPlanningRequest(
                 model: model,
-                messages: [.init(role: "system", content: NexusResponseInstructions.conciseSystemPrompt)]
+                messages: [.init(role: "system", content: NexusResponseInstructions.completeSystemPrompt)]
                     + messages.map { .init(role: $0.role, content: $0.content) },
                 stream: true,
                 think: false,
@@ -706,7 +706,7 @@ final class LMStudioManager: @unchecked Sendable {
         request.httpBody = try JSONEncoder().encode(
             OpenAIChatRequest(
                 model: resolvedModel,
-                messages: [.init(role: "system", content: NexusResponseInstructions.conciseSystemPrompt)]
+                messages: [.init(role: "system", content: NexusResponseInstructions.completeSystemPrompt)]
                     + messages.map { .init(role: $0.role, content: $0.content) },
                 stream: true,
                 temperature: temperature,

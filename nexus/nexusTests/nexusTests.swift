@@ -76,6 +76,23 @@ final class NexusGeometryTests: XCTestCase {
         XCTAssertFalse(NexYouTubeToolController.isValidVideoID("not a video"))
     }
 
+    func testMediaFullscreenVoiceCommandIsNarrowAndDeterministic() {
+        XCTAssertTrue(NexMediaVoiceCommand.requestsFullscreen("enlarge"))
+        XCTAssertTrue(NexMediaVoiceCommand.requestsFullscreen("full screen please"))
+        XCTAssertTrue(NexMediaVoiceCommand.requestsFullscreen("full scren"))
+        XCTAssertTrue(NexMediaVoiceCommand.requestsFullscreen("make it bigger"))
+        XCTAssertFalse(NexMediaVoiceCommand.requestsFullscreen("explain full screen video"))
+        XCTAssertFalse(NexMediaVoiceCommand.requestsFullscreen("make my answer bigger"))
+    }
+
+    func testSystemPromptDescribesYouTubeToolContract() {
+        let prompt = NexusResponseInstructions.completeSystemPrompt
+        XCTAssertTrue(prompt.contains("youtube_play_current"))
+        XCTAssertTrue(prompt.contains("youtube_search"))
+        XCTAssertTrue(prompt.contains("youtube_play"))
+        XCTAssertTrue(prompt.contains("youtube_fullscreen"))
+    }
+
     @MainActor
     func testCurrentYouTubeToolUsesOnlyTheActiveChromeVideo() async throws {
         let url = try XCTUnwrap(URL(string: "https://www.youtube.com/watch?v=abcDEF_1234"))
