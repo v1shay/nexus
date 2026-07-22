@@ -52,24 +52,7 @@ private struct MusicPlaybackIndicator: View {
                 albumArt
                     .frame(width: 43, height: 43)
 
-                VStack(alignment: .leading, spacing: 2) {
-                    if let track = notch.musicTrack {
-                        Text(track.title)
-                            .font(.system(size: 13, weight: .semibold))
-                            .lineLimit(1)
-                        Text(track.artist)
-                            .font(.system(size: 11, weight: .medium))
-                            .foregroundStyle(.white.opacity(0.56))
-                            .lineLimit(1)
-                    } else {
-                        Text(notch.musicBrowserSource?.name ?? "Now playing")
-                            .font(.system(size: 13, weight: .semibold))
-                        Text(notch.musicBrowserSource.map { "\($0.name) audio" } ?? "System audio")
-                            .font(.system(size: 11, weight: .medium))
-                            .foregroundStyle(.white.opacity(0.56))
-                    }
-                }
-                .frame(maxWidth: .infinity, alignment: .leading)
+                Color.clear.frame(maxWidth: .infinity)
 
                 NexusOrbAnimation(
                     mode: .music,
@@ -93,12 +76,6 @@ private struct MusicPlaybackIndicator: View {
                 .resizable()
                 .scaledToFill()
                 .clipShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
-                .overlay(alignment: .bottomTrailing) {
-                    brandMark
-                        .padding(3)
-                        .background(.black.opacity(0.72), in: Circle())
-                        .padding(3)
-                }
         } else {
             RoundedRectangle(cornerRadius: 9, style: .continuous)
                 .fill(notch.musicPalette.color.opacity(0.24))
