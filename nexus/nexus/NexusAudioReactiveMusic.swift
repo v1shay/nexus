@@ -17,7 +17,9 @@ final class NexusAudioReactiveMusic: NSObject, ObservableObject {
         var green: Double
         var blue: Double
 
-        static let defaultBlue = Palette(red: 0.34, green: 0.64, blue: 1.0)
+        /// Neutral fallback when source artwork has no usable dominant color.
+        /// A music card should never randomly turn Nexus blue.
+        static let defaultBlue = Palette(red: 0.86, green: 0.88, blue: 0.92)
 
         var color: Color {
             Color(red: red, green: green, blue: blue)
@@ -90,7 +92,10 @@ final class NexusAudioReactiveMusic: NSObject, ObservableObject {
         guard let lastAudibleAt else { return false }
         return Date().timeIntervalSince(lastAudibleAt) < 1.15
     }
-    var isPlaying: Bool { track != nil || hasAudibleSystemAudio }
+    // A recognized active media page is enough to surface its card. This
+    // avoids the old circular failure where the card was hidden until audio
+    // capture had already proven it was playing.
+    var isPlaying: Bool { track != nil || browserSource != nil || hasAudibleSystemAudio }
     var activeArtwork: NSImage? { track == nil ? browserArtwork : artwork }
     var activePalette: Palette { track == nil ? (browserSource?.palette ?? .defaultBlue) : palette }
 
@@ -403,7 +408,12 @@ private extension NSImage {
         ), let context = NSGraphicsContext(bitmapImageRep: bitmap) else { return nil }
         NSGraphicsContext.saveGraphicsState()
         NSGraphicsContext.current = context
-        draw(in: NSRect(x: 0, y: 0, width: 1, height: 1), from: .zero, operation: .copy, fraction: 1)
+        draw(
+            in: NSRect(x: 0, y: 0, width: 1, height: 1),
+            from: NSRect(origin: .zero, size: size),
+            operation: .copy,
+            fraction: 1
+        )
         NSGraphicsContext.restoreGraphicsState()
         guard let color = bitmap.colorAt(x: 0, y: 0)?.usingColorSpace(.deviceRGB) else { return nil }
         let maxComponent = max(color.redComponent, color.greenComponent, color.blueComponent, 0.001)
