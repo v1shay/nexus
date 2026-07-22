@@ -37,6 +37,13 @@ final class NexusGeometryTests: XCTestCase {
         XCTAssertEqual(MediaPlatform.classify(url: try XCTUnwrap(URL(string: "https://www.twitch.tv/nexus"))), .twitch)
     }
 
+    func testThinkingDisplayHidesQuotesAndPeriodsWithoutRemovingWords() {
+        XCTAssertEqual(
+            NotchInteractionState.sanitizedThinkingDisplay("Calling web_search. \"Checking sources.\""),
+            "Calling web_search Checking sources"
+        )
+    }
+
     @MainActor
     func testManagedNexCLIWorkspaceSealsAndRotatesOnlyOnNextLaunch() throws {
         let root = FileManager.default.temporaryDirectory
@@ -271,7 +278,7 @@ final class NexusGeometryTests: XCTestCase {
         state.updateThinkingSentence("I will multiply 17 by 24 first.")
         state.beginThinking()
         XCTAssertEqual(state.presentation, .thinking)
-        XCTAssertEqual(state.thinkingSentence, "I will multiply 17 by 24 first.")
+        XCTAssertEqual(state.thinkingSentence, "I will multiply 17 by 24 first")
 
         state.receivePartialAnswer("17 times 24 is 408.")
         XCTAssertEqual(state.presentation, .overlay)

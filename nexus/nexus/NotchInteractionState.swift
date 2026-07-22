@@ -220,9 +220,24 @@ struct NotchInteractionState: Equatable {
     }
 
     mutating func updateThinkingSentence(_ text: String) {
-        let sentence = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        let sentence = Self.sanitizedThinkingDisplay(text)
         guard !sentence.isEmpty else { return }
         thinkingSentence = sentence
+    }
+
+    /// Native reasoning is deliberately a low-detail ambient surface, not a
+    /// transcript. Quotes and terminal punctuation create noisy flicker in the
+    /// one-line notch, so keep their spacing but hide the marks themselves.
+    static func sanitizedThinkingDisplay(_ text: String) -> String {
+        let hiddenMarks = CharacterSet(charactersIn: ".\\\"'“”‘’")
+        var scalars = String.UnicodeScalarView()
+        for scalar in text.unicodeScalars {
+            scalars.append(hiddenMarks.contains(scalar) ? UnicodeScalar(32)! : scalar)
+        }
+        let replaced = String(scalars)
+        return replaced
+            .replacingOccurrences(of: #"\s+"#, with: " ", options: NSString.CompareOptions.regularExpression)
+            .trimmingCharacters(in: CharacterSet.whitespacesAndNewlines)
     }
 
     mutating func beginToolActivity(_ activity: ToolActivity) {

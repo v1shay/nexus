@@ -670,7 +670,7 @@ private struct StreamingThinkingIndicator: View {
                     .frame(maxWidth: .infinity)
                     .frame(height: rowHeight)
 
-                    ShimmeringStatusText(text: sentence, isFailure: false, style: .white, fontSize: 10.5)
+                    ThinkingToolHighlightText(sentence: sentence)
                         .padding(.horizontal, 24)
                         .frame(height: NotchGeometry.compactTextReveal)
                 }
@@ -678,6 +678,62 @@ private struct StreamingThinkingIndicator: View {
         }
         .accessibilityElement(children: .combine)
         .accessibilityLabel("Nexus thinking: \(sentence)")
+    }
+}
+
+/// Reasoning normally stays neutral, while a real tool name gets a small
+/// source cue. This keeps the compact thinking line readable without coupling
+/// it to a particular model's reasoning syntax.
+private struct ThinkingToolHighlightText: View {
+    let sentence: String
+
+    private struct ToolColor {
+        let names: [String]
+        let color: Color
+    }
+
+    private static let toolColors: [ToolColor] = [
+        .init(names: ["web_search", "web search", "google search"], color: .init(red: 0.26, green: 0.52, blue: 0.96)),
+        .init(names: ["memory_search", "memory_get", "memory_propose", "conversation_recall", "memory search"], color: .init(red: 0.66, green: 0.39, blue: 0.96)),
+        .init(names: ["nex_cli_task", "nex cli"], color: .init(red: 0.36, green: 0.76, blue: 0.94)),
+        .init(names: ["codex"], color: .init(red: 0.22, green: 0.66, blue: 1.0))
+    ]
+
+    var body: some View {
+        highlighted
+            .font(.system(size: 10.5, weight: .medium, design: .rounded))
+            .lineLimit(1)
+            .frame(maxWidth: .infinity)
+            .accessibilityLabel(sentence)
+    }
+
+    private var highlighted: Text {
+        var remaining = sentence[...]
+        var output = Text("")
+        while !remaining.isEmpty {
+            let candidates = Self.toolColors.compactMap { style -> (ToolColor, Range<String.SubSequence.Index>)? in
+                guard let range = remaining.range(of: style.names[0], options: .caseInsensitive) else {
+                    let matched = style.names.compactMap { name in
+                        remaining.range(of: name, options: .caseInsensitive)
+                    }.min(by: { $0.lowerBound < $1.lowerBound })
+                    return matched.map { (style, $0) }
+                }
+                let matched = ([range] + style.names.dropFirst().compactMap {
+                    remaining.range(of: $0, options: .caseInsensitive)
+                }).min(by: { $0.lowerBound < $1.lowerBound }) ?? range
+                return (style, matched)
+            }
+            guard let next = candidates.min(by: { $0.1.lowerBound < $1.1.lowerBound }) else {
+                output = output + Text(String(remaining)).foregroundColor(.white.opacity(0.62))
+                break
+            }
+            output = output + Text(String(remaining[..<next.1.lowerBound])).foregroundColor(.white.opacity(0.62))
+            output = output + Text(String(remaining[next.1]))
+                .foregroundColor(next.0.color)
+                .bold()
+            remaining = remaining[next.1.upperBound...]
+        }
+        return output
     }
 }
 
