@@ -244,6 +244,7 @@ private struct NexCLIConsoleHeader: View {
             RoundedRectangle(cornerRadius: 9, style: .continuous)
                 .strokeBorder(.white.opacity(0.22), style: StrokeStyle(lineWidth: 1, dash: [8, 5]))
         }
+        .accessibilityIdentifier("nex-cli-console-header")
         .accessibilityElement(children: .contain)
     }
 
@@ -309,6 +310,7 @@ private struct NexusAppRail: View {
                 .buttonStyle(.plain)
                 .foregroundStyle(page == item ? .white : .secondary)
                 .help(item.rawValue.capitalized)
+                .accessibilityIdentifier("nexus-page-\(item.rawValue)")
             }
             Spacer()
         }

@@ -782,7 +782,11 @@ final class NotchController: ObservableObject {
             settings: settings,
             cli: .shared,
             cliSettings: .shared
-        ))
+        )
+        // The app window is a separate NSHostingView from the notch panel.
+        // Keep its terminal masthead on the same selected-pet state instead
+        // of allowing the @EnvironmentObject lookup to trap on tab selection.
+        .environmentObject(self))
         panel.collectionBehavior.insert(.fullScreenPrimary)
         if let screen = NSScreen.main ?? NSScreen.screens.first {
             panel.setFrame(screen.visibleFrame, display: true)
