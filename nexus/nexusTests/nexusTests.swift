@@ -132,12 +132,19 @@ final class NexusGeometryTests: XCTestCase {
         let regions = NotchGeometry.horizontalRegions(in: listening)
 
         XCTAssertEqual(listening.width, 314)
+        XCTAssertEqual(listening.height, physicalNotch.height)
         XCTAssertEqual(regions.leftWing.width, 62)
         XCTAssertEqual(regions.notchGap.width, physicalNotch.width)
         XCTAssertEqual(regions.rightWing.width, 62)
         XCTAssertEqual(regions.leftWing.maxX, regions.notchGap.minX)
         XCTAssertEqual(regions.notchGap.maxX, regions.rightWing.minX)
         XCTAssertEqual(regions.rightWing.maxX, listening.width)
+    }
+
+    func testCompactTextOnlyGetsAShallowRevealBelowTheMenuBar() {
+        let physicalNotch = CGSize(width: 190, height: 32)
+        XCTAssertEqual(NotchGeometry.compactHeight(for: physicalNotch), 32)
+        XCTAssertEqual(NotchGeometry.compactTextHeight(for: physicalNotch), 44)
     }
 
     func testDictationReleaseSavesTextAndOpensOverlay() {

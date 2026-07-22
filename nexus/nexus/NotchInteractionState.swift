@@ -40,6 +40,13 @@ struct ToolActivity: Equatable, Sendable {
     var query: String?
     var sources: [ToolReceiptSource] = []
 
+    /// Generic activity text stays in the compact row. Reserve a second line
+    /// only for real streamed worker output or retrieved search results.
+    var requiresCompactTextReveal: Bool {
+        detail?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
+            || (toolName == "Web Search" && !sources.isEmpty)
+    }
+
     static func googleSearch(query: String) -> ToolActivity {
         ToolActivity(
             toolName: "Google Search",

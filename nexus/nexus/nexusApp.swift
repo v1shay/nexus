@@ -1017,13 +1017,12 @@ final class NotchController: ObservableObject {
     }
 
     private func musicSize(for screen: NSScreen) -> CGSize {
-        // Music has no status or transcript text, so it belongs in the same
-        // compact notch footprint as the lightweight listening surface—not the
-        // larger tool/coding activity card.
+        // Music has no status or transcript text, so it stays within the
+        // menu-bar/notch height. It may grow sideways, never downward.
         let physical = closedSize(for: screen)
         return CGSize(
             width: min(350, physical.width + NotchGeometry.wingWidth * 2 + 18),
-            height: max(52, physical.height + 20)
+            height: NotchGeometry.compactHeight(for: physical)
         )
     }
 
@@ -1049,11 +1048,22 @@ final class NotchController: ObservableObject {
     }
 
     private func toolActivitySize(for screen: NSScreen) -> CGSize {
-        CGSize(width: min(500, screen.frame.width * 0.42), height: 82)
+        let physical = closedSize(for: screen)
+        let streamsText = interaction.toolActivity?.requiresCompactTextReveal ?? false
+        return CGSize(
+            width: min(500, screen.frame.width * 0.42),
+            height: streamsText
+                ? NotchGeometry.compactTextHeight(for: physical)
+                : NotchGeometry.compactHeight(for: physical)
+        )
     }
 
     private func thinkingActivitySize(for screen: NSScreen) -> CGSize {
-        CGSize(width: min(500, screen.frame.width * 0.42), height: 74)
+        let physical = closedSize(for: screen)
+        return CGSize(
+            width: min(500, screen.frame.width * 0.42),
+            height: NotchGeometry.compactTextHeight(for: physical)
+        )
     }
 
     private func frame(for size: CGSize, on screen: NSScreen) -> NSRect {

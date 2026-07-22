@@ -2,12 +2,22 @@ import CoreGraphics
 
 struct NotchGeometry {
     static let wingWidth: CGFloat = 62
-    static let extraVerticalReveal: CGFloat = 10
+    /// Compact states stay within the menu-bar/notch height. Only a live
+    /// second text line may use this shallow, controlled reveal.
+    static let compactTextReveal: CGFloat = 12
+
+    static func compactHeight(for physicalNotchSize: CGSize) -> CGFloat {
+        physicalNotchSize.height
+    }
+
+    static func compactTextHeight(for physicalNotchSize: CGSize) -> CGFloat {
+        compactHeight(for: physicalNotchSize) + compactTextReveal
+    }
 
     static func listeningSize(for physicalNotchSize: CGSize) -> CGSize {
         CGSize(
             width: physicalNotchSize.width + wingWidth * 2,
-            height: physicalNotchSize.height + extraVerticalReveal
+            height: compactHeight(for: physicalNotchSize)
         )
     }
 

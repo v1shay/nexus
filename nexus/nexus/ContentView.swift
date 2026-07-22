@@ -50,17 +50,17 @@ private struct MusicPlaybackIndicator: View {
             NotchSurface(cornerRadius: 14).fill(.black)
             HStack(spacing: 0) {
                 albumArt
-                    .frame(width: 32, height: 32)
+                    .frame(width: 24, height: 24)
 
                 Color.clear.frame(maxWidth: .infinity)
 
                 NexusOrbAnimation(
                     mode: .music,
-                    size: 30,
+                    size: 22,
                     tint: notch.musicPalette.color,
                     energy: notch.musicEnergy
                 )
-                .frame(width: 32, height: 32)
+                .frame(width: 24, height: 24)
             }
             .padding(.horizontal, 13)
             .frame(maxHeight: .infinity)
@@ -117,64 +117,94 @@ private struct ToolActivityIndicator: View {
     private var isCodex: Bool { activity.toolName == "Codex" }
     private var isNexCLI: Bool { activity.toolName == "Nex CLI" }
     private var liveLine: String { activity.detail ?? activity.status }
+    private var usesTextReveal: Bool { activity.requiresCompactTextReveal }
 
     var body: some View {
         ZStack(alignment: .top) {
-            NotchSurface(cornerRadius: 18).fill(.black)
-            HStack(spacing: 0) {
-                Group {
-                    if isCodex {
-                        CodexSessionPicker(selectedSessionID: activity.codexSessionID)
-                    } else if isNexCLI {
-                        NexCLIActivityMark()
-                    } else {
-                        NexusPetView(pet: notch.selectedPet, activity: .tool, height: 31)
-                    }
-                }
-                .frame(width: isCodex ? 96 : NotchGeometry.wingWidth)
-                Color.clear.frame(maxWidth: .infinity)
-                Group {
-                    if isCodex, activity.phase == .completed {
-                        CodexCompletionIndicator()
-                    } else if isCodex, activity.codexKind == .thinking {
-                        // Codex thinking deliberately uses Nex's existing
-                        // three-dot motion rather than a separate SVG.
-                        ThinkingIndicator()
-                    } else {
-                        AnimatedToolIcon(
-                            source: activity.icon,
-                            isFailure: activity.phase == .failed,
-                            isCodex: isCodex
-                        )
-                    }
-                }
-                .frame(width: NotchGeometry.wingWidth)
-            }
-            // Keep both activity marks clear of the curved notch edges, and
-            // align their visual centre with the space above the live line.
-            .padding(.horizontal, 11)
-            .frame(maxWidth: .infinity)
-            .frame(height: 34)
-            .offset(y: 5)
+            NotchSurface(cornerRadius: usesTextReveal ? 15 : 13).fill(.black)
+            activityRow
 
-            VStack(spacing: 5) {
-                if activity.toolName == "Web Search", !activity.sources.isEmpty {
-                    SearchResultTicker(sources: activity.sources)
-                } else {
-                    ShimmeringStatusText(
-                        text: liveLine,
-                        isFailure: activity.phase == .failed,
-                        style: activity.toolName == "Web Search"
-                            ? .google
-                            : (activity.toolName == "Nex Memory" ? .obsidian : (isCodex ? .codex : .white))
-                    )
-                }
+            if usesTextReveal {
+                compactTextLine
+                    .padding(.horizontal, 24)
+                    .padding(.top, 27)
             }
-            .padding(.horizontal, 24)
-            .padding(.top, 43)
         }
         .accessibilityElement(children: .combine)
         .accessibilityLabel("\(activity.toolName). \(liveLine)")
+    }
+
+    private var activityRow: some View {
+        HStack(spacing: 0) {
+            activityLeadingMark
+                .frame(width: isCodex ? 96 : NotchGeometry.wingWidth)
+
+            if usesTextReveal {
+                Color.clear.frame(maxWidth: .infinity)
+            } else {
+                ShimmeringStatusText(
+                    text: liveLine,
+                    isFailure: activity.phase == .failed,
+                    style: statusStyle,
+                    fontSize: 11.5
+                )
+                .padding(.horizontal, 5)
+            }
+
+            activityTrailingMark
+                .frame(width: NotchGeometry.wingWidth)
+        }
+        .padding(.horizontal, 8)
+        .frame(maxWidth: .infinity)
+        .frame(height: 26)
+        .offset(y: 1)
+    }
+
+    @ViewBuilder
+    private var activityLeadingMark: some View {
+        if isCodex {
+            CodexSessionPicker(selectedSessionID: activity.codexSessionID)
+        } else if isNexCLI {
+            NexCLIActivityMark()
+        } else {
+            NexusPetView(pet: notch.selectedPet, activity: .tool, height: 24)
+        }
+    }
+
+    @ViewBuilder
+    private var activityTrailingMark: some View {
+        if isCodex, activity.phase == .completed {
+            CodexCompletionIndicator()
+        } else if isCodex, activity.codexKind == .thinking {
+            // Codex thinking deliberately uses Nex's existing three-dot motion.
+            ThinkingIndicator()
+        } else {
+            AnimatedToolIcon(
+                source: activity.icon,
+                isFailure: activity.phase == .failed,
+                isCodex: isCodex
+            )
+        }
+    }
+
+    @ViewBuilder
+    private var compactTextLine: some View {
+        if activity.toolName == "Web Search", !activity.sources.isEmpty {
+            SearchResultTicker(sources: activity.sources)
+        } else {
+            ShimmeringStatusText(
+                text: liveLine,
+                isFailure: activity.phase == .failed,
+                style: statusStyle,
+                fontSize: 10.5
+            )
+        }
+    }
+
+    private var statusStyle: StatusShimmerStyle {
+        activity.toolName == "Web Search"
+            ? .google
+            : (activity.toolName == "Nex Memory" ? .obsidian : (isCodex ? .codex : .white))
     }
 }
 
@@ -225,7 +255,7 @@ private struct CodexSessionPicker: View {
                 }
             }
         }
-        .frame(width: 96, height: 29, alignment: .center)
+        .frame(width: 96, height: 25, alignment: .center)
     }
 }
 
@@ -263,7 +293,7 @@ private struct CodexAvatarView: View {
                 Image(systemName: "chevron.left.forwardslash.chevron.right").resizable().scaledToFit()
             }
         }
-        .frame(width: 25, height: 25)
+        .frame(width: 22, height: 22)
         .clipShape(Circle())
         .shadow(color: .blue.opacity(0.9), radius: 6)
         .accessibilityLabel("Codex")
@@ -426,13 +456,14 @@ private struct ShimmeringStatusText: View {
     let text: String
     let isFailure: Bool
     var style: StatusShimmerStyle = .white
+    var fontSize: CGFloat = 13
 
     @ViewBuilder
     var body: some View {
         if reduceMotion || isFailure {
             Text(text)
                 .foregroundStyle(isFailure ? .red.opacity(0.9) : .white.opacity(0.78))
-                .font(.system(size: 13, weight: .medium, design: .rounded))
+                .font(.system(size: fontSize, weight: .medium, design: .rounded))
                 .lineLimit(1)
                 .frame(maxWidth: .infinity)
         } else {
@@ -449,7 +480,7 @@ private struct ShimmeringStatusText: View {
                     .mask(Text(text))
                     .shadow(color: .cyan.opacity(0.65), radius: 7)
                 }
-                .font(.system(size: 13, weight: .medium, design: .rounded))
+                .font(.system(size: fontSize, weight: .medium, design: .rounded))
                 .lineLimit(1)
                 .frame(maxWidth: .infinity)
             }
@@ -541,13 +572,13 @@ private struct ListeningWings: View {
                 NexusPetView(
                     pet: notch.selectedPet,
                     activity: isThinking ? .thinking : .dictating,
-                    height: 31
+                    height: 24
                 )
                     .frame(width: wingWidth)
 
                 Group {
                     if isThinking, let status = notch.workingStatus {
-                        ShimmeringStatusText(text: status, isFailure: false)
+                        ShimmeringStatusText(text: status, isFailure: false, fontSize: 11.5)
                             .padding(.horizontal, 8)
                     } else {
                         Color.clear
@@ -558,7 +589,7 @@ private struct ListeningWings: View {
                 Group {
                     NexusOrbAnimation(
                         mode: isThinking ? .thinkingCycle : .composing,
-                        size: 27
+                        size: 22
                     )
                 }
                 .frame(width: wingWidth)
@@ -578,19 +609,21 @@ private struct StreamingThinkingIndicator: View {
 
     var body: some View {
         ZStack(alignment: .top) {
-            NotchSurface(cornerRadius: 18).fill(.black)
+            NotchSurface(cornerRadius: 15).fill(.black)
             HStack(spacing: 0) {
-                NexusPetView(pet: notch.selectedPet, activity: .thinking, height: 31)
+                NexusPetView(pet: notch.selectedPet, activity: .thinking, height: 24)
                     .frame(width: NotchGeometry.wingWidth)
                 Color.clear.frame(maxWidth: .infinity)
-                NexusOrbAnimation(mode: .thinkingCycle, size: 27)
+                NexusOrbAnimation(mode: .thinkingCycle, size: 22)
                     .frame(width: NotchGeometry.wingWidth)
             }
-            .frame(height: 34)
+            .padding(.horizontal, 8)
+            .frame(height: 26)
+            .offset(y: 1)
 
-            ShimmeringStatusText(text: sentence, isFailure: false, style: .white)
+            ShimmeringStatusText(text: sentence, isFailure: false, style: .white, fontSize: 10.5)
                 .padding(.horizontal, 24)
-                .padding(.top, 45)
+                .padding(.top, 27)
         }
         .accessibilityElement(children: .combine)
         .accessibilityLabel("Nexus thinking: \(sentence)")
