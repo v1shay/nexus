@@ -44,7 +44,9 @@ struct ToolActivity: Equatable, Sendable {
     /// only for real streamed worker output or retrieved search results.
     var requiresCompactTextReveal: Bool {
         detail?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
-            || (toolName == "Web Search" && !sources.isEmpty)
+            || (toolName == "Web Search" && (
+                !sources.isEmpty || query?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
+            ))
     }
 
     static func googleSearch(query: String) -> ToolActivity {
@@ -229,7 +231,7 @@ struct NotchInteractionState: Equatable {
     /// transcript. Quotes and terminal punctuation create noisy flicker in the
     /// one-line notch, so keep their spacing but hide the marks themselves.
     static func sanitizedThinkingDisplay(_ text: String) -> String {
-        let hiddenMarks = CharacterSet(charactersIn: ".\\\"'“”‘’")
+        let hiddenMarks = CharacterSet(charactersIn: ".…\\\"'“”‘’")
         var scalars = String.UnicodeScalarView()
         for scalar in text.unicodeScalars {
             scalars.append(hiddenMarks.contains(scalar) ? UnicodeScalar(32)! : scalar)

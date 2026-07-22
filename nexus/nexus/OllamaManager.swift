@@ -204,7 +204,10 @@ final class OllamaManager: @unchecked Sendable {
                 messages: [.init(role: "system", content: NexusResponseInstructions.conciseSystemPrompt)]
                     + messages.map { .init(role: $0.role, content: $0.content) },
                 stream: true,
-                think: includeThinking ? true : nil,
+                // `nil` lets thinking-capable models choose their own default.
+                // The notch control is an explicit user preference, so always
+                // send false when it is off rather than relying on that default.
+                think: includeThinking,
                 options: .init(temperature: temperature, numPredict: maximumTokens)
             )
         )
@@ -448,7 +451,7 @@ private struct OllamaChatRequest: Encodable {
     let model: String
     let messages: [Message]
     let stream: Bool
-    let think: Bool?
+    let think: Bool
     let options: Options
 }
 private struct OllamaToolPlanningRequest: Encodable {

@@ -44,6 +44,17 @@ final class NexusGeometryTests: XCTestCase {
         )
     }
 
+    func testWebSearchQueryGetsItsOwnCompactRevealLine() {
+        let activity = ToolActivity(
+            toolName: "Web Search",
+            status: "Searching",
+            spokenStatus: "Searching the web.",
+            icon: .systemSymbol("globe"),
+            query: "Swift 6.2 release notes"
+        )
+        XCTAssertTrue(activity.requiresCompactTextReveal)
+    }
+
     @MainActor
     func testManagedNexCLIWorkspaceSealsAndRotatesOnlyOnNextLaunch() throws {
         let root = FileManager.default.temporaryDirectory

@@ -203,6 +203,14 @@ private struct ToolActivityIndicator: View {
     private var compactTextLine: some View {
         if activity.toolName == "Web Search", !activity.sources.isEmpty {
             SearchResultTicker(sources: activity.sources)
+        } else if activity.toolName == "Web Search", let query = activity.query,
+                  !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            ShimmeringStatusText(
+                text: query,
+                isFailure: activity.phase == .failed,
+                style: .google,
+                fontSize: 10.5
+            )
         } else {
             ShimmeringStatusText(
                 text: liveLine,

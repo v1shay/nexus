@@ -124,7 +124,7 @@ struct NexCLIHostManager: @unchecked Sendable {
         if await isManagedDaemonReady(password: password) { return }
         try reclaimKnownLegacyDaemonIfNeeded()
         try installAndStart()
-        for _ in 0..<25 {
+        for _ in 0..<75 {
             try await Task.sleep(for: .milliseconds(400))
             if await isManagedDaemonReady(password: password) { return }
         }
@@ -141,7 +141,8 @@ struct NexCLIHostManager: @unchecked Sendable {
               status.workerProcessID > 0,
               Self.isProcessAlive(status.workerProcessID),
               let listenerPID = Self.listenerProcessID(),
-              listenerPID == status.workerProcessID else { return false }
+              listenerPID == status.workerProcessID,
+              Self.parentProcessID(of: status.workerProcessID) == status.processID else { return false }
         return true
     }
 
@@ -149,7 +150,8 @@ struct NexCLIHostManager: @unchecked Sendable {
         guard let status = storedStatus(),
               status.workerProcessID > 0,
               Self.isProcessAlive(status.workerProcessID),
-              Self.listenerProcessID() == status.workerProcessID else { return nil }
+              Self.listenerProcessID() == status.workerProcessID,
+              Self.parentProcessID(of: status.workerProcessID) == status.processID else { return nil }
         return status.workerProcessID
     }
 
@@ -196,6 +198,14 @@ struct NexCLIHostManager: @unchecked Sendable {
         capture(executable: URL(fileURLWithPath: "/bin/ps"), arguments: ["-p", "\(processID)", "-o", "command="])
     }
 
+    private static func parentProcessID(of processID: Int32) -> Int32? {
+        guard let output = capture(
+            executable: URL(fileURLWithPath: "/bin/ps"),
+            arguments: ["-p", "\(processID)", "-o", "ppid="]
+        ) else { return nil }
+        return Int32(output.trimmingCharacters(in: .whitespacesAndNewlines))
+    }
+
     private static func capture(executable: URL, arguments: [String]) -> String? {
         let process = Process()
         let output = Pipe()
@@ -229,6 +239,10 @@ struct NexCLIHostManager: @unchecked Sendable {
             "EnvironmentVariables": [NexCLIHostProcess.environmentKey: "1"],
             "RunAtLoad": true,
             "KeepAlive": true,
+            // The daemon's Bun child must leave with this host. Otherwise a
+            // rebuild replaces the supervisor but leaves a stale listener on
+            // 4096, which makes readiness intermittent and unsafe.
+            "AbandonProcessGroup": false,
             "ProcessType": "Background",
             "ThrottleInterval": 5,
             "StandardOutPath": standardOutputURL.path,
@@ -263,6 +277,7 @@ final class NexCLIHostDaemon {
     private let fileManager: FileManager
     private var worker: Process?
     private var monitor: Task<Void, Never>?
+    private var terminationSignal: DispatchSourceSignal?
     private var isStopping = false
     private var ownsLock = false
     private var adoptedWorkerProcessID: Int32?
@@ -273,6 +288,7 @@ final class NexCLIHostDaemon {
     }
 
     func start() async {
+        installTerminationHandler()
         do {
             let password = try NexCLILoopbackCredential.loadOrCreate()
             if await manager.isManagedDaemonReady(password: password) {
@@ -301,9 +317,24 @@ final class NexCLIHostDaemon {
         isStopping = true
         monitor?.cancel()
         monitor = nil
-        worker?.terminate()
+        if let process = worker, process.isRunning {
+            process.terminate()
+            _ = Darwin.kill(process.processIdentifier, SIGTERM)
+        }
         worker = nil
         releaseLock()
+    }
+
+    private func installTerminationHandler() {
+        guard terminationSignal == nil else { return }
+        Darwin.signal(SIGTERM, SIG_IGN)
+        let source = DispatchSource.makeSignalSource(signal: SIGTERM, queue: .main)
+        source.setEventHandler { [weak self] in
+            self?.stop()
+            Darwin.exit(EXIT_SUCCESS)
+        }
+        source.resume()
+        terminationSignal = source
     }
 
     private func resolveRuntime() throws -> NexCLIManagedRuntime {

@@ -325,6 +325,7 @@ final class NexusAudioReactiveMusic: NSObject, ObservableObject {
     @Published private(set) var palette = Palette.defaultBlue
     @Published private(set) var browserSource: BrowserSource?
     @Published private(set) var browserArtwork: NSImage?
+    @Published private(set) var browserAccessError: String?
     @Published private(set) var energy: CGFloat = 0
     @Published private(set) var captureState: CaptureState = .inactive
     @Published private(set) var activeMediaTab: MediaTab?
@@ -589,11 +590,14 @@ final class NexusAudioReactiveMusic: NSObject, ObservableObject {
                 .joined(separator: "|")
             guard force || snapshot != chromeSnapshotHash else { return }
             chromeSnapshotHash = snapshot
+            browserAccessError = nil
             updateChromeMedia(from: tabs.compactMap(MediaTab.init))
         } catch {
-            // A denied Automation grant must not be represented as successful
-            // Chrome media detection.
-            updateChromeMedia(from: [])
+            // A permission sheet, denied Automation grant, or temporary Chrome
+            // scripting error must never make an already-visible media card
+            // disappear. Keep the last verified tab until Chrome genuinely
+            // exits or the next successful snapshot proves it closed.
+            browserAccessError = error.localizedDescription
         }
     }
 
