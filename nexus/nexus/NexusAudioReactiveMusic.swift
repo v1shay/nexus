@@ -63,7 +63,7 @@ final class NexusAudioReactiveMusic: NSObject, ObservableObject {
             let suppliedAsset: URL = switch self {
             case .youtube: downloads.appendingPathComponent("youtube-icon.svg")
             case .instagram: downloads.appendingPathComponent("instagram-2-1-logo-svgrepo-com.svg")
-            case .x: downloads.appendingPathComponent("icons8-x-48.png")
+            case .x: downloads.appendingPathComponent("icons8-x.svg")
             }
             // Prefer the user-supplied marks. The small inline versions below
             // remain only as a resilient fallback if Downloads is cleaned up.
