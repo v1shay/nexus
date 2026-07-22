@@ -17,6 +17,9 @@ final class NexPrimaryToolPlannerTests: XCTestCase {
         XCTAssertTrue(instructions.contains("never from a keyword checklist"))
         XCTAssertTrue(instructions.contains("TOOL web_search"))
         XCTAssertTrue(instructions.contains("TOOL memory_search"))
+        XCTAssertTrue(instructions.contains("memory_get only with an exact source_id"))
+        XCTAssertTrue(instructions.contains("conversation_recall for something visible above"))
+        XCTAssertTrue(instructions.contains("memory_propose or memory_forget directly"))
         XCTAssertEqual(Array(messages.dropFirst()), context)
     }
 

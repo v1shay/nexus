@@ -208,6 +208,10 @@ final class NexusGeometryTests: XCTestCase {
         let prompt = NexusResponseInstructions.completeSystemPrompt
         for tool in [
             "memory_search",
+            "memory_get",
+            "conversation_recall",
+            "memory_propose",
+            "memory_forget",
             "web_search",
             "nex_cli_task",
             "nex_cli_set_workspace",
@@ -218,6 +222,8 @@ final class NexusGeometryTests: XCTestCase {
         ] {
             XCTAssertTrue(prompt.contains(tool), "Missing \(tool)")
         }
+        XCTAssertTrue(prompt.contains("Do not call either directly"))
+        XCTAssertTrue(prompt.contains("memory_write"))
     }
 
     @MainActor
