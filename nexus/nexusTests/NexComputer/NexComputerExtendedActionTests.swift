@@ -43,6 +43,30 @@ final class NexComputerExtendedActionTests: XCTestCase {
         }
     }
 
+    func testVSCodeEditPreservesFileAndReturnsDiff() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let file = root.appendingPathComponent("hello.swift")
+        try "let greeting = \"hello\"\n".write(to: file, atomically: true, encoding: .utf8)
+        let provider = NexVSCodeCLIProvider(executable: URL(fileURLWithPath: "/usr/bin/true"))
+        let diff = try await provider.edit(file: file, oldText: "hello", newText: "hi", replaceAll: false)
+        XCTAssertTrue(diff.contains("-let greeting = \"hello\""))
+        XCTAssertTrue(diff.contains("+let greeting = \"hi\""))
+        XCTAssertEqual(try String(contentsOf: file), "let greeting = \"hi\"\n")
+    }
+
+    func testVSCodeBroadEditRequiresExplicitReplaceAll() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let file = root.appendingPathComponent("values.txt")
+        try "same\nsame\n".write(to: file, atomically: true, encoding: .utf8)
+        let provider = NexVSCodeCLIProvider(executable: URL(fileURLWithPath: "/usr/bin/true"))
+        do { _ = try await provider.edit(file: file, oldText: "same", newText: "new", replaceAll: false); XCTFail("Expected broad edit rejection") }
+        catch is NexVSCodeError { }
+    }
+
     private func temporaryFile(_ name: String) -> URL {
         FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString).appendingPathComponent(name)
     }
