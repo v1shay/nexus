@@ -599,7 +599,11 @@ final class NexusAudioReactiveMusic: NSObject, ObservableObject {
 
     private func updateChromeMedia(from mediaTabs: [MediaTab]) {
         let previousID = activeMediaTab?.id
-        let next = mediaTabs.first(where: { $0.id == previousID })
+        // A freshly active media tab is an explicit user selection. Once
+        // Chrome goes into the background, retain that tab until it closes so
+        // the card remains a reliable way back to it.
+        let next = mediaTabs.first(where: { $0.tab.isActive })
+            ?? mediaTabs.first(where: { $0.id == previousID })
             ?? mediaTabs.sorted {
                 if $0.priority != $1.priority { return $0.priority > $1.priority }
                 return $0.tab.id < $1.tab.id
