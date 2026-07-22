@@ -904,3 +904,25 @@ actor NexPreviewActionCatalog {
     private static func result(_ display: String, path: String = "", count: Int = 0) -> NexJSONValue { .object(["display": .string(display), "status": .string("completed"), "path": .string(path), "page_count": .number(Double(count))]) }
     private static func manifest(_ id: String, _ description: String, _ examples: [String], _ fields: [String: NexToolFieldSchema], risk: NexComputerRiskClass = .low, confirmation: NexComputerConfirmationPolicy = .never) -> NexComputerActionManifest { .init(actionID: id, application: "Preview", provider: "PDFKit/AppKit", bundleIdentifier: "com.apple.Preview", description: description, examples: examples, aliases: [id.replacingOccurrences(of: ".", with: " ")], tags: ["preview", "pdf", "document", "image", "export"], inputSchema: .init(fields: fields), outputSchema: output, implementationMethod: .nativeAPI, registryPermission: .files, riskClass: risk, confirmationPolicy: confirmation, availabilityCheck: .application(bundleIdentifier: "com.apple.Preview"), timeoutSeconds: 60, supportsCancellation: false, dryRunBehavior: .supported("Would perform \(id) with native document APIs."), previewRenderer: "preview.document", tests: ["NexPreviewActionTests"]) }
 }
+
+// MARK: - Phase 17: LaunchServices application discovery
+
+actor NexApplicationActionCatalog {
+    private var registered = false
+    func register(on registry: NexComputerRegistry) async throws {
+        guard !registered else { return }
+        try await registry.register(manifest: Self.manifest("applications.list", "List installed applications with stable names and bundle identifiers; no automation capability is implied.", ["List installed apps"], [:])) { _, _ in
+            let roots = [URL(fileURLWithPath: "/Applications"), FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Applications")]; var apps: [NexJSONValue] = []
+            for root in roots { guard let urls = try? FileManager.default.contentsOfDirectory(at: root, includingPropertiesForKeys: nil) else { continue }; for url in urls where url.pathExtension == "app" { let bundle = Bundle(url: url); apps.append(.object(["name": .string(url.deletingPathExtension().lastPathComponent), "bundle_id": .string(bundle?.bundleIdentifier ?? ""), "path": .string(url.path)])) } }
+            return .object(["display": .string("Found \(apps.count) installed applications."), "status": .string("completed"), "apps": .array(apps)])
+        }
+        try await registry.register(manifest: Self.manifest("applications.open", "Open or activate an installed application by its exact bundle identifier through LaunchServices.", ["Open Discord", "Activate Blender"], ["bundle_id": .init(.string, required: true)])) { args, _ in
+            guard let id = args["bundle_id"]?.string, let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: id) else { throw NexToolError.executionFailed(code: "application_unavailable", message: "No installed application has that bundle identifier.") }
+            let configuration = NSWorkspace.OpenConfiguration(); configuration.activates = true; _ = try await NSWorkspace.shared.openApplication(at: url, configuration: configuration)
+            return .object(["display": .string("Opened \(url.deletingPathExtension().lastPathComponent)."), "status": .string("completed"), "apps": .array([])])
+        }
+        registered = true
+    }
+    private static let output = NexToolInputSchema(fields: ["display": .init(.string, required: true), "status": .init(.string, required: true), "apps": .init(.array, required: true)])
+    private static func manifest(_ id: String, _ description: String, _ examples: [String], _ fields: [String: NexToolFieldSchema]) -> NexComputerActionManifest { .init(actionID: id, application: "Applications", provider: "LaunchServices", description: description, examples: examples, aliases: ["open app", "activate app", "installed applications"], tags: ["application", "dock", "launch", "open", "activate"], inputSchema: .init(fields: fields), outputSchema: output, implementationMethod: .nativeAPI, registryPermission: .automation, riskClass: .low, confirmationPolicy: .never, availabilityCheck: .always, timeoutSeconds: 20, supportsCancellation: false, dryRunBehavior: .supported("Would query or open an exact installed application."), previewRenderer: "application.open", tests: ["NexApplicationActionTests"]) }
+}

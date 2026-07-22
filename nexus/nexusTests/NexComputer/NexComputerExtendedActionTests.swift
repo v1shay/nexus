@@ -106,6 +106,8 @@ final class NexComputerExtendedActionTests: XCTestCase {
         let first = PDFDocument(), second = PDFDocument(); first.insert(PDFPage(image: NSImage(size: .init(width: 10, height: 10)))!, at: 0); second.insert(PDFPage(image: NSImage(size: .init(width: 20, height: 20)))!, at: 0); let a = root.appendingPathComponent("a.pdf"), b = root.appendingPathComponent("b.pdf"); XCTAssertTrue(first.write(to: a)); XCTAssertTrue(second.write(to: b)); let output = root.appendingPathComponent("combined.pdf"); let result = try await NexPreviewProvider().combine(inputs: [a, b], output: output, overwrite: false); XCTAssertEqual(result.1, 2); XCTAssertEqual(PDFDocument(url: output)?.pageCount, 2)
     }
 
+    func testApplicationCatalogProvidesDeterministicOpenOnly() async throws { let tools = NexToolRegistry(), computer = NexComputerRegistry(toolRegistry: tools, permissionManager: NexComputerPermissionManager(backend: AuthorizedPermissions())); try await NexApplicationActionCatalog().register(on: computer); let names = Set(await tools.definitions().map(\.name)); XCTAssertEqual(names.intersection(["applications.list", "applications.open"]), ["applications.list", "applications.open"]) }
+
     private func temporaryFile(_ name: String) -> URL {
         FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString).appendingPathComponent(name)
     }
