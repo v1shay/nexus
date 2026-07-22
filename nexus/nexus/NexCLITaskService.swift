@@ -199,6 +199,32 @@ actor NexCLITaskService {
             let title = arguments["title"]?.string
             return try await Self.shared.run(prompt: prompt, title: title, context: context)
         })
+        try await registry.register(.init(
+            name: "nex_cli_set_workspace",
+            description: "Change NexCLI's persistent, app-managed coding workspace only when the user explicitly asks to start, switch to, or resume a named coding folder. The app converts the requested name into a safe folder under the Nex vault; never use this to choose an arbitrary filesystem path.",
+            statusLabel: "Switching coding workspace…",
+            completionLabel: "Coding workspace ready",
+            spokenStatus: "Switching the coding workspace.",
+            iconSystemName: "folder",
+            permission: .codeExecution,
+            schema: .init(fields: [
+                "name": .init(.string, required: true)
+            ])
+        ) { arguments, _ in
+            guard let name = arguments["name"]?.string?.trimmingCharacters(in: .whitespacesAndNewlines), !name.isEmpty else {
+                throw NexToolError.missingField("name")
+            }
+            let workspace = try await MainActor.run {
+                let workspace = try NexCLIWorkspaceManager.shared.setWorkspace(named: name)
+                NexCLITaskSettings.shared.refreshManagedWorkspace()
+                return workspace
+            }
+            return .object([
+                "workspace_folder": .string(workspace.url.path),
+                "workspace_name": .string(workspace.displayName),
+                "status": .string("active")
+            ])
+        })
     }
 
     /// Native-console entry point. It uses the exact managed `/nex/tasks`

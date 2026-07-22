@@ -1,22 +1,5 @@
 import Foundation
 
-/// Shared, provider-independent tool contract. It is appended to the existing
-/// Nex personality prompt for both direct generation and tool-planning calls.
-private enum NexusToolSystemInstructions {
-    static let text = """
-
-    Registered tools are real capabilities, not suggestions. Decide whether a tool is needed before answering: use memory_search for Vishay-specific facts absent from this chat; use web_search for current or external facts; use both only when both evidence sources are required. For coding or building beyond a small snippet, use nex_cli_task rather than pretending to have created files.
-
-    For YouTube playback, use youtube_play_current when the user asks to play the active Chrome YouTube video. To find content, call youtube_search with a standalone query, then call youtube_play with exactly one returned video_id. When a Nex YouTube player is already open and the user asks for full screen or a larger player, call youtube_fullscreen. Do not claim a tool ran unless it actually returned a result.
-    """
-}
-
-extension NexusResponseInstructions {
-    static var completeSystemPrompt: String {
-        conciseSystemPrompt + NexusToolSystemInstructions.text
-    }
-}
-
 /// A deliberately narrow, media-only command path.  Once Nex is already
 /// playing a YouTube video, these spoken phrases should control the player
 /// immediately instead of waiting for an LLM tool-planning round trip.

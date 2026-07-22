@@ -164,7 +164,7 @@ final class NexusGeometryTests: XCTestCase {
     }
 
     @MainActor
-    func testManagedNexCLIWorkspaceSealsAndRotatesOnlyOnNextLaunch() throws {
+    func testManagedNexCLIWorkspacePersistsAcrossBuildsAndLaunches() throws {
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent("nexus-cli-workspace-test-\(UUID().uuidString)", isDirectory: true)
         defer { try? FileManager.default.removeItem(at: root) }
@@ -176,12 +176,45 @@ final class NexusGeometryTests: XCTestCase {
         XCTAssertEqual(try manager.currentWorkspace(), first)
 
         let completed = try manager.completeBuild(title: "Snake Game", filesChanged: ["index.html", "game.js"])
-        XCTAssertEqual(completed.url.lastPathComponent, "Snake Game")
-        XCTAssertEqual(try manager.currentWorkspace(), completed)
+        XCTAssertEqual(completed, first)
+        XCTAssertEqual(try manager.currentWorkspace(), first)
 
         let second = try manager.prepareForNexusLaunch()
-        XCTAssertEqual(second.url.lastPathComponent, "Folder 2")
-        XCTAssertTrue(FileManager.default.fileExists(atPath: second.url.path))
+        XCTAssertEqual(second, first)
+    }
+
+    func testSystemPromptUsesRegisteredRoutingToolNames() {
+        let prompt = NexusResponseInstructions.completeSystemPrompt
+        for tool in [
+            "memory_search",
+            "web_search",
+            "nex_cli_task",
+            "nex_cli_set_workspace",
+            "youtube_play_current",
+            "youtube_search",
+            "youtube_play",
+            "youtube_fullscreen"
+        ] {
+            XCTAssertTrue(prompt.contains(tool), "Missing \(tool)")
+        }
+    }
+
+    @MainActor
+    func testManagedNexCLIWorkspaceChangesOnlyWhenExplicitlySet() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("nexus-cli-workspace-switch-test-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let manager = NexCLIWorkspaceManager(fileManager: .default, vaultURLProvider: { root })
+
+        let initial = try manager.prepareForNexusLaunch()
+        FileManager.default.createFile(atPath: initial.url.appendingPathComponent("index.html").path, contents: Data())
+        XCTAssertEqual(try manager.prepareForNexusLaunch(), initial)
+
+        let switched = try manager.setWorkspace(named: "Portfolio Dashboard")
+        XCTAssertEqual(switched.displayName, "Portfolio Dashboard")
+        XCTAssertEqual(try manager.currentWorkspace(), switched)
+        XCTAssertNotEqual(switched.url, initial.url)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: initial.url.appendingPathComponent("index.html").path))
     }
 
     @MainActor
@@ -496,16 +529,17 @@ final class NexusGeometryTests: XCTestCase {
         XCTAssertEqual(buffer.insert(second, sequence: 1), [], "Played PCM must not be replayed")
     }
 
-    func testDefaultModelInstructionsStayCompactAndDefaultToProse() {
+    func testDefaultModelInstructionsDescribeDirectAndToolRoutedResponses() {
         let instructions = NexusResponseInstructions.conciseSystemPrompt
 
-        XCTAssertTrue(instructions.contains("Vishay Agarwal’s personal assistant"))
+        XCTAssertTrue(instructions.contains("Vishay Agarwal’s personal AI assistant"))
         XCTAssertTrue(instructions.localizedCaseInsensitiveContains("address him as Sir"))
         XCTAssertTrue(instructions.contains("memory_search"))
         XCTAssertTrue(instructions.contains("web_search"))
-        XCTAssertTrue(instructions.contains("nexCLI"))
-        XCTAssertTrue(instructions.contains("Never invent tool results"))
-        XCTAssertLessThan(instructions.split(whereSeparator: \.isWhitespace).count, 350)
+        XCTAssertTrue(instructions.contains("nex_cli_task"))
+        XCTAssertTrue(instructions.contains("nex_cli_set_workspace"))
+        XCTAssertTrue(instructions.contains("Never invent"))
+        XCTAssertLessThan(instructions.split(whereSeparator: \.isWhitespace).count, 600)
     }
 
     func testStatusFallbackHasNoKeywordRoutingAndSanitizesModelSubjects() {

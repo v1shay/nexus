@@ -52,6 +52,30 @@ final class NexPrimaryToolPlannerTests: XCTestCase {
         XCTAssertGreaterThan(plan.actions[0].arguments["prompt"]?.string?.split(separator: " ").count ?? 0, 12)
     }
 
+    func testPlannerExplainsPersistentWorkspaceAndExplicitSwitchTool() {
+        let instructions = NexPrimaryToolPlanner.planningMessages(
+            context: [.init(role: "user", content: "Continue the website from yesterday.")],
+            tools: tools() + [cliTool(), workspaceTool()]
+        ).first?.content ?? ""
+
+        XCTAssertTrue(instructions.contains("completed task stays in that same workspace"))
+        XCTAssertTrue(instructions.contains("Only call nex_cli_set_workspace when the user explicitly asks"))
+        XCTAssertTrue(instructions.contains("never a path"))
+    }
+
+    func testNexCLIRegistersTaskAndExplicitWorkspaceSwitchTools() async throws {
+        let registry = NexToolRegistry()
+        let service = NexCLITaskService()
+        try await service.register(in: registry)
+
+        let definitions = await registry.definitions()
+        let task = try XCTUnwrap(definitions.first { $0.name == "nex_cli_task" })
+        let workspace = try XCTUnwrap(definitions.first { $0.name == "nex_cli_set_workspace" })
+        XCTAssertTrue(task.schema.fields["prompt"]?.required == true)
+        XCTAssertTrue(workspace.schema.fields["name"]?.required == true)
+        XCTAssertFalse(workspace.schema.fields.keys.contains("path"))
+    }
+
     func testStressParsesVagueStandaloneWebQueriesWithoutOneWordFragments() {
         let cases = [
             ("Look up that new model everyone is talking about.", "latest notable open-weight AI model releases July 2026"),
@@ -186,6 +210,18 @@ final class NexPrimaryToolPlannerTests: XCTestCase {
                 "prompt": .init(.string, required: true),
                 "title": .init(.string)
             ])
+        ) { _, _ in .null }
+    }
+
+    private func workspaceTool() -> NexRegisteredTool {
+        .init(
+            name: "nex_cli_set_workspace",
+            description: "Switch Nexus's managed coding workspace.",
+            statusLabel: "Switching coding workspace…",
+            spokenStatus: "Switching coding workspace.",
+            iconSystemName: "folder",
+            permission: .codeExecution,
+            schema: .init(fields: ["name": .init(.string, required: true)])
         ) { _, _ in .null }
     }
 }

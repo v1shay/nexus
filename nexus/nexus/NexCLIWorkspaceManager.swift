@@ -21,8 +21,8 @@ final class NexCLIWorkspaceManager {
 
         var schema = schemaVersion
         var currentRelativePath: String
-        /// Keeps the Folder N sequence stable even after a completed folder is
-        /// renamed to the user-facing build title.
+        /// Retained so existing manifests stay decodable. New workspaces no
+        /// longer rotate automatically after a task completes.
         var folderNumber: Int
         var sealed = false
         var displayName: String
@@ -40,21 +40,14 @@ final class NexCLIWorkspaceManager {
         self.vaultURLProvider = vaultURLProvider
     }
 
-    /// Called once per ordinary Nexus launch. A completed workspace is sealed
-    /// until this point, so rebuilding/reopening the app never interrupts an
-    /// in-flight task or silently moves its working directory.
+    /// Called once per ordinary Nexus launch. The selected workspace is
+    /// intentionally persistent: restarting or rebuilding Nexus never moves
+    /// an ongoing project into a new folder.
     func prepareForNexusLaunch() throws -> Workspace {
         let root = try prepareVaultRoot()
         var manifest = try loadManifest(root: root)
         if manifest == nil {
             let (next, number) = try nextFolder(in: root, after: 0)
-            manifest = Manifest(
-                currentRelativePath: relativePath(for: next, root: root),
-                folderNumber: number,
-                displayName: next.lastPathComponent
-            )
-        } else if let existing = manifest, existing.sealed {
-            let (next, number) = try nextFolder(in: root, after: existing.folderNumber)
             manifest = Manifest(
                 currentRelativePath: relativePath(for: next, root: root),
                 folderNumber: number,
@@ -84,22 +77,42 @@ final class NexCLIWorkspaceManager {
         return .init(url: url, displayName: manifest.displayName)
     }
 
-    /// A task seals the workspace only after the gateway reports actual file
-    /// changes. The next app launch will then allocate the next empty Folder N.
+    /// A completed task stays in the active workspace. This preserves project
+    /// context for follow-up tasks such as “continue” or “fix the last app”.
     @discardableResult
     func completeBuild(title: String, filesChanged: [String]) throws -> Workspace {
-        guard !filesChanged.isEmpty else { return try currentWorkspace() }
+        _ = title
+        _ = filesChanged
+        return try currentWorkspace()
+    }
+
+    /// Changes the active workspace only after the user has explicitly asked
+    /// Nex to do so through the registered `nex_cli_set_workspace` tool. The
+    /// model supplies a display name; this service owns the vault-relative
+    /// path and refuses every path outside the managed workspaces root.
+    @discardableResult
+    func setWorkspace(named requestedName: String) throws -> Workspace {
         let root = try prepareVaultRoot()
-        guard var manifest = try loadManifest(root: root) else { return try prepareForNexusLaunch() }
-        let current = try safeWorkspaceURL(relativePath: manifest.currentRelativePath, root: root)
-        let suggestedName = folderName(from: title)
-        let renamed = try renameIfNeeded(current, to: suggestedName, root: root)
-        manifest.currentRelativePath = relativePath(for: renamed, root: root)
-        manifest.displayName = renamed.lastPathComponent
-        manifest.sealed = true
-        manifest.updatedAt = .now
-        try save(manifest, root: root)
-        return .init(url: renamed, displayName: manifest.displayName)
+        let displayName = folderName(from: requestedName)
+        let url = try safeWorkspaceURL(
+            relativePath: "90 System/NexCLI Workspaces/\(displayName)",
+            root: root
+        )
+        try fileManager.createDirectory(at: url, withIntermediateDirectories: true)
+
+        let existing = try loadManifest(root: root)
+        let folderNumber = existing?.folderNumber ?? 1
+        try save(
+            .init(
+                currentRelativePath: relativePath(for: url, root: root),
+                folderNumber: folderNumber,
+                sealed: false,
+                displayName: displayName,
+                updatedAt: .now
+            ),
+            root: root
+        )
+        return .init(url: url, displayName: displayName)
     }
 
     private func prepareVaultRoot() throws -> URL {
@@ -155,19 +168,6 @@ final class NexCLIWorkspaceManager {
             candidate = base.appendingPathComponent("Folder \(number)", isDirectory: true)
         }
         return (candidate, number)
-    }
-
-    private func renameIfNeeded(_ current: URL, to suggestedName: String, root: URL) throws -> URL {
-        guard current.lastPathComponent.hasPrefix("Folder "), suggestedName != current.lastPathComponent else { return current }
-        let base = workspacesRoot(root)
-        var candidate = base.appendingPathComponent(suggestedName, isDirectory: true)
-        var suffix = 2
-        while fileManager.fileExists(atPath: candidate.path) {
-            candidate = base.appendingPathComponent("\(suggestedName) \(suffix)", isDirectory: true)
-            suffix += 1
-        }
-        try fileManager.moveItem(at: current, to: candidate)
-        return candidate
     }
 
     private func safeWorkspaceURL(relativePath: String, root: URL) throws -> URL {
