@@ -9,6 +9,11 @@ final class NexCLIWorkspaceManager {
     struct Workspace: Equatable, Sendable {
         let url: URL
         let displayName: String
+
+        static func == (lhs: Workspace, rhs: Workspace) -> Bool {
+            lhs.url.standardizedFileURL.path == rhs.url.standardizedFileURL.path
+                && lhs.displayName == rhs.displayName
+        }
     }
 
     private struct Manifest: Codable {
@@ -116,7 +121,12 @@ final class NexCLIWorkspaceManager {
     private func loadManifest(root: URL) throws -> Manifest? {
         let url = manifestURL(root)
         guard fileManager.fileExists(atPath: url.path) else { return nil }
-        let manifest = try JSONDecoder().decode(Manifest.self, from: Data(contentsOf: url))
+        // `save` deliberately emits an iCloud-friendly ISO-8601 timestamp.
+        // The default decoder expects a numeric timestamp, which made every
+        // existing workspace manifest look malformed after the first launch.
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        let manifest = try decoder.decode(Manifest.self, from: Data(contentsOf: url))
         guard manifest.schema == Manifest.schemaVersion else {
             throw NexCLIWorkspaceError.unsupportedSchema(manifest.schema)
         }
@@ -161,7 +171,13 @@ final class NexCLIWorkspaceManager {
     }
 
     private func safeWorkspaceURL(relativePath: String, root: URL) throws -> URL {
-        let candidate = root.appendingPathComponent(relativePath).standardizedFileURL.resolvingSymlinksInPath()
+        // Normalize away NSURL's directory-marker slash. The manifest stores
+        // paths, while newly created directories can otherwise return a URL
+        // with a trailing slash; those two URLs compare unequal even though
+        // they identify the same workspace.
+        let candidate = URL(fileURLWithPath: root.appendingPathComponent(relativePath).path)
+            .standardizedFileURL
+            .resolvingSymlinksInPath()
         let base = workspacesRoot(root).standardizedFileURL.resolvingSymlinksInPath().path
         guard candidate.path == base || candidate.path.hasPrefix(base + "/") else { throw NexCLIWorkspaceError.unsafePath }
         return candidate

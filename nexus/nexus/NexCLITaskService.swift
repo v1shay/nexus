@@ -201,6 +201,16 @@ actor NexCLITaskService {
         })
     }
 
+    /// Native-console entry point. It uses the exact managed `/nex/tasks`
+    /// worker and SSE stream used by Nexus tool calls, rather than spawning a
+    /// second shell or scraping an external terminal window.
+    func runFromConsole(prompt: String) async throws {
+        let cleanPrompt = prompt.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !cleanPrompt.isEmpty else { return }
+        let context = NexToolExecutionContext(executionID: UUID()) { _, _ in }
+        _ = try await run(prompt: cleanPrompt, title: cleanPrompt, context: context)
+    }
+
     private func run(prompt: String, title: String?, context: NexToolExecutionContext) async throws -> NexJSONValue {
         let configuration = try await MainActor.run { try NexCLITaskSettings.shared.configuration() }
         if configuration.baseURL.host == "127.0.0.1", configuration.baseURL.port == 4096 {

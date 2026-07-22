@@ -77,13 +77,16 @@ private enum NexusAppPage: String, CaseIterable, Identifiable {
     }
 }
 
-/// The in-app task surface mirrors the same durable Nex sessions used by the
-/// compact notch. It intentionally renders structured live task output, not a
-/// scraped terminal; the real TUI remains available through Nex itself.
+/// A native terminal-style renderer for the managed NexCLI task API. It is not
+/// an embedded external terminal: every line is derived from the same
+/// authenticated `/nex/tasks` SSE stream used by Nexus tools.
 private struct NexCLIWorkspacePage: View {
     @ObservedObject var controller: NexCLITaskController
     @ObservedObject var settings: NexCLITaskSettings
+    @State private var input = ""
     @State private var error: String?
+    @State private var isSubmitting = false
+    @FocusState private var isInputFocused: Bool
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -93,83 +96,97 @@ private struct NexCLIWorkspacePage: View {
                     .tracking(-2)
                     .foregroundStyle(.white)
                 Spacer()
-                Text("CLI")
+                Text(managedServiceDetail)
                     .font(.system(size: 12, weight: .semibold, design: .monospaced))
                     .foregroundStyle(.secondary)
+                    .lineLimit(1)
             }
             .padding(.horizontal, 26)
             .frame(height: 56)
 
-            VStack(alignment: .leading, spacing: 10) {
-                Toggle("Managed local NexCLI", isOn: $settings.usesManagedLocalService)
-                    .toggleStyle(.switch)
-                if settings.usesManagedLocalService {
-                    Text(settings.directory)
-                        .font(.caption.monospaced())
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                        .truncationMode(.middle)
-                    Text(managedServiceDetail)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                } else {
-                    TextField("Workspace", text: $settings.directory).textFieldStyle(.roundedBorder)
-                    TextField("Nex server", text: $settings.baseURL).textFieldStyle(.roundedBorder)
-                    HStack {
-                        TextField("Username", text: $settings.username).textFieldStyle(.roundedBorder)
-                        SecureField(settings.hasPassword ? "Password saved" : "Server password", text: $settings.passwordInput)
-                            .textFieldStyle(.roundedBorder)
-                    }
-                }
-                Button(settings.usesManagedLocalService ? "Start NexCLI" : "Save") {
-                    do { try settings.save(); error = nil }
-                    catch let failure { error = failure.localizedDescription }
-                }
-                if let error { Text(error).font(.caption).foregroundStyle(.red) }
-            }
-            .padding(.horizontal, 26)
-            .padding(.bottom, 18)
-
             Divider().opacity(0.25)
-            ScrollView {
-                LazyVStack(alignment: .leading, spacing: 0) {
-                    ForEach(controller.tasks) { task in
-                        HStack(alignment: .top, spacing: 12) {
-                            Image(systemName: icon(for: task.state))
-                                .foregroundStyle(task.state == .failed ? .red : .white.opacity(0.78))
-                                .frame(width: 18)
-                            VStack(alignment: .leading, spacing: 4) {
-                                Text(task.title).font(.system(size: 13, weight: .semibold))
+            ScrollViewReader { proxy in
+                ScrollView {
+                    LazyVStack(alignment: .leading, spacing: 12) {
+                        Text("Managed workspace  \(settings.directory)")
+                            .font(.system(size: 11, design: .monospaced))
+                            .foregroundStyle(.white.opacity(0.38))
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                        ForEach(controller.tasks.reversed()) { task in
+                            VStack(alignment: .leading, spacing: 5) {
+                                Text("NEX > \(task.title)")
+                                    .font(.system(size: 12, weight: .semibold, design: .monospaced))
+                                    .foregroundStyle(.white.opacity(0.92))
                                 Text(task.detail)
                                     .font(.system(size: 11, design: .monospaced))
-                                    .foregroundStyle(.secondary)
-                                    .lineLimit(2)
+                                    .foregroundStyle(task.state == .failed ? .red : .white.opacity(0.56))
+                                    .textSelection(.enabled)
                                 if !task.finalText.isEmpty {
-                                    Text(task.finalText).font(.system(size: 12)).foregroundStyle(.white.opacity(0.85)).lineLimit(5)
+                                    Text(task.finalText)
+                                        .font(.system(size: 12, design: .monospaced))
+                                        .foregroundStyle(.white.opacity(0.82))
+                                        .textSelection(.enabled)
+                                }
+                                if let outputURL = task.outputURL {
+                                    Link("Open output", destination: outputURL)
+                                        .font(.system(size: 11, weight: .semibold, design: .monospaced))
                                 }
                             }
-                            Spacer()
-                            if let outputURL = task.outputURL {
-                                Link("Open", destination: outputURL).font(.caption.weight(.semibold))
-                            }
+                            Divider().opacity(0.15)
                         }
-                        .padding(.horizontal, 26)
-                        .padding(.vertical, 14)
-                        Divider().opacity(0.16)
+                        Color.clear.frame(height: 1).id("terminal-bottom")
                     }
+                    .padding(22)
                 }
+                .onChange(of: controller.tasks) { _, _ in
+                    withAnimation(.easeOut(duration: 0.16)) { proxy.scrollTo("terminal-bottom", anchor: .bottom) }
+                }
+                .onAppear { proxy.scrollTo("terminal-bottom", anchor: .bottom) }
             }
+
+            if let error {
+                Text(error)
+                    .font(.system(size: 11, design: .monospaced))
+                    .foregroundStyle(.red)
+                    .padding(.horizontal, 26)
+                    .padding(.bottom, 8)
+            }
+
+            HStack(spacing: 8) {
+                Text("NEX >")
+                    .font(.system(size: 13, weight: .bold, design: .monospaced))
+                    .foregroundStyle(.white.opacity(0.8))
+                TextField("Describe a coding task…", text: $input)
+                    .textFieldStyle(.plain)
+                    .font(.system(size: 13, design: .monospaced))
+                    .focused($isInputFocused)
+                    .onSubmit(submit)
+                    .disabled(isSubmitting)
+                if isSubmitting { ProgressView().controlSize(.small) }
+            }
+            .padding(.horizontal, 26)
+            .frame(height: 52)
+            .background(.black.opacity(0.28))
+            .onTapGesture { isInputFocused = true }
+            .onAppear { isInputFocused = true }
         }
         .background(Color.black.opacity(0.18))
     }
 
-    private func icon(for state: NexCLITaskRecord.State) -> String {
-        switch state {
-        case .queued, .running: "terminal"
-        case .awaitingPermission: "hand.raised"
-        case .completed: "checkmark.circle.fill"
-        case .failed: "exclamationmark.triangle.fill"
-        case .cancelled: "xmark.circle"
+    private func submit() {
+        let prompt = input.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !prompt.isEmpty, !isSubmitting else { return }
+        input = ""
+        error = nil
+        isSubmitting = true
+        Task {
+            defer { isSubmitting = false }
+            do {
+                try await NexCLITaskService.shared.runFromConsole(prompt: prompt)
+            } catch {
+                self.error = error.localizedDescription
+            }
         }
     }
 
