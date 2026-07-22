@@ -988,8 +988,43 @@ final class NexusGeometryTests: XCTestCase {
         XCTAssertEqual(ModelBrandArtwork.assetURL(for: model("Mistral-Small")).lastPathComponent, "mistral-color.svg")
         XCTAssertEqual(ModelBrandArtwork.assetURL(for: model("DeepSeek-R1")).lastPathComponent, "icons8-deepseek-94.png")
         XCTAssertEqual(ModelBrandArtwork.assetURL(for: model("gemma-3-12b")).lastPathComponent, "gemma-color.svg")
+        XCTAssertEqual(ModelBrandArtwork.assetURL(for: model("openai/gpt-oss-20b")).lastPathComponent, "icons-8-chatgpt-48.png")
+        XCTAssertEqual(ModelBrandArtwork.assetURL(for: LocalModel(customIdentifier: "gpt-oss:latest", backend: .ollama)).lastPathComponent, "icons-8-chatgpt-48.png")
         XCTAssertEqual(ModelBrandArtwork.assetURL(for: LocalModel(customIdentifier: "llama3.2:3b", backend: .ollama)).lastPathComponent, "ollama-dark.svg")
         XCTAssertEqual(ModelBrandArtwork.assetURL(for: model("phi-4")).lastPathComponent, "icons8-linux-48.png")
+    }
+
+    func testProviderIconResolverPrefersProviderMetadataAndCoversAPIModels() throws {
+        let openAIModel = LocalModel(
+            name: "Reasoning model",
+            identifier: "custom-id",
+            family: "OpenAI",
+            backend: .lmStudio,
+            minimumRAMGB: 8
+        )
+        XCTAssertEqual(ModelProviderResolver.identity(for: openAIModel), .openAI)
+        XCTAssertEqual(
+            ModelProviderResolver.identity(
+                for: .openAICompatible,
+                modelID: "custom-deployment",
+                baseURL: "https://api.openai.com/v1"
+            ),
+            .openAI
+        )
+        XCTAssertEqual(
+            ModelProviderResolver.identity(
+                for: .gemini,
+                modelID: "gemini-2.5-flash",
+                baseURL: NexusAPIProviderKind.gemini.defaultBaseURL
+            ),
+            .gemini
+        )
+
+        let data = try XCTUnwrap(ModelBrandArtwork.embeddedChatGPTPNGData)
+        let image = try XCTUnwrap(NSImage(data: data))
+        XCTAssertEqual(data.count, 1_696)
+        XCTAssertEqual(image.size, CGSize(width: 48, height: 48))
+        XCTAssertEqual(ModelBrandArtwork.fallbackSystemName, "cpu")
     }
 
     func testPetActivitiesUseTheSuppliedTaskSpecificRows() {

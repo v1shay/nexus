@@ -357,7 +357,19 @@ private struct NexusModelsPage: View {
     @ViewBuilder
     private var activeModelLabel: some View {
         if viewModel.apiProvider.enabled {
-            Label("Using \(viewModel.apiProvider.model)", systemImage: "bolt.fill")
+            HStack(spacing: 6) {
+                Circle().fill(.green).frame(width: 6, height: 6)
+                ModelProviderIcon(
+                    identity: ModelProviderResolver.identity(
+                        for: viewModel.apiProvider.kind,
+                        modelID: viewModel.apiProvider.model,
+                        baseURL: viewModel.apiProvider.baseURL
+                    ),
+                    size: 16
+                )
+                Text("Using \(viewModel.apiProvider.model)").lineLimit(1)
+                Text(viewModel.apiProvider.kind.title).foregroundStyle(.secondary)
+            }
                 .foregroundStyle(.green)
                 .help("Current model in use via API")
         } else if let model = viewModel.activeModel {
@@ -392,7 +404,20 @@ private struct NexusAPIProviderView: View {
         VStack(alignment: .leading, spacing: 16) {
             HStack { Text("API model").font(.headline); Spacer(); Toggle("Use", isOn: $store.enabled).labelsHidden() }
             Picker("Provider", selection: $store.kind) {
-                ForEach(NexusAPIProviderKind.allCases) { Text($0.title).tag($0) }
+                ForEach(NexusAPIProviderKind.allCases) { provider in
+                    HStack(spacing: 6) {
+                        ModelProviderIcon(
+                            identity: ModelProviderResolver.identity(
+                                for: provider,
+                                modelID: store.model,
+                                baseURL: provider.defaultBaseURL
+                            ),
+                            size: 15
+                        )
+                        Text(provider.title)
+                    }
+                    .tag(provider)
+                }
             }
             .onChange(of: store.kind) { previous, next in
                 store.selectKind(next, replacing: previous)
