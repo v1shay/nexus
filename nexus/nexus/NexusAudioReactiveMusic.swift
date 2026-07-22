@@ -30,6 +30,45 @@ final class NexusAudioReactiveMusic: NSObject, ObservableObject {
         let artworkURL: URL?
     }
 
+    enum BrowserSource: Equatable {
+        case youtube(videoID: String?)
+        case instagram
+        case x
+
+        var name: String {
+            switch self {
+            case .youtube: "YouTube"
+            case .instagram: "Instagram"
+            case .x: "X"
+            }
+        }
+
+        var palette: Palette {
+            switch self {
+            case .youtube: .init(red: 1, green: 0.17, blue: 0.17)
+            case .instagram: .init(red: 0.83, green: 0.20, blue: 0.58)
+            case .x: .init(red: 0.82, green: 0.90, blue: 1)
+            }
+        }
+
+        var videoThumbnailURL: URL? {
+            guard case .youtube(let id) = self, let id, !id.isEmpty else { return nil }
+            return URL(string: "https://i.ytimg.com/vi/\(id)/hqdefault.jpg")
+        }
+
+        var svg: Data {
+            let source: String = switch self {
+            case .youtube:
+                "<svg viewBox=\"0 0 48 48\" xmlns=\"http://www.w3.org/2000/svg\"><rect x=\"4\" y=\"11\" width=\"40\" height=\"26\" rx=\"8\" fill=\"#ff2525\"/><path d=\"M20 17.5 32 24 20 30.5Z\" fill=\"white\"/></svg>"
+            case .instagram:
+                "<svg viewBox=\"0 0 48 48\" xmlns=\"http://www.w3.org/2000/svg\"><defs><linearGradient id=\"g\" x1=\"0\" y1=\"1\" x2=\"1\" y2=\"0\"><stop stop-color=\"#ffb72c\"/><stop offset=\".5\" stop-color=\"#e32688\"/><stop offset=\"1\" stop-color=\"#6547d9\"/></linearGradient></defs><rect x=\"6\" y=\"6\" width=\"36\" height=\"36\" rx=\"11\" fill=\"url(#g)\"/><circle cx=\"24\" cy=\"24\" r=\"8\" fill=\"none\" stroke=\"white\" stroke-width=\"3\"/><circle cx=\"34\" cy=\"14\" r=\"2\" fill=\"white\"/></svg>"
+            case .x:
+                "<svg viewBox=\"0 0 48 48\" xmlns=\"http://www.w3.org/2000/svg\"><path d=\"M8 7h8l8.1 11.2L33.5 7H40l-13 14.8L41 41h-8l-9.8-13.4L11.4 41H5l14.1-16.1Z\" fill=\"#e8f3ff\"/></svg>"
+            }
+            return Data(source.utf8)
+        }
+    }
+
     enum CaptureState: Equatable {
         case inactive
         case awaitingPermission
@@ -40,6 +79,8 @@ final class NexusAudioReactiveMusic: NSObject, ObservableObject {
     @Published private(set) var track: SpotifyTrack?
     @Published private(set) var artwork: NSImage?
     @Published private(set) var palette = Palette.defaultBlue
+    @Published private(set) var browserSource: BrowserSource?
+    @Published private(set) var browserArtwork: NSImage?
     @Published private(set) var energy: CGFloat = 0
     @Published private(set) var captureState: CaptureState = .inactive
 
@@ -50,17 +91,21 @@ final class NexusAudioReactiveMusic: NSObject, ObservableObject {
         return Date().timeIntervalSince(lastAudibleAt) < 1.15
     }
     var isPlaying: Bool { track != nil || hasAudibleSystemAudio }
+    var activeArtwork: NSImage? { track == nil ? browserArtwork : artwork }
+    var activePalette: Palette { track == nil ? (browserSource?.palette ?? .defaultBlue) : palette }
 
     private let sampleQueue = DispatchQueue(label: "na.nexus.audio-reactive.samples", qos: .userInteractive)
     private var stream: SCStream?
     private var spotifyTimer: Timer?
     private var artworkTask: Task<Void, Never>?
+    private var browserArtworkTask: Task<Void, Never>?
     private var isStartingCapture = false
     private var lastSpotifySignature = ""
 
     func start() {
         guard spotifyTimer == nil else { return }
         refreshSpotify()
+        refreshBrowserSource()
         spotifyTimer = Timer.scheduledTimer(
             timeInterval: 0.8,
             target: self,
@@ -76,6 +121,8 @@ final class NexusAudioReactiveMusic: NSObject, ObservableObject {
         spotifyTimer = nil
         artworkTask?.cancel()
         artworkTask = nil
+        browserArtworkTask?.cancel()
+        browserArtworkTask = nil
         let activeStream = stream
         stream = nil
         captureState = .inactive
@@ -167,6 +214,72 @@ final class NexusAudioReactiveMusic: NSObject, ObservableObject {
 
     @objc private func refreshSpotifyTimer() {
         refreshSpotify()
+        refreshBrowserSource()
+    }
+
+    private func refreshBrowserSource() {
+        guard track == nil else { return }
+        guard let app = NSWorkspace.shared.frontmostApplication else {
+            updateBrowserSource(nil)
+            return
+        }
+        let browserName: String?
+        switch app.bundleIdentifier ?? "" {
+        case "com.apple.Safari": browserName = "Safari"
+        case "com.google.Chrome": browserName = "Google Chrome"
+        case "com.microsoft.edgemac": browserName = "Microsoft Edge"
+        case "company.thebrowser.Browser", "com.brave.Browser": browserName = "Brave Browser"
+        default: browserName = nil
+        }
+        guard let browserName, let url = activeURL(in: browserName) else {
+            updateBrowserSource(nil)
+            return
+        }
+        let host = url.host?.lowercased() ?? ""
+        if host.contains("youtube.com") || host == "youtu.be" {
+            updateBrowserSource(.youtube(videoID: youtubeVideoID(from: url)))
+        } else if host.contains("instagram.com") {
+            updateBrowserSource(.instagram)
+        } else if host == "x.com" || host.hasSuffix(".x.com") || host.contains("twitter.com") {
+            updateBrowserSource(.x)
+        } else {
+            updateBrowserSource(nil)
+        }
+    }
+
+    private func activeURL(in browserName: String) -> URL? {
+        let script: String
+        if browserName == "Safari" {
+            script = "tell application \"Safari\" to return URL of current tab of front window"
+        } else {
+            script = "tell application \"\(browserName)\" to return URL of active tab of front window"
+        }
+        var error: NSDictionary?
+        let value = NSAppleScript(source: script)?.executeAndReturnError(&error).stringValue
+        guard error == nil, let value, !value.isEmpty else { return nil }
+        return URL(string: value)
+    }
+
+    private func youtubeVideoID(from url: URL) -> String? {
+        if url.host?.lowercased() == "youtu.be" { return url.pathComponents.dropFirst().first }
+        if url.path.hasPrefix("/shorts/") { return url.pathComponents.dropFirst().dropFirst().first }
+        return URLComponents(url: url, resolvingAgainstBaseURL: false)?
+            .queryItems?.first(where: { $0.name == "v" })?.value
+    }
+
+    private func updateBrowserSource(_ source: BrowserSource?) {
+        guard source != browserSource else { return }
+        browserSource = source
+        browserArtworkTask?.cancel()
+        browserArtwork = nil
+        guard let thumbnailURL = source?.videoThumbnailURL else { return }
+        browserArtworkTask = Task { [weak self] in
+            guard let self else { return }
+            guard let (data, _) = try? await URLSession.shared.data(from: thumbnailURL),
+                  !Task.isCancelled,
+                  let image = NSImage(data: data) else { return }
+            browserArtwork = image
+        }
     }
 
     private func loadArtwork(from url: URL?) {

@@ -62,9 +62,9 @@ private struct MusicPlaybackIndicator: View {
                             .foregroundStyle(.white.opacity(0.56))
                             .lineLimit(1)
                     } else {
-                        Text("Now playing")
+                        Text(notch.musicBrowserSource?.name ?? "Now playing")
                             .font(.system(size: 13, weight: .semibold))
-                        Text("System audio")
+                        Text(notch.musicBrowserSource.map { "\($0.name) audio" } ?? "System audio")
                             .font(.system(size: 11, weight: .medium))
                             .foregroundStyle(.white.opacity(0.56))
                     }
@@ -93,16 +93,40 @@ private struct MusicPlaybackIndicator: View {
                 .resizable()
                 .scaledToFill()
                 .clipShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
+                .overlay(alignment: .bottomTrailing) {
+                    brandMark
+                        .padding(3)
+                        .background(.black.opacity(0.72), in: Circle())
+                        .padding(3)
+                }
         } else {
             RoundedRectangle(cornerRadius: 9, style: .continuous)
                 .fill(notch.musicPalette.color.opacity(0.24))
                 .overlay {
-                    Image(systemName: "waveform")
-                        .font(.system(size: 16, weight: .semibold))
-                        .foregroundStyle(notch.musicPalette.color)
+                    brandMark
                 }
         }
     }
+
+    @ViewBuilder
+    private var brandMark: some View {
+        if let source = notch.musicBrowserSource {
+            ToolIconView(source: .svg(data: source.svg, fallbackSystemName: "play.rectangle.fill"), size: 20)
+        } else if notch.musicTrack != nil {
+            ToolIconView(source: .svg(data: Self.spotifySVG, fallbackSystemName: "music.note"), size: 20)
+        } else {
+            Image(systemName: "waveform")
+                .font(.system(size: 16, weight: .semibold))
+                .foregroundStyle(notch.musicPalette.color)
+        }
+    }
+
+    private static let spotifySVG = Data("""
+    <svg viewBox="0 0 48 48" xmlns="http://www.w3.org/2000/svg">
+      <circle cx="24" cy="24" r="22" fill="#1ed760"/>
+      <path d="M12 19c9-3 18-2 25 2M13.5 25c7-2 15-1.4 21 1.5M15 30c5.6-1.5 11.4-1 16 1" fill="none" stroke="#07150d" stroke-width="3.2" stroke-linecap="round"/>
+    </svg>
+    """.utf8)
 }
 
 private struct ToolActivityIndicator: View {

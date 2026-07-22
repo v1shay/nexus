@@ -157,8 +157,9 @@ final class NotchController: ObservableObject {
     var thinkingModeEnabled: Bool { modelDownloadViewModel.thinkingModeEnabled }
     var isShowingMusic: Bool { interaction.presentation == .idle && music.isPlaying }
     var musicTrack: NexusAudioReactiveMusic.SpotifyTrack? { music.track }
-    var musicArtwork: NSImage? { music.artwork }
-    var musicPalette: NexusAudioReactiveMusic.Palette { music.palette }
+    var musicBrowserSource: NexusAudioReactiveMusic.BrowserSource? { music.track == nil ? music.browserSource : nil }
+    var musicArtwork: NSImage? { music.activeArtwork }
+    var musicPalette: NexusAudioReactiveMusic.Palette { music.activePalette }
     var musicEnergy: CGFloat { music.energy }
 
     private var panel: NexusNotchPanel?
