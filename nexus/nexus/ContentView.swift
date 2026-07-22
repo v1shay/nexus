@@ -67,6 +67,10 @@ private struct MusicPlaybackIndicator: View {
         }
         .accessibilityElement(children: .combine)
         .accessibilityLabel(notch.musicTrack.map { "Playing \($0.title) by \($0.artist)" } ?? "System audio is playing")
+        .accessibilityHint(notch.musicBrowserSource == nil ? "" : "Activates the existing Chrome media tab")
+        .onTapGesture {
+            notch.activateCurrentMediaTab()
+        }
     }
 
     @ViewBuilder
@@ -729,7 +733,7 @@ private struct TranscriptContents: View {
                         }
                         .buttonStyle(.plain)
                         .foregroundStyle(notch.thinkingModeEnabled ? .purple.opacity(0.95) : .white.opacity(0.72))
-                        .help(notch.thinkingModeEnabled ? "Stream model thinking" : "Enable streamed model thinking")
+                        .help(notch.thinkingModeEnabled ? "Disable streamed model thinking" : "Enable streamed model thinking")
                         .accessibilityLabel(notch.thinkingModeEnabled ? "Disable streamed model thinking" : "Enable streamed model thinking")
                     }
 

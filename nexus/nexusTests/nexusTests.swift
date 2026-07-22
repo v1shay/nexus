@@ -3,6 +3,40 @@ import WebKit
 @testable import nexus
 
 final class NexusGeometryTests: XCTestCase {
+    func testChromeMediaClassificationBuildsStableYouTubeThumbnail() throws {
+        let url = try XCTUnwrap(URL(string: "https://www.youtube.com/watch?v=abc123&feature=share"))
+        let tab = BrowserTab(
+            id: "chrome:1:2:abc",
+            windowIndex: 1,
+            tabIndex: 2,
+            title: "A video",
+            url: url,
+            isActive: true
+        )
+
+        let media = try XCTUnwrap(MediaTab(tab: tab))
+        XCTAssertEqual(media.platform, .youtube)
+        XCTAssertEqual(media.mediaID, "abc123")
+        XCTAssertEqual(media.thumbnailURL?.absoluteString, "https://img.youtube.com/vi/abc123/mqdefault.jpg")
+        XCTAssertEqual(media.priority, 130)
+    }
+
+    func testChromeMediaClassificationKeepsNonMediaTabsOutOfTheNotch() throws {
+        let url = try XCTUnwrap(URL(string: "https://developer.apple.com/documentation"))
+        let tab = BrowserTab(
+            id: "chrome:1:1:docs",
+            windowIndex: 1,
+            tabIndex: 1,
+            title: "Documentation",
+            url: url,
+            isActive: true
+        )
+
+        XCTAssertNil(MediaTab(tab: tab))
+        XCTAssertEqual(MediaPlatform.classify(url: try XCTUnwrap(URL(string: "https://x.com/a/status/42"))), .x)
+        XCTAssertEqual(MediaPlatform.classify(url: try XCTUnwrap(URL(string: "https://www.twitch.tv/nexus"))), .twitch)
+    }
+
     @MainActor
     func testManagedNexCLIWorkspaceSealsAndRotatesOnlyOnNextLaunch() throws {
         let root = FileManager.default.temporaryDirectory

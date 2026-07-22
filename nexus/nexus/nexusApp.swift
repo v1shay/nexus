@@ -164,6 +164,12 @@ final class NotchController: ObservableObject {
     var musicPalette: NexusAudioReactiveMusic.Palette { music.activePalette }
     var musicEnergy: CGFloat { music.energy }
 
+    func activateCurrentMediaTab() {
+        Task { @MainActor [weak self] in
+            await self?.music.activateCurrentMediaTab()
+        }
+    }
+
     private var panel: NexusNotchPanel?
     private var screen: NSScreen?
     private var closeTask: Task<Void, Never>?
@@ -658,7 +664,10 @@ final class NotchController: ObservableObject {
     }
 
     private func receiveThinkingDelta(_ delta: String, generation: UUID) {
-        guard !Task.isCancelled, responseGeneration == generation else { return }
+        guard !Task.isCancelled,
+              responseGeneration == generation,
+              modelDownloadViewModel.thinkingModeEnabled,
+              modelDownloadViewModel.activeModelSupportsThinking else { return }
         let sentences = thinkingSentenceChunker.append(delta)
         guard let latest = sentences.last else { return }
         interaction.updateThinkingSentence(latest)
@@ -1010,6 +1019,7 @@ final class NotchController: ObservableObject {
     }
 
     private func resize(to size: CGSize, animated: Bool) {
+        music.setNotchExpanded(interaction.presentation == .overlay)
         guard let panel, let screen else { return }
         let requestedSizeChanged = abs(currentSize.width - size.width) > 0.5
             || abs(currentSize.height - size.height) > 0.5

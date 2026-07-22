@@ -3,8 +3,208 @@ import AVFoundation
 import Combine
 import CoreGraphics
 import CoreMedia
+import CryptoKit
 import ScreenCaptureKit
 import SwiftUI
+
+struct BrowserTab: Identifiable, Codable, Sendable, Equatable {
+    let id: String
+    let windowIndex: Int
+    let tabIndex: Int
+    let title: String
+    let url: URL
+    let isActive: Bool
+}
+
+enum MediaPlatform: String, Codable, Sendable, CaseIterable {
+    case youtube
+    case youtubeMusic
+    case x
+    case instagram
+    case twitch
+    case spotify
+    case other
+
+    static func classify(url: URL) -> Self {
+        let host = url.host?.lowercased() ?? ""
+        if host == "music.youtube.com" { return .youtubeMusic }
+        if host == "youtu.be" || host.hasSuffix("youtube.com") { return .youtube }
+        if host == "x.com" || host.hasSuffix(".x.com") || host.hasSuffix("twitter.com") { return .x }
+        if host == "instagram.com" || host.hasSuffix(".instagram.com") { return .instagram }
+        if host == "twitch.tv" || host.hasSuffix(".twitch.tv") { return .twitch }
+        if host == "open.spotify.com" || host.hasSuffix(".spotify.com") { return .spotify }
+        return .other
+    }
+}
+
+struct MediaTab: Identifiable, Sendable, Equatable {
+    let tab: BrowserTab
+    let platform: MediaPlatform
+    let mediaID: String?
+    let thumbnailURL: URL?
+    let priority: Int
+
+    var id: String { tab.id }
+
+    init?(tab: BrowserTab) {
+        let platform = MediaPlatform.classify(url: tab.url)
+        guard platform != .other else { return nil }
+        let mediaID = Self.identifier(for: tab.url, platform: platform)
+        self.tab = tab
+        self.platform = platform
+        self.mediaID = mediaID
+        self.thumbnailURL = Self.thumbnailURL(for: mediaID, platform: platform)
+        self.priority = (tab.isActive ? 100 : 0) + Self.platformPriority(platform)
+    }
+
+    private static func platformPriority(_ platform: MediaPlatform) -> Int {
+        switch platform {
+        case .youtube, .youtubeMusic, .twitch: 30
+        case .spotify: 20
+        case .instagram, .x: 10
+        case .other: 0
+        }
+    }
+
+    private static func identifier(for url: URL, platform: MediaPlatform) -> String? {
+        let components = url.pathComponents.filter { $0 != "/" }
+        switch platform {
+        case .youtube, .youtubeMusic:
+            if url.host?.lowercased() == "youtu.be" { return components.first }
+            if let index = components.firstIndex(of: "shorts"), components.indices.contains(index + 1) {
+                return components[index + 1]
+            }
+            return URLComponents(url: url, resolvingAgainstBaseURL: false)?
+                .queryItems?.first(where: { $0.name == "v" })?.value
+        case .x:
+            guard let index = components.firstIndex(of: "status"), components.indices.contains(index + 1) else { return nil }
+            return components[index + 1]
+        case .instagram:
+            guard let kind = components.first, ["reel", "p"].contains(kind), components.count > 1 else { return nil }
+            return components[1]
+        case .twitch:
+            return components.first
+        case .spotify, .other:
+            return nil
+        }
+    }
+
+    private static func thumbnailURL(for mediaID: String?, platform: MediaPlatform) -> URL? {
+        guard let mediaID, !mediaID.isEmpty else { return nil }
+        guard platform == .youtube || platform == .youtubeMusic else { return nil }
+        return URL(string: "https://img.youtube.com/vi/\(mediaID)/mqdefault.jpg")
+    }
+}
+
+@MainActor
+protocol BrowserTabProviding {
+    func listTabs() async throws -> [BrowserTab]
+    func activate(tabID: String) async throws
+    func activeTab() async throws -> BrowserTab?
+}
+
+enum BrowserTabProviderError: LocalizedError {
+    case chromeUnavailable
+    case scriptFailed(String)
+    case tabNotFound
+
+    var errorDescription: String? {
+        switch self {
+        case .chromeUnavailable: "Google Chrome is not running."
+        case .scriptFailed(let message): "Chrome tab access failed: \(message)"
+        case .tabNotFound: "That Chrome tab is no longer available."
+        }
+    }
+}
+
+/// Uses Chrome's scripting dictionary rather than Accessibility scraping. The
+/// first actual call is what causes macOS to ask for Automation permission.
+@MainActor
+final class ChromeBrowserTabProvider: BrowserTabProviding {
+    private var cachedTabs: [String: BrowserTab] = [:]
+
+    func listTabs() async throws -> [BrowserTab] {
+        guard NSWorkspace.shared.runningApplications.contains(where: { $0.bundleIdentifier == "com.google.Chrome" }) else {
+            cachedTabs = [:]
+            throw BrowserTabProviderError.chromeUnavailable
+        }
+        let script = """
+        tell application "Google Chrome"
+            set tabRows to {}
+            set windowNumber to 0
+            repeat with chromeWindow in windows
+                set windowNumber to windowNumber + 1
+                set currentTabIndex to active tab index of chromeWindow
+                set tabNumber to 0
+                repeat with chromeTab in tabs of chromeWindow
+                    set tabNumber to tabNumber + 1
+                    set end of tabRows to {windowNumber, tabNumber, title of chromeTab, URL of chromeTab, tabNumber is currentTabIndex}
+                end repeat
+            end repeat
+            return tabRows
+        end tell
+        """
+        var error: NSDictionary?
+        guard let result = NSAppleScript(source: script)?.executeAndReturnError(&error) else {
+            throw BrowserTabProviderError.scriptFailed(error?.description ?? "No AppleScript result")
+        }
+        if let error { throw BrowserTabProviderError.scriptFailed(error.description) }
+
+        guard result.numberOfItems > 0 else {
+            cachedTabs = [:]
+            return []
+        }
+        var tabs: [BrowserTab] = []
+        for index in 1...result.numberOfItems {
+            guard let row = result.atIndex(index), row.numberOfItems >= 5,
+                  let title = row.atIndex(3)?.stringValue,
+                  let urlString = row.atIndex(4)?.stringValue,
+                  let url = URL(string: urlString) else { continue }
+            let windowIndex = Int(row.atIndex(1)?.int32Value ?? 0)
+            let tabIndex = Int(row.atIndex(2)?.int32Value ?? 0)
+            guard windowIndex > 0, tabIndex > 0 else { continue }
+            let tab = BrowserTab(
+                id: "chrome:\(windowIndex):\(tabIndex):\(urlHash(url))",
+                windowIndex: windowIndex,
+                tabIndex: tabIndex,
+                title: title,
+                url: url,
+                isActive: row.atIndex(5)?.booleanValue ?? false
+            )
+            tabs.append(tab)
+        }
+        cachedTabs = Dictionary(uniqueKeysWithValues: tabs.map { ($0.id, $0) })
+        return tabs
+    }
+
+    func activate(tabID: String) async throws {
+        let refreshedTabs = try await listTabs()
+        let tab = cachedTabs[tabID] ?? refreshedTabs.first(where: { $0.id == tabID })
+        guard let tab else { throw BrowserTabProviderError.tabNotFound }
+        let script = """
+        tell application "Google Chrome"
+            set active tab index of window \(tab.windowIndex) to \(tab.tabIndex)
+            set index of window \(tab.windowIndex) to 1
+            activate
+        end tell
+        """
+        var error: NSDictionary?
+        _ = NSAppleScript(source: script)?.executeAndReturnError(&error)
+        if let error { throw BrowserTabProviderError.scriptFailed(error.description) }
+    }
+
+    func activeTab() async throws -> BrowserTab? {
+        let tabs = try await listTabs()
+        return tabs.first(where: \.isActive)
+    }
+
+    private func urlHash(_ url: URL) -> String {
+        SHA256.hash(data: Data(url.absoluteString.utf8))
+            .prefix(6)
+            .map { String(format: "%02x", $0) }
+            .joined()
+    }
+}
 
 /// A local-only audio meter for the music surface in the notch. ScreenCaptureKit
 /// supplies the same output mix the user hears, so this works for Spotify as
@@ -34,36 +234,48 @@ final class NexusAudioReactiveMusic: NSObject, ObservableObject {
 
     enum BrowserSource: Equatable, Sendable {
         case youtube(videoID: String?)
+        case youtubeMusic(videoID: String?)
         case instagram
         case x
+        case twitch
 
         var name: String {
             switch self {
             case .youtube: "YouTube"
+            case .youtubeMusic: "YouTube Music"
             case .instagram: "Instagram"
             case .x: "X"
+            case .twitch: "Twitch"
             }
         }
 
         var palette: Palette {
             switch self {
             case .youtube: .init(red: 1, green: 0.17, blue: 0.17)
+            case .youtubeMusic: .init(red: 1, green: 0.12, blue: 0.20)
             case .instagram: .init(red: 0.83, green: 0.20, blue: 0.58)
             case .x: .init(red: 0.82, green: 0.90, blue: 1)
+            case .twitch: .init(red: 0.60, green: 0.38, blue: 0.95)
             }
         }
 
         var videoThumbnailURL: URL? {
-            guard case .youtube(let id) = self, let id, !id.isEmpty else { return nil }
+            let id: String?
+            switch self {
+            case .youtube(let value), .youtubeMusic(let value): id = value
+            case .instagram, .x, .twitch: id = nil
+            }
+            guard let id, !id.isEmpty else { return nil }
             return URL(string: "https://i.ytimg.com/vi/\(id)/hqdefault.jpg")
         }
 
         var svg: Data {
             let downloads = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Downloads")
             let suppliedAsset: URL = switch self {
-            case .youtube: downloads.appendingPathComponent("youtube-icon.svg")
+            case .youtube, .youtubeMusic: downloads.appendingPathComponent("youtube-icon.svg")
             case .instagram: downloads.appendingPathComponent("instagram-2-1-logo-svgrepo-com.svg")
             case .x: downloads.appendingPathComponent("icons8-x-30.png")
+            case .twitch: downloads.appendingPathComponent("twitch.svg")
             }
             // Prefer the user-supplied marks. The small inline versions below
             // remain only as a resilient fallback if Downloads is cleaned up.
@@ -71,14 +283,33 @@ final class NexusAudioReactiveMusic: NSObject, ObservableObject {
                 return data
             }
             let source: String = switch self {
-            case .youtube:
+            case .youtube, .youtubeMusic:
                 "<svg viewBox=\"0 0 48 48\" xmlns=\"http://www.w3.org/2000/svg\"><rect x=\"4\" y=\"11\" width=\"40\" height=\"26\" rx=\"8\" fill=\"#ff2525\"/><path d=\"M20 17.5 32 24 20 30.5Z\" fill=\"white\"/></svg>"
             case .instagram:
                 "<svg viewBox=\"0 0 48 48\" xmlns=\"http://www.w3.org/2000/svg\"><defs><linearGradient id=\"g\" x1=\"0\" y1=\"1\" x2=\"1\" y2=\"0\"><stop stop-color=\"#ffb72c\"/><stop offset=\".5\" stop-color=\"#e32688\"/><stop offset=\"1\" stop-color=\"#6547d9\"/></linearGradient></defs><rect x=\"6\" y=\"6\" width=\"36\" height=\"36\" rx=\"11\" fill=\"url(#g)\"/><circle cx=\"24\" cy=\"24\" r=\"8\" fill=\"none\" stroke=\"white\" stroke-width=\"3\"/><circle cx=\"34\" cy=\"14\" r=\"2\" fill=\"white\"/></svg>"
             case .x:
                 "<svg viewBox=\"0 0 48 48\" xmlns=\"http://www.w3.org/2000/svg\"><path d=\"M8 7h8l8.1 11.2L33.5 7H40l-13 14.8L41 41h-8l-9.8-13.4L11.4 41H5l14.1-16.1Z\" fill=\"#e8f3ff\"/></svg>"
+            case .twitch:
+                "<svg viewBox=\"0 0 48 48\" xmlns=\"http://www.w3.org/2000/svg\"><path d=\"M10 6h31v24L30 41H19l-6 5v-5h-3Zm7 7v13h5v-13Zm12 0v13h5v-13Z\" fill=\"#a970ff\"/></svg>"
             }
             return Data(source.utf8)
+        }
+
+        init?(mediaTab: MediaTab) {
+            switch mediaTab.platform {
+            case .youtube:
+                self = .youtube(videoID: mediaTab.mediaID)
+            case .youtubeMusic:
+                self = .youtubeMusic(videoID: mediaTab.mediaID)
+            case .instagram:
+                self = .instagram
+            case .x:
+                self = .x
+            case .twitch:
+                self = .twitch
+            case .spotify, .other:
+                return nil
+            }
         }
     }
 
@@ -96,6 +327,7 @@ final class NexusAudioReactiveMusic: NSObject, ObservableObject {
     @Published private(set) var browserArtwork: NSImage?
     @Published private(set) var energy: CGFloat = 0
     @Published private(set) var captureState: CaptureState = .inactive
+    @Published private(set) var activeMediaTab: MediaTab?
 
     /// Keeps browser/video playback visible for a moment between quiet samples.
     private(set) var lastAudibleAt: Date?
@@ -118,11 +350,19 @@ final class NexusAudioReactiveMusic: NSObject, ObservableObject {
     private var permissionRetryTask: Task<Void, Never>?
     private var isStartingCapture = false
     private var lastSpotifySignature = ""
+    private let chromeTabs = ChromeBrowserTabProvider()
+    private var chromePollTimer: Timer?
+    private var chromePollTask: Task<Void, Never>?
+    private var chromeWorkspaceObservers: [NSObjectProtocol] = []
+    private var chromeSnapshotHash = ""
+    private var notchIsExpanded = false
 
     func start() {
         guard spotifyTimer == nil else { return }
         refreshSpotify()
         refreshBrowserSource()
+        installChromeWorkspaceObservers()
+        rescheduleChromePolling()
         spotifyTimer = Timer.scheduledTimer(
             timeInterval: 0.8,
             target: self,
@@ -142,6 +382,13 @@ final class NexusAudioReactiveMusic: NSObject, ObservableObject {
         browserArtworkTask = nil
         permissionRetryTask?.cancel()
         permissionRetryTask = nil
+        chromePollTimer?.invalidate()
+        chromePollTimer = nil
+        chromePollTask?.cancel()
+        chromePollTask = nil
+        chromeWorkspaceObservers.forEach(NotificationCenter.default.removeObserver)
+        chromeWorkspaceObservers.removeAll()
+        activeMediaTab = nil
         let activeStream = stream
         stream = nil
         captureState = .inactive
@@ -255,8 +502,124 @@ final class NexusAudioReactiveMusic: NSObject, ObservableObject {
         refreshBrowserSource()
     }
 
+    /// Controls the tab polling budget without Accessibility permissions.
+    /// Chrome has no tab-change event stream, so state is published only when
+    /// its complete tab snapshot changes.
+    func setNotchExpanded(_ expanded: Bool) {
+        guard notchIsExpanded != expanded else { return }
+        notchIsExpanded = expanded
+        rescheduleChromePolling()
+    }
+
+    func activateCurrentMediaTab() async {
+        guard let tabID = activeMediaTab?.tab.id else { return }
+        do {
+            try await chromeTabs.activate(tabID: tabID)
+        } catch {
+            // The tab may have been closed after the card appeared. A refresh
+            // removes stale state rather than opening a new URL.
+        }
+        await refreshChromeTabs(force: true)
+    }
+
+    private func installChromeWorkspaceObservers() {
+        guard chromeWorkspaceObservers.isEmpty else { return }
+        let center = NSWorkspace.shared.notificationCenter
+        let handler: (Notification) -> Void = { [weak self] _ in
+            Task { @MainActor in
+                await self?.refreshChromeTabs(force: true)
+                self?.rescheduleChromePolling()
+            }
+        }
+        chromeWorkspaceObservers = [
+            center.addObserver(forName: NSWorkspace.didLaunchApplicationNotification, object: nil, queue: .main, using: handler),
+            center.addObserver(forName: NSWorkspace.didTerminateApplicationNotification, object: nil, queue: .main, using: handler),
+            center.addObserver(forName: NSWorkspace.didActivateApplicationNotification, object: nil, queue: .main, using: handler)
+        ]
+    }
+
+    private func rescheduleChromePolling() {
+        chromePollTimer?.invalidate()
+        chromePollTimer = nil
+        guard isChromeRunning else {
+            updateChromeMedia(from: [])
+            return
+        }
+        let interval: TimeInterval
+        if notchIsExpanded {
+            interval = 0.5
+        } else if NSWorkspace.shared.frontmostApplication?.bundleIdentifier == "com.google.Chrome" {
+            interval = 1
+        } else {
+            interval = 4
+        }
+        chromePollTimer = Timer.scheduledTimer(
+            timeInterval: interval,
+            target: self,
+            selector: #selector(refreshChromeTabsTimer),
+            userInfo: nil,
+            repeats: true
+        )
+        chromePollTimer?.tolerance = interval * 0.18
+        Task { @MainActor [weak self] in await self?.refreshChromeTabs(force: false) }
+    }
+
+    @objc private func refreshChromeTabsTimer() {
+        guard chromePollTask == nil else { return }
+        chromePollTask = Task { @MainActor [weak self] in
+            defer { self?.chromePollTask = nil }
+            await self?.refreshChromeTabs(force: false)
+        }
+    }
+
+    private var isChromeRunning: Bool {
+        NSWorkspace.shared.runningApplications.contains { $0.bundleIdentifier == "com.google.Chrome" }
+    }
+
+    private func refreshChromeTabs(force: Bool) async {
+        guard isChromeRunning else {
+            chromeSnapshotHash = ""
+            updateChromeMedia(from: [])
+            return
+        }
+        do {
+            let tabs = try await chromeTabs.listTabs()
+            let snapshot = tabs
+                .map { "\($0.windowIndex):\($0.tabIndex):\($0.url.absoluteString):\($0.isActive)" }
+                .joined(separator: "|")
+            guard force || snapshot != chromeSnapshotHash else { return }
+            chromeSnapshotHash = snapshot
+            updateChromeMedia(from: tabs.compactMap(MediaTab.init))
+        } catch {
+            // A denied Automation grant must not be represented as successful
+            // Chrome media detection.
+            updateChromeMedia(from: [])
+        }
+    }
+
+    private func updateChromeMedia(from mediaTabs: [MediaTab]) {
+        let previousID = activeMediaTab?.id
+        let next = mediaTabs.first(where: { $0.id == previousID })
+            ?? mediaTabs.sorted {
+                if $0.priority != $1.priority { return $0.priority > $1.priority }
+                return $0.tab.id < $1.tab.id
+            }.first
+        guard next != activeMediaTab else { return }
+        activeMediaTab = next
+        guard track == nil else { return }
+        if let next {
+            updateBrowserSource(BrowserSource(mediaTab: next))
+        } else {
+            updateBrowserSource(nil)
+        }
+    }
+
     private func refreshBrowserSource() {
         guard track == nil else { return }
+        if isChromeRunning {
+            Task { @MainActor [weak self] in await self?.refreshChromeTabs(force: false) }
+            return
+        }
         guard let app = NSWorkspace.shared.frontmostApplication else {
             updateBrowserSource(nil)
             return
