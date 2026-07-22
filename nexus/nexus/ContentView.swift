@@ -141,12 +141,23 @@ private struct MusicPlaybackIndicator: View {
 /// browser page, while the overlay remains a transient playback surface.
 private struct YouTubePlaybackOverlay: View {
     let tab: MediaTab
+    @State private var isLoading = true
 
     var body: some View {
         if let playbackURL = YouTubePlaybackURL.make(for: tab) {
-            // The actual watch page carries its own YouTube controls and mark;
-            // do not layer a duplicate logo or decorative shape above it.
-            NexusYouTubePlaybackView(url: playbackURL)
+            ZStack {
+                // Do not flash the partially-rendered YouTube page beneath the
+                // loader. It fades in only after WebKit finishes navigation.
+                NexusYouTubePlaybackView(url: playbackURL, isLoading: $isLoading)
+                    .opacity(isLoading ? 0.001 : 1)
+
+                if isLoading {
+                    YouTubePlayerLoadingAnimation()
+                        .transition(.opacity)
+                }
+            }
+            .background(.black)
+            .animation(.easeOut(duration: 0.2), value: isLoading)
         }
     }
 }
@@ -172,8 +183,9 @@ enum YouTubePlaybackURL {
 
 private struct NexusYouTubePlaybackView: NSViewRepresentable {
     let url: URL
+    @Binding var isLoading: Bool
 
-    func makeCoordinator() -> Coordinator { Coordinator() }
+    func makeCoordinator() -> Coordinator { Coordinator(isLoading: $isLoading) }
 
     func makeNSView(context: Context) -> WKWebView {
         let configuration = WKWebViewConfiguration()
@@ -181,6 +193,8 @@ private struct NexusYouTubePlaybackView: NSViewRepresentable {
         let view = WKWebView(frame: .zero, configuration: configuration)
         view.customUserAgent = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15"
         view.setValue(false, forKey: "drawsBackground")
+        view.navigationDelegate = context.coordinator
+        context.coordinator.setLoading(true)
         view.load(URLRequest(url: url))
         context.coordinator.loadedURL = url
         return view
@@ -189,6 +203,7 @@ private struct NexusYouTubePlaybackView: NSViewRepresentable {
     func updateNSView(_ view: WKWebView, context: Context) {
         guard context.coordinator.loadedURL != url else { return }
         context.coordinator.loadedURL = url
+        context.coordinator.setLoading(true)
         view.load(URLRequest(url: url))
     }
 
@@ -197,8 +212,104 @@ private struct NexusYouTubePlaybackView: NSViewRepresentable {
         view.stopLoading()
     }
 
-    final class Coordinator {
+    final class Coordinator: NSObject, WKNavigationDelegate {
         var loadedURL: URL?
+        private var isLoading: Binding<Bool>
+
+        init(isLoading: Binding<Bool>) {
+            self.isLoading = isLoading
+        }
+
+        func webView(_ webView: WKWebView, didStartProvisionalNavigation navigation: WKNavigation!) {
+            setLoading(true)
+        }
+
+        func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+            setLoading(false)
+        }
+
+        func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
+            setLoading(false)
+        }
+
+        func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
+            setLoading(false)
+        }
+
+        func setLoading(_ loading: Bool) {
+            DispatchQueue.main.async { [isLoading] in
+                isLoading.wrappedValue = loading
+            }
+        }
+    }
+}
+
+/// A small physical-feeling loading loop: the YouTube mark rolls to one side,
+/// tips over, crosses upside-down, then springs back before the player appears.
+private struct YouTubePlayerLoadingAnimation: View {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var pose = 0
+
+    private let poses: [(x: CGFloat, y: CGFloat, rotation: Double)] = [
+        (-50, 0, 0),
+        (-8, -17, 86),
+        (50, 1, 180),
+        (11, 15, 272),
+        (-50, 0, 360)
+    ]
+
+    private var current: (x: CGFloat, y: CGFloat, rotation: Double) {
+        poses[min(pose, poses.count - 1)]
+    }
+
+    var body: some View {
+        YouTubeBrandMark()
+            .frame(width: 42, height: 30)
+            .offset(x: reduceMotion ? 0 : current.x, y: reduceMotion ? 0 : current.y)
+            .rotationEffect(.degrees(reduceMotion ? 0 : current.rotation))
+            .scaleEffect(reduceMotion ? 0.96 : 1)
+            .opacity(reduceMotion ? 0.78 : 1)
+            .task {
+                guard !reduceMotion else { return }
+                while !Task.isCancelled {
+                    for next in 1..<poses.count {
+                        guard !Task.isCancelled else { return }
+                        withAnimation(.interpolatingSpring(stiffness: 190, damping: 13)) {
+                            pose = next
+                        }
+                        try? await Task.sleep(for: .milliseconds(360))
+                    }
+                    guard !Task.isCancelled else { return }
+                    pose = 0 // 360° and 0° are visually identical; reset cleanly.
+                    try? await Task.sleep(for: .milliseconds(90))
+                }
+            }
+            .accessibilityLabel("Loading YouTube video")
+    }
+}
+
+/// The YouTube brand mark is intentionally bare—no surrounding tile or card.
+private struct YouTubeBrandMark: View {
+    var body: some View {
+        ZStack {
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .fill(Color(red: 1, green: 0.02, blue: 0.05))
+            Triangle()
+                .fill(.white)
+                .frame(width: 12, height: 13)
+                .offset(x: 1)
+        }
+    }
+}
+
+private struct Triangle: Shape {
+    func path(in rect: CGRect) -> Path {
+        Path { path in
+            path.move(to: CGPoint(x: rect.minX, y: rect.minY))
+            path.addLine(to: CGPoint(x: rect.maxX, y: rect.midY))
+            path.addLine(to: CGPoint(x: rect.minX, y: rect.maxY))
+            path.closeSubpath()
+        }
     }
 }
 
