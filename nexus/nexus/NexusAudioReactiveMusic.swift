@@ -342,6 +342,12 @@ final class NexusAudioReactiveMusic: NSObject, ObservableObject {
     var isPlaying: Bool { track != nil || browserSource != nil || hasAudibleSystemAudio }
     var activeArtwork: NSImage? { track == nil ? browserArtwork : artwork }
     var activePalette: Palette { track == nil ? (browserSource?.palette ?? .defaultBlue) : palette }
+    var activeYouTubeTab: MediaTab? {
+        guard let activeMediaTab,
+              activeMediaTab.platform == .youtube || activeMediaTab.platform == .youtubeMusic,
+              activeMediaTab.mediaID?.isEmpty == false else { return nil }
+        return activeMediaTab
+    }
     private let sampleQueue = DispatchQueue(label: "na.nexus.audio-reactive.samples", qos: .userInteractive)
     private var stream: SCStream?
     private var spotifyTimer: Timer?

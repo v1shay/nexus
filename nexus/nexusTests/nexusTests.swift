@@ -21,6 +21,29 @@ final class NexusGeometryTests: XCTestCase {
         XCTAssertEqual(media.priority, 130)
     }
 
+    func testYouTubeOverlayUsesTheExistingWatchURLRatherThanEmbed() throws {
+        let sourceURL = try XCTUnwrap(URL(string: "https://www.youtube.com/watch?v=abc123&feature=share"))
+        let tab = BrowserTab(
+            id: "chrome:1:2:abc",
+            windowIndex: 1,
+            tabIndex: 2,
+            title: "A video",
+            url: sourceURL,
+            isActive: true
+        )
+        let media = try XCTUnwrap(MediaTab(tab: tab))
+
+        let playbackURL = try XCTUnwrap(YouTubePlaybackURL.make(for: media))
+        let components = try XCTUnwrap(URLComponents(url: playbackURL, resolvingAgainstBaseURL: false))
+
+        XCTAssertEqual(components.host, "www.youtube.com")
+        XCTAssertEqual(components.path, "/watch")
+        XCTAssertEqual(components.queryItems?.first(where: { $0.name == "v" })?.value, "abc123")
+        XCTAssertEqual(components.queryItems?.first(where: { $0.name == "autoplay" })?.value, "1")
+        XCTAssertEqual(components.queryItems?.first(where: { $0.name == "mute" })?.value, "1")
+        XCTAssertFalse(playbackURL.absoluteString.contains("/embed/"))
+    }
+
     func testChromeMediaClassificationKeepsNonMediaTabsOutOfTheNotch() throws {
         let url = try XCTUnwrap(URL(string: "https://developer.apple.com/documentation"))
         let tab = BrowserTab(

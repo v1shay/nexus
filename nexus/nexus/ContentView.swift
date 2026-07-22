@@ -2,6 +2,7 @@ import AppKit
 import Combine
 import IOKit.ps
 import SwiftUI
+import WebKit
 
 /// The panel is visually indistinguishable from the physical cutout at rest.
 /// Interaction state is supplied by the AppKit controller above the view.
@@ -23,8 +24,13 @@ struct ContentView: View {
                 AdaptiveNotchGlass(isExpanded: notch.isExpanded)
 
                 if notch.isExpanded {
-                    TranscriptContents()
-                        .transition(.opacity.combined(with: .move(edge: .top)))
+                    if let tab = notch.mediaOverlayTab {
+                        YouTubePlaybackOverlay(tab: tab)
+                            .transition(.opacity.combined(with: .move(edge: .top)))
+                    } else {
+                        TranscriptContents()
+                            .transition(.opacity.combined(with: .move(edge: .top)))
+                    }
                 }
             }
         }
@@ -58,15 +64,23 @@ private struct MusicPlaybackIndicator: View {
                 .accessibilityLabel(sourceAccessibilityLabel)
                 .accessibilityHint("Open the current media source")
 
-                Color.clear.frame(maxWidth: .infinity)
+                Button(action: notch.openMediaOverlay) {
+                    Color.clear.frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Open Nexus overlay")
 
-                NexusOrbAnimation(
-                    mode: .music,
-                    size: 22,
-                    tint: notch.musicPalette.color,
-                    energy: notch.musicEnergy
-                )
-                .frame(width: 24, height: 24)
+                Button(action: notch.openMediaOverlay) {
+                    NexusOrbAnimation(
+                        mode: .music,
+                        size: 22,
+                        tint: notch.musicPalette.color,
+                        energy: notch.musicEnergy
+                    )
+                    .frame(width: 24, height: 24)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Open Nexus overlay")
             }
             .padding(.horizontal, 13)
             .frame(maxHeight: .infinity)
@@ -120,6 +134,87 @@ private struct MusicPlaybackIndicator: View {
       <path d="M12 19c9-3 18-2 25 2M13.5 25c7-2 15-1.4 21 1.5M15 30c5.6-1.5 11.4-1 16 1" fill="none" stroke="#07150d" stroke-width="3.2" stroke-linecap="round"/>
     </svg>
     """.utf8)
+}
+
+/// YouTube disallows some embedded-player configurations (error 153). A
+/// top-level watch page gives WKWebView the same client identity as a normal
+/// browser page, while the overlay remains a transient playback surface.
+private struct YouTubePlaybackOverlay: View {
+    @EnvironmentObject private var notch: NotchController
+    let tab: MediaTab
+
+    var body: some View {
+        ZStack(alignment: .topLeading) {
+            if let playbackURL = YouTubePlaybackURL.make(for: tab) {
+                NexusYouTubePlaybackView(url: playbackURL)
+                    .clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
+                    .padding(.top, 3)
+            }
+
+            Button(action: notch.activateCurrentMediaSource) {
+                ToolIconView(
+                    source: .svg(data: NexusAudioReactiveMusic.BrowserSource.youtube(videoID: tab.mediaID).svg, fallbackSystemName: "play.rectangle.fill"),
+                    size: 18
+                )
+                .padding(9)
+                .background(.black.opacity(0.55), in: Circle())
+            }
+            .buttonStyle(.plain)
+            .padding(12)
+            .accessibilityLabel("Open this video in Google Chrome")
+        }
+    }
+}
+
+enum YouTubePlaybackURL {
+    static func make(for tab: MediaTab) -> URL? {
+        guard tab.platform == .youtube || tab.platform == .youtubeMusic else { return nil }
+        var components = URLComponents(url: tab.tab.url, resolvingAgainstBaseURL: false)
+        var items = components?.queryItems ?? []
+        let overrides = [
+            URLQueryItem(name: "autoplay", value: "1"),
+            URLQueryItem(name: "mute", value: "1"),
+            URLQueryItem(name: "playsinline", value: "1")
+        ]
+        for item in overrides {
+            items.removeAll { $0.name == item.name }
+            items.append(item)
+        }
+        components?.queryItems = items
+        return components?.url
+    }
+}
+
+private struct NexusYouTubePlaybackView: NSViewRepresentable {
+    let url: URL
+
+    func makeCoordinator() -> Coordinator { Coordinator() }
+
+    func makeNSView(context: Context) -> WKWebView {
+        let configuration = WKWebViewConfiguration()
+        configuration.mediaTypesRequiringUserActionForPlayback = []
+        let view = WKWebView(frame: .zero, configuration: configuration)
+        view.customUserAgent = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15"
+        view.setValue(false, forKey: "drawsBackground")
+        view.load(URLRequest(url: url))
+        context.coordinator.loadedURL = url
+        return view
+    }
+
+    func updateNSView(_ view: WKWebView, context: Context) {
+        guard context.coordinator.loadedURL != url else { return }
+        context.coordinator.loadedURL = url
+        view.load(URLRequest(url: url))
+    }
+
+    static func dismantleNSView(_ view: WKWebView, coordinator: Coordinator) {
+        view.evaluateJavaScript("document.querySelector('video')?.pause()")
+        view.stopLoading()
+    }
+
+    final class Coordinator {
+        var loadedURL: URL?
+    }
 }
 
 private struct ToolActivityIndicator: View {

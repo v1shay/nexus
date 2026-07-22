@@ -163,18 +163,24 @@ final class NotchController: ObservableObject {
     var musicArtwork: NSImage? { music.activeArtwork }
     var musicPalette: NexusAudioReactiveMusic.Palette { music.activePalette }
     var musicEnergy: CGFloat { music.energy }
-    private var mediaHoverTask: Task<Void, Never>?
-    private var mediaSourceActivatedDuringHover = false
+    @Published private(set) var mediaOverlayTab: MediaTab?
 
     /// The media mark is an explicit source control. Hovering the surrounding
-    /// compact notch retains the normal Nexus overlay behavior.
+    /// compact notch does not consume it.
     func activateCurrentMediaSource() {
-        mediaSourceActivatedDuringHover = true
-        mediaHoverTask?.cancel()
-        mediaHoverTask = nil
         Task { @MainActor [weak self] in
             await self?.music.activateCurrentMediaSource()
         }
+    }
+
+    /// Media cards use click-to-open so the source mark can always win the
+    /// interaction. YouTube carries its active tab into the expanded panel;
+    /// other platforms retain the normal transcript overlay.
+    func openMediaOverlay() {
+        guard interaction.presentation == .idle, let screen else { return }
+        mediaOverlayTab = music.activeYouTubeTab
+        interaction.showOverlay()
+        resize(to: expandedSize(for: screen), animated: true)
     }
 
     private var panel: NexusNotchPanel?
@@ -1000,29 +1006,12 @@ final class NotchController: ObservableObject {
             suppressAutomaticResponseReveal = false
             guard !isListening && !isThinking && !isUsingTool else { return }
             automaticRevealIsWaitingForNotchVisit = false
-            if isShowingMusic {
-                // The proximity monitor polls every 50ms, which otherwise
-                // expands the panel before an artwork/SVG click can reach its
-                // SwiftUI Button. Give that explicit source control one short
-                // chance to win; a genuine hover still opens the chat overlay.
-                mediaSourceActivatedDuringHover = false
-                mediaHoverTask?.cancel()
-                mediaHoverTask = Task { [weak self] in
-                    try? await Task.sleep(for: .milliseconds(180))
-                    guard !Task.isCancelled,
-                          let self,
-                          self.hoverSession.isActive,
-                          self.isShowingMusic,
-                          !self.mediaSourceActivatedDuringHover else { return }
-                    self.expand()
-                }
-                return
-            }
+            // In media mode, the surrounding card is click-to-open. The left
+            // artwork/SVG remains a direct source button and hover alone must
+            // never steal that click by expanding first.
+            if isShowingMusic { return }
             expand()
         } else {
-            mediaHoverTask?.cancel()
-            mediaHoverTask = nil
-            mediaSourceActivatedDuringHover = false
             guard !isListening && !isThinking && !isUsingTool else { return }
             guard !automaticRevealIsWaitingForNotchVisit else { return }
             closeTask = Task { [weak self] in
@@ -1045,6 +1034,7 @@ final class NotchController: ObservableObject {
 
     private func collapse() {
         guard isExpanded, let screen else { return }
+        mediaOverlayTab = nil
         interaction.hideOverlay()
         resize(to: idleSize(for: screen), animated: true)
     }
