@@ -749,7 +749,7 @@ final class NotchController: ObservableObject {
         thinkingModelMarkTask?.cancel()
         isShowingThinkingModelMark = true
         thinkingModelMarkTask = Task { [weak self] in
-            try? await Task.sleep(for: .milliseconds(360))
+            try? await Task.sleep(for: .seconds(1))
             guard !Task.isCancelled else { return }
             self?.isShowingThinkingModelMark = false
         }

@@ -144,7 +144,7 @@ final class NexusGeometryTests: XCTestCase {
     func testCompactTextOnlyGetsAShallowRevealBelowTheMenuBar() {
         let physicalNotch = CGSize(width: 190, height: 32)
         XCTAssertEqual(NotchGeometry.compactHeight(for: physicalNotch), 32)
-        XCTAssertEqual(NotchGeometry.compactTextHeight(for: physicalNotch), 44)
+        XCTAssertEqual(NotchGeometry.compactTextHeight(for: physicalNotch), 56)
     }
 
     func testDictationReleaseSavesTextAndOpensOverlay() {

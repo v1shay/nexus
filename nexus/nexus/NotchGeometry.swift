@@ -4,7 +4,9 @@ struct NotchGeometry {
     static let wingWidth: CGFloat = 62
     /// Compact states stay within the menu-bar/notch height. Only a live
     /// second text line may use this shallow, controlled reveal.
-    static let compactTextReveal: CGFloat = 12
+    /// A streamed compact line needs its own readable baseline.  This is the
+    /// only compact state allowed to extend below the physical-notch height.
+    static let compactTextReveal: CGFloat = 24
 
     static func compactHeight(for physicalNotchSize: CGSize) -> CGFloat {
         physicalNotchSize.height

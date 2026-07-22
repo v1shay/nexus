@@ -120,14 +120,24 @@ private struct ToolActivityIndicator: View {
     private var usesTextReveal: Bool { activity.requiresCompactTextReveal }
 
     var body: some View {
-        ZStack(alignment: .top) {
-            NotchSurface(cornerRadius: usesTextReveal ? 15 : 13).fill(.black)
-            activityRow
+        GeometryReader { proxy in
+            let rowHeight = usesTextReveal
+                ? max(0, proxy.size.height - NotchGeometry.compactTextReveal)
+                : proxy.size.height
 
-            if usesTextReveal {
-                compactTextLine
-                    .padding(.horizontal, 24)
-                    .padding(.top, 27)
+            ZStack {
+                NotchSurface(cornerRadius: usesTextReveal ? 15 : 13).fill(.black)
+
+                VStack(spacing: 0) {
+                    activityRow
+                        .frame(height: rowHeight)
+
+                    if usesTextReveal {
+                        compactTextLine
+                            .padding(.horizontal, 24)
+                            .frame(height: NotchGeometry.compactTextReveal)
+                    }
+                }
             }
         }
         .accessibilityElement(children: .combine)
@@ -156,8 +166,6 @@ private struct ToolActivityIndicator: View {
         }
         .padding(.horizontal, 8)
         .frame(maxWidth: .infinity)
-        .frame(height: 26)
-        .offset(y: 1)
     }
 
     @ViewBuilder
@@ -621,7 +629,7 @@ private struct ModelToThinkingOrb: View {
             .scaleEffect(hasHandedOff ? 0.42 : 1)
             .opacity(hasHandedOff ? 0.08 : 1)
             .onAppear {
-                withAnimation(.easeIn(duration: 0.30)) {
+                withAnimation(.easeIn(duration: 0.84)) {
                     hasHandedOff = true
                 }
             }
@@ -635,22 +643,27 @@ private struct StreamingThinkingIndicator: View {
     let sentence: String
 
     var body: some View {
-        ZStack(alignment: .top) {
-            NotchSurface(cornerRadius: 15).fill(.black)
-            HStack(spacing: 0) {
-                NexusPetView(pet: notch.selectedPet, activity: .thinking, height: 24)
-                    .frame(width: NotchGeometry.wingWidth)
-                Color.clear.frame(maxWidth: .infinity)
-                NexusOrbAnimation(mode: .thinkingCycle, size: 22)
-                    .frame(width: NotchGeometry.wingWidth)
-            }
-            .padding(.horizontal, 8)
-            .frame(height: 26)
-            .offset(y: 1)
+        GeometryReader { proxy in
+            let rowHeight = max(0, proxy.size.height - NotchGeometry.compactTextReveal)
+            ZStack {
+                NotchSurface(cornerRadius: 15).fill(.black)
+                VStack(spacing: 0) {
+                    HStack(spacing: 0) {
+                        NexusPetView(pet: notch.selectedPet, activity: .thinking, height: 24)
+                            .frame(width: NotchGeometry.wingWidth)
+                        Color.clear.frame(maxWidth: .infinity)
+                        NexusOrbAnimation(mode: .thinkingCycle, size: 22)
+                            .frame(width: NotchGeometry.wingWidth)
+                    }
+                    .padding(.horizontal, 8)
+                    .frame(maxWidth: .infinity)
+                    .frame(height: rowHeight)
 
-            ShimmeringStatusText(text: sentence, isFailure: false, style: .white, fontSize: 10.5)
-                .padding(.horizontal, 24)
-                .padding(.top, 27)
+                    ShimmeringStatusText(text: sentence, isFailure: false, style: .white, fontSize: 10.5)
+                        .padding(.horizontal, 24)
+                        .frame(height: NotchGeometry.compactTextReveal)
+                }
+            }
         }
         .accessibilityElement(children: .combine)
         .accessibilityLabel("Nexus thinking: \(sentence)")
