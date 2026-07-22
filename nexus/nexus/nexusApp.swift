@@ -263,6 +263,20 @@ final class NotchController: ObservableObject {
         hostingView.sizingOptions = []
         hostingView.autoresizingMask = [.width, .height]
         panel.contentView = hostingView
+        // A non-activating panel is deliberately unusual in macOS: SwiftUI
+        // controls backed by transparent Color views can miss clicks before
+        // becoming first responder. Route media-card clicks at the panel so
+        // the physical-notch area is consistently actionable.
+        panel.onMouseDown = { [weak self] location in
+            guard let self, self.isShowingMusic else { return false }
+            switch NexusNotchPanel.mediaClickTarget(for: location) {
+            case .source:
+                self.activateCurrentMediaSource()
+            case .overlay:
+                self.openMediaOverlay()
+            }
+            return true
+        }
         self.panel = panel
         if startServices {
             startToolEventListener()
@@ -1357,6 +1371,19 @@ private final class PointerProximityMonitor {
 }
 
 private final class NexusNotchPanel: NSPanel {
+    enum MediaClickTarget: Equatable {
+        case source
+        case overlay
+    }
+
+    /// Includes the artwork and its horizontal breathing room. Everything
+    /// else in compact media mode is an explicit open-Nexus target.
+    static func mediaClickTarget(for point: NSPoint) -> MediaClickTarget {
+        point.x <= 52 ? .source : .overlay
+    }
+
+    var onMouseDown: ((NSPoint) -> Bool)?
+
     override init(contentRect: NSRect, styleMask: NSWindow.StyleMask, backing: NSWindow.BackingStoreType, defer flag: Bool) {
         super.init(contentRect: contentRect, styleMask: styleMask, backing: backing, defer: flag)
         isFloatingPanel = true
@@ -1371,4 +1398,11 @@ private final class NexusNotchPanel: NSPanel {
 
     override var canBecomeKey: Bool { false }
     override var canBecomeMain: Bool { false }
+
+    override func sendEvent(_ event: NSEvent) {
+        if event.type == .leftMouseDown, onMouseDown?(event.locationInWindow) == true {
+            return
+        }
+        super.sendEvent(event)
+    }
 }

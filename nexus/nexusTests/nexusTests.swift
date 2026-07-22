@@ -44,6 +44,13 @@ final class NexusGeometryTests: XCTestCase {
         XCTAssertFalse(playbackURL.absoluteString.contains("/embed/"))
     }
 
+    func testCompactMediaClickReservesOnlyArtworkForSourceNavigation() {
+        XCTAssertEqual(NexusNotchPanel.mediaClickTarget(for: NSPoint(x: 12, y: 16)), .source)
+        XCTAssertEqual(NexusNotchPanel.mediaClickTarget(for: NSPoint(x: 52, y: 16)), .source)
+        XCTAssertEqual(NexusNotchPanel.mediaClickTarget(for: NSPoint(x: 53, y: 16)), .overlay)
+        XCTAssertEqual(NexusNotchPanel.mediaClickTarget(for: NSPoint(x: 176, y: 16)), .overlay)
+    }
+
     func testChromeMediaClassificationKeepsNonMediaTabsOutOfTheNotch() throws {
         let url = try XCTUnwrap(URL(string: "https://developer.apple.com/documentation"))
         let tab = BrowserTab(
