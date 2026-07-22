@@ -149,6 +149,12 @@ actor NexComputerRegistry {
             iconSystemName: "app.badge",
             permission: manifest.registryPermission,
             schema: manifest.inputSchema,
+            application: manifest.application,
+            provider: manifest.provider,
+            examples: manifest.examples,
+            aliases: manifest.aliases,
+            tags: manifest.tags,
+            supportedWorkflows: manifest.examples,
             handler: handler
         )
         try await toolRegistry.register(tool)
@@ -167,6 +173,14 @@ actor NexComputerRegistry {
     func availability(actionID: String) async throws -> NexComputerAvailability {
         guard let entry = entries[actionID] else { throw NexToolError.notFound(actionID) }
         return await entry.availability()
+    }
+
+    func availabilitySnapshot() async -> [String: NexComputerAvailability] {
+        var snapshot: [String: NexComputerAvailability] = [:]
+        for (actionID, entry) in entries {
+            snapshot[actionID] = await entry.availability()
+        }
+        return snapshot
     }
 
     func execute(

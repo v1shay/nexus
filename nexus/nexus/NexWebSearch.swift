@@ -710,7 +710,15 @@ actor NexWebSearchController {
                 spokenStatus: "Searching the web.",
                 iconSystemName: "globe",
                 permission: .network,
-                schema: .init(fields: ["query": .init(.string, required: true)]),
+                schema: .init(fields: [
+                    "query": .init(.string, required: true, description: "Focused standalone query for current or external public information.")
+                ]),
+                application: "Web",
+                provider: "Google and public pages",
+                examples: ["Check tomorrow's weather", "Find the latest Swift release", "Verify a current deadline"],
+                aliases: ["google search", "look it up", "search the web", "current information"],
+                tags: ["web", "search", "news", "weather", "current", "external", "research"],
+                supportedWorkflows: ["current facts", "public research", "documentation lookup", "prices and schedules"],
                 handler: { arguments, context in
                     guard let query = arguments["query"]?.string else {
                         throw NexToolError.missingField("query")

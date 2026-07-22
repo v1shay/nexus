@@ -48,8 +48,8 @@ struct NexPrimaryToolPlan: Codable, Equatable, Sendable {
 }
 
 /// Builds and validates the tool-planning turn for the currently selected
-/// primary model. There are no keyword gates, fallback query builders, or
-/// hidden routing models: semantic inference remains the model's job.
+/// primary model. The caller supplies only semantically discovered actions;
+/// parsing enforces that same per-request allowlist.
 enum NexPrimaryToolPlanner {
     static func planningMessages(
         context: [NexusChatMessage],
@@ -62,7 +62,8 @@ enum NexPrimaryToolPlanner {
                 let fields = tool.schema.fields.keys.sorted().map { name -> String in
                     let field = tool.schema.fields[name]!
                     let values = field.allowedValues.isEmpty ? "" : " enum=" + field.allowedValues.joined(separator: "|")
-                    return "- \(name): \(field.type.rawValue)\(field.required ? " required" : "")\(values)"
+                    let description = field.description.map { " — \($0)" } ?? ""
+                    return "- \(name): \(field.type.rawValue)\(field.required ? " required" : "")\(values)\(description)"
                 }.joined(separator: "\n")
                 return """
                 TOOL \(tool.name)
@@ -78,7 +79,7 @@ enum NexPrimaryToolPlanner {
         formatter.dateFormat = "MMMM d, yyyy"
         let instructions = """
         NEXUS_TOOL_PLANNING_PASS
-        You are the active Nex conversational model. Before answering, decide whether you need any of the available tools. You have the complete active conversation below; use it directly for follow-ups, pronouns, and references to details already visible. Do not retrieve memory for information already in this conversation.
+        You are the active Nex conversational model. Before answering, decide whether you need any of the explicitly available tools below. They are a small semantic discovery result, not the global registry. You may invoke only a listed tool. If the needed capability is absent or the request contains another independent workflow, call search_tools with a standalone description of that missing capability, then select only a tool returned by that search on the next pass. You have the complete active conversation below; use it directly for follow-ups, pronouns, and references to details already visible. Do not retrieve memory for information already in this conversation.
 
         Infer tool use from meaning, never from a keyword checklist. First distinguish an intrinsic request from a request that needs outside evidence or execution: explanations of stable concepts, writing, rewriting, brainstorming, math, small requested snippets, and active-chat follow-ups are intrinsic and must return no actions. Every request whose desired outcome is code or a file-based artifact must use nex_cli_task: creating a script, game, site, app, project, automation, component, or document with code; editing, running, testing, debugging, or validating code; or turning requirements into a working implementation. Nex is the bridge between the user and NexCLI, not the author of an imaginary implementation in chat. For nex_cli_task, send a standalone implementation brief in `prompt` that preserves the user’s concrete requirements, relevant active-conversation details, requested technology, and required validation; never send a one-word fragment. Supply a short descriptive `title` for task presentation. The app owns the persistent workspace path, permissions, execution, streamed status, and final artifacts; never ask the user to choose a path or call a different execution tool. A completed task stays in that same workspace so later coding tasks can inspect and continue it. Only call nex_cli_set_workspace when the user explicitly asks to start, switch to, or resume a named coding folder; pass a human-readable `name`, never a path. A request whose answer may have changed, depends on a public source, or asks to verify an external fact needs web_search. A request about Vishay's life, earlier saved work, preferences, decisions, or a past chat needs memory_search only when that evidence is absent from this active conversation. Use both only when both evidence sets are necessary for the final answer.
 
@@ -163,13 +164,27 @@ struct NexToolOrchestrationResult: Sendable {
     let context: String?
     let webResponses: [NexWebSearchResponse]
     let failures: [Failure]
+    let discoveredToolNames: [String]
+
+    init(
+        context: String?,
+        webResponses: [NexWebSearchResponse],
+        failures: [Failure],
+        discoveredToolNames: [String] = []
+    ) {
+        self.context = context
+        self.webResponses = webResponses
+        self.failures = failures
+        self.discoveredToolNames = discoveredToolNames
+    }
 
     func merging(_ other: Self) -> Self {
         let contexts = [context, other.context].compactMap { $0 }.filter { !$0.isEmpty }
         return .init(
             context: contexts.isEmpty ? nil : contexts.joined(separator: "\n\n"),
             webResponses: webResponses + other.webResponses,
-            failures: failures + other.failures
+            failures: failures + other.failures,
+            discoveredToolNames: Array(Set(discoveredToolNames + other.discoveredToolNames)).sorted()
         )
     }
 
@@ -213,7 +228,9 @@ actor NexToolOrchestrator {
                         let value = try await registry.execute(
                             name: action.tool,
                             arguments: action.arguments,
-                            invocation: .modelReadOnly
+                            invocation: action.tool == NexToolSearchService.actionName
+                                ? .modelDiscovery
+                                : .modelReadOnly
                         )
                         return (index, action.tool, .success(value))
                     } catch {
@@ -229,10 +246,17 @@ actor NexToolOrchestrator {
         var contexts: [String] = []
         var webResponses: [NexWebSearchResponse] = []
         var failures: [NexToolOrchestrationResult.Failure] = []
+        var discoveredToolNames: [String] = []
         for item in ordered.compactMap({ $0 }) {
             switch item.1 {
             case .success(let value):
-                if item.0 == "web_search", let response = try? NexWebSearchController.decode(value) {
+                if item.0 == NexToolSearchService.actionName {
+                    let names = Self.discoveredToolNames(from: value)
+                    discoveredToolNames.append(contentsOf: names)
+                    if !names.isEmpty {
+                        contexts.append("The tool registry explicitly made these actions available for the next planning pass: \(names.joined(separator: ", ")).")
+                    }
+                } else if item.0 == "web_search", let response = try? NexWebSearchController.decode(value) {
                     contexts.append(response.modelContext())
                     webResponses.append(response)
                 } else if let memoryContext = Self.memoryContext(from: value) {
@@ -250,8 +274,19 @@ actor NexToolOrchestrator {
         return .init(
             context: contexts.isEmpty ? nil : contexts.joined(separator: "\n\n"),
             webResponses: webResponses,
-            failures: failures
+            failures: failures,
+            discoveredToolNames: Array(Set(discoveredToolNames)).sorted()
         )
+    }
+
+    private static func discoveredToolNames(from value: NexJSONValue) -> [String] {
+        guard case .object(let object) = value,
+              case .array(let candidates) = object["candidates"] else { return [] }
+        return candidates.compactMap { candidate in
+            guard case .object(let fields) = candidate,
+                  fields["is_available"] == .bool(true) else { return nil }
+            return fields["tool"]?.string
+        }
     }
 
     private static func memoryContext(from value: NexJSONValue) -> String? {

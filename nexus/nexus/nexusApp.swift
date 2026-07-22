@@ -254,6 +254,7 @@ final class NotchController: ObservableObject {
         self?.requestYouTubePlayback(tab, fullscreen: fullscreen) ?? false
     }
     private lazy var toolOrchestrator = NexToolOrchestrator(registry: memory.registry)
+    private lazy var toolSearch = NexToolSearchService(registry: memory.registry)
     private var memoryObservation: AnyCancellable?
     private var toolEventTask: Task<Void, Never>?
     private var codexProgressMonitor: CodexProgressMonitor?
@@ -519,7 +520,14 @@ final class NotchController: ObservableObject {
                 await memory.prepareToolRegistry()
                 try? await webSearch.registerIfNeeded()
                 try? await youtubeTools.registerIfNeeded()
-                let definitions = await memory.registry.definitions()
+                try? await toolSearch.registerIfNeeded()
+                let allDefinitions = await memory.registry.definitions()
+                let discovery = await toolSearch.search(query: prompt)
+                var definitions = await toolSearch.definitions(for: discovery)
+                if let searchTool = allDefinitions.first(where: { $0.name == NexToolSearchService.actionName }) {
+                    definitions.append(searchTool)
+                }
+                definitions.sort { $0.name < $1.name }
                 let planningMessages = NexPrimaryToolPlanner.planningMessages(
                     context: baseMessages,
                     tools: definitions
@@ -579,6 +587,15 @@ final class NotchController: ObservableObject {
                         memoryLookupPerformed = memoryLookupPerformed || actions.contains { $0.tool == "memory_search" }
                         result = result.merging(await toolOrchestrator.execute(actions))
                         guard !Task.isCancelled, responseGeneration == generation else { return }
+                        if !result.discoveredToolNames.isEmpty {
+                            let alreadyAvailable = Set(definitions.map(\.name))
+                            let newlyAvailable = allDefinitions.filter {
+                                result.discoveredToolNames.contains($0.name)
+                                    && !alreadyAvailable.contains($0.name)
+                            }
+                            definitions.append(contentsOf: newlyAvailable)
+                            definitions.sort { $0.name < $1.name }
+                        }
                         let startedPlayback = actions.contains {
                             ["youtube_play_current", "youtube_play", "youtube_fullscreen"].contains($0.tool)
                         } && mediaOverlayTab != nil

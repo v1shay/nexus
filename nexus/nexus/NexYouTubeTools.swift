@@ -173,6 +173,11 @@ final class NexYouTubeToolController {
             iconSystemName: "play.rectangle.fill",
             permission: .automation,
             schema: .init(fields: [:]),
+            application: "YouTube",
+            provider: "Google Chrome",
+            examples: ["Play the YouTube video I already have open", "Continue this video in the notch"],
+            aliases: ["play current video", "show this YouTube tab", "continue video"],
+            tags: ["YouTube", "video", "playback", "Chrome", "media"],
             handler: { [weak self] _, _ in
                 guard let self else {
                     throw NexToolError.executionFailed(code: "youtube_unavailable", message: "YouTube playback is unavailable.")
@@ -191,7 +196,12 @@ final class NexYouTubeToolController {
             spokenStatus: "Searching YouTube.",
             iconSystemName: "play.rectangle.fill",
             permission: .network,
-            schema: .init(fields: ["query": .init(.string, required: true)]),
+            schema: .init(fields: ["query": .init(.string, required: true, description: "Standalone description of the YouTube video to find.")]),
+            application: "YouTube",
+            provider: "YouTube search",
+            examples: ["Find a calculus tutorial to play", "Play a video about robotic arms"],
+            aliases: ["find a YouTube video", "search YouTube", "find a video"],
+            tags: ["YouTube", "video", "search", "media"],
             handler: { [searchService] arguments, context in
                 guard let query = arguments["query"]?.string else { throw NexToolError.missingField("query") }
                 await context.reportProgress("Looking for matching videos…", 0.25)
@@ -215,7 +225,12 @@ final class NexYouTubeToolController {
             spokenStatus: "Starting YouTube.",
             iconSystemName: "play.rectangle.fill",
             permission: .automation,
-            schema: .init(fields: ["video_id": .init(.string, required: true)]),
+            schema: .init(fields: ["video_id": .init(.string, required: true, description: "Stable video ID returned by youtube_search.")]),
+            application: "YouTube",
+            provider: "Nex media overlay",
+            examples: ["Play the selected YouTube search result"],
+            aliases: ["play selected video", "start YouTube result"],
+            tags: ["YouTube", "video", "playback", "media"],
             handler: { [weak self] arguments, _ in
                 guard let self else {
                     throw NexToolError.executionFailed(code: "youtube_unavailable", message: "YouTube playback is unavailable.")
@@ -236,6 +251,11 @@ final class NexYouTubeToolController {
             iconSystemName: "arrow.up.left.and.arrow.down.right",
             permission: .automation,
             schema: .init(fields: [:]),
+            application: "YouTube",
+            provider: "Nex media overlay",
+            examples: ["Make this YouTube video full screen", "Enlarge the playing video"],
+            aliases: ["full screen video", "enlarge video", "make video bigger"],
+            tags: ["YouTube", "video", "fullscreen", "media"],
             handler: { [weak self] _, _ in
                 guard let self else {
                     throw NexToolError.executionFailed(code: "youtube_unavailable", message: "YouTube playback is unavailable.")

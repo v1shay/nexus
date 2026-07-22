@@ -189,9 +189,15 @@ actor NexCLITaskService {
             iconSystemName: "terminal",
             permission: .codeExecution,
             schema: .init(fields: [
-                "prompt": .init(.string, required: true),
-                "title": .init(.string)
-            ])
+                "prompt": .init(.string, required: true, description: "Standalone implementation brief for the coding agent."),
+                "title": .init(.string, description: "Short human-readable task title.")
+            ]),
+            application: "NexCLI",
+            provider: "Nex local coding agent",
+            examples: ["Build a playable Snake game", "Fix and test this app", "Create a website from these requirements"],
+            aliases: ["code this", "build an app", "implement this", "fix the code", "coding agent"],
+            tags: ["code", "build", "implement", "debug", "test", "files", "app", "website"],
+            supportedWorkflows: ["software implementation", "code modification", "test and validation", "file-based artifact creation"]
         ) { arguments, context in
             guard let prompt = arguments["prompt"]?.string?.trimmingCharacters(in: .whitespacesAndNewlines), !prompt.isEmpty else {
                 throw NexToolError.missingField("prompt")
@@ -208,8 +214,14 @@ actor NexCLITaskService {
             iconSystemName: "folder",
             permission: .codeExecution,
             schema: .init(fields: [
-                "name": .init(.string, required: true)
-            ])
+                "name": .init(.string, required: true, description: "Human-readable managed workspace name, never an arbitrary path.")
+            ]),
+            application: "NexCLI",
+            provider: "Nex local coding agent",
+            examples: ["Switch to the Atlas project folder", "Start a new coding workspace named Portfolio"],
+            aliases: ["switch coding folder", "change workspace", "resume project folder"],
+            tags: ["workspace", "folder", "project", "code"],
+            supportedWorkflows: ["explicit managed workspace switching"]
         ) { arguments, _ in
             guard let name = arguments["name"]?.string?.trimmingCharacters(in: .whitespacesAndNewlines), !name.isEmpty else {
                 throw NexToolError.missingField("name")

@@ -227,7 +227,7 @@ extension NexMemoryService {
             iconSystemName: "diamond.fill",
             permission: .readMemory,
             schema: .init(fields: [
-                "query": .init(.string, required: true),
+                "query": .init(.string, required: true, description: "Focused retrieval query for durable personal context or a saved chat."),
                 "limit": .init(.integer, minimum: 1, maximum: 12),
                 "document_types": .init(.stringArray, allowedValues: NexMemoryDocumentType.allCases.map(\.rawValue)),
                 "memory_kinds": .init(.stringArray, allowedValues: NexMemoryKind.allCases.map(\.rawValue)),
@@ -236,6 +236,12 @@ extension NexMemoryService {
                 "include_transcript_excerpts": .init(.boolean),
                 "evidence_only": .init(.boolean)
             ]),
+            application: "Obsidian",
+            provider: "Nex Memory",
+            examples: ["Which of my projects fits this?", "What school do I attend?", "Recall our saved architecture decision"],
+            aliases: ["search memory", "remember my project", "saved context", "past conversations"],
+            tags: ["memory", "personal", "history", "preferences", "projects", "saved chats", "Obsidian"],
+            supportedWorkflows: ["personal context retrieval", "saved conversation recall", "project and preference lookup"],
             handler: { arguments, context in
                 let query = arguments["query"]?.string ?? ""
                 let limit = arguments["limit"]?.integer ?? 6

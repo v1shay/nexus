@@ -53,6 +53,7 @@ enum NexToolFieldType: String, Codable, Sendable {
 struct NexToolFieldSchema: Codable, Equatable, Sendable {
     let type: NexToolFieldType
     let required: Bool
+    let description: String?
     let allowedValues: [String]
     let minimum: Double?
     let maximum: Double?
@@ -60,12 +61,14 @@ struct NexToolFieldSchema: Codable, Equatable, Sendable {
     init(
         _ type: NexToolFieldType,
         required: Bool = false,
+        description: String? = nil,
         allowedValues: [String] = [],
         minimum: Double? = nil,
         maximum: Double? = nil
     ) {
         self.type = type
         self.required = required
+        self.description = description
         self.allowedValues = allowedValues
         self.minimum = minimum
         self.maximum = maximum
@@ -141,6 +144,7 @@ struct NexToolInvocation: Sendable {
 
     static let app = NexToolInvocation(source: .app, userAuthorizedWrite: true, reportsActivity: true)
     static let modelReadOnly = NexToolInvocation(source: .model, userAuthorizedWrite: false, reportsActivity: true)
+    static let modelDiscovery = NexToolInvocation(source: .model, userAuthorizedWrite: false, reportsActivity: false)
     /// Used only after the app has independently validated a model-generated
     /// proposal against finalized user evidence. Background writes must never
     /// take over the live notch tool indicator.
@@ -257,6 +261,12 @@ struct NexRegisteredTool: Sendable {
     let iconSystemName: String
     let permission: NexToolPermission
     let schema: NexToolInputSchema
+    let application: String
+    let provider: String
+    let examples: [String]
+    let aliases: [String]
+    let tags: [String]
+    let supportedWorkflows: [String]
     let handler: Handler
 
     init(
@@ -268,6 +278,12 @@ struct NexRegisteredTool: Sendable {
         iconSystemName: String,
         permission: NexToolPermission,
         schema: NexToolInputSchema,
+        application: String = "Nex",
+        provider: String = "Nexus",
+        examples: [String] = [],
+        aliases: [String] = [],
+        tags: [String] = [],
+        supportedWorkflows: [String] = [],
         handler: @escaping Handler
     ) {
         self.name = name
@@ -279,6 +295,12 @@ struct NexRegisteredTool: Sendable {
         self.iconSystemName = iconSystemName
         self.permission = permission
         self.schema = schema
+        self.application = application
+        self.provider = provider
+        self.examples = examples
+        self.aliases = aliases
+        self.tags = tags
+        self.supportedWorkflows = supportedWorkflows
         self.handler = handler
     }
 }
