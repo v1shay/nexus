@@ -219,7 +219,7 @@ final class NotchController: ObservableObject {
         pendingYouTubePlayback = nil
         pendingYouTubeFullscreen = false
         interaction.showMediaOverlay()
-        resize(to: isMediaFullscreen ? screen.frame.size : mediaPlaybackSize(for: screen), animated: true)
+        resize(to: currentMediaOverlaySize(for: screen), animated: true)
         return true
     }
 
@@ -1065,6 +1065,15 @@ final class NotchController: ObservableObject {
     }
 
     private func handleToolEvent(_ event: NexToolLifecycleEvent) {
+        // Tool events are emitted asynchronously. A completion event can land
+        // after playback has already claimed the panel; never let it replace a
+        // live player with the compact tool card or its normal overlay frame.
+        let playbackTools: Set<String> = ["youtube_play_current", "youtube_play", "youtube_fullscreen"]
+        if mediaOverlayTab != nil, playbackTools.contains(event.toolName) {
+            interaction.showMediaOverlay()
+            if let screen { resize(to: currentMediaOverlaySize(for: screen), animated: false) }
+            return
+        }
         switch event.phase {
         case .started, .progress:
             interaction.beginToolActivity(.lifecycle(event))
@@ -1223,6 +1232,10 @@ final class NotchController: ObservableObject {
         return CGSize(width: width, height: width * 9 / 16)
     }
 
+    private func currentMediaOverlaySize(for screen: NSScreen) -> CGSize {
+        isMediaFullscreen ? screen.frame.size : mediaPlaybackSize(for: screen)
+    }
+
     private func mediaPlaybackWidthLimits(for screen: NSScreen) -> (min: CGFloat, max: CGFloat) {
         let minimum = min(480, screen.frame.width * 0.42)
         let maximum = min(1_100, screen.frame.width * 0.92)
@@ -1266,7 +1279,7 @@ final class NotchController: ObservableObject {
         case .tool: toolActivitySize(for: screen)
         case .overlay:
             if mediaOverlayTab != nil {
-                isMediaFullscreen ? screen.frame.size : mediaPlaybackSize(for: screen)
+                currentMediaOverlaySize(for: screen)
             } else {
                 expandedSize(for: screen)
             }
