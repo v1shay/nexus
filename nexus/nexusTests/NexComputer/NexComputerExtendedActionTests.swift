@@ -90,6 +90,12 @@ final class NexComputerExtendedActionTests: XCTestCase {
         let result = try await cli.git(["status", "--porcelain=v1"], repository: root); XCTAssertTrue(result.stdout.contains("README.md"))
     }
 
+    func testSystemCatalogExposesExplicitFocusLimitation() async throws {
+        let tools = NexToolRegistry(), computer = NexComputerRegistry(toolRegistry: tools, permissionManager: NexComputerPermissionManager(backend: AuthorizedPermissions())); try await NexSystemActionCatalog().register(on: computer)
+        let names = Set(await tools.definitions().map(\.name)); XCTAssertTrue(Set(["system.open_setting", "system.get_volume", "system.set_volume", "system.get_display_state", "system.toggle_focus_mode", "system.get_battery", "system.get_network_state"]).isSubset(of: names))
+        let available = try await computer.availability(actionID: "system.toggle_focus_mode"); XCTAssertFalse(available.isAvailable); XCTAssertTrue((available.reason ?? "").contains("Focus"))
+    }
+
     private func temporaryFile(_ name: String) -> URL {
         FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString).appendingPathComponent(name)
     }

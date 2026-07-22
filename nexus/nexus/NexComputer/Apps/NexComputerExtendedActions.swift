@@ -783,3 +783,41 @@ actor NexGitHubActionCatalog {
 }
 
 private func required(_ input: [String: NexJSONValue], _ key: String) throws -> String { guard let value = input[key]?.string, !value.isEmpty else { throw NexToolError.missingField(key) }; return value }
+
+// MARK: - Phase 14: macOS system state
+
+actor NexSystemProvider {
+    func openSetting(_ pane: String) throws {
+        let allowed: [String: String] = ["general": "com.apple.General-Settings.extension", "display": "com.apple.Displays-Settings.extension", "sound": "com.apple.Sound-Settings.extension", "network": "com.apple.Network-Settings.extension", "focus": "com.apple.Focus-Settings.extension", "privacy": "com.apple.settings.PrivacySecurity.extension", "battery": "com.apple.Battery-Settings.extension"]
+        guard let id = allowed[pane], let url = URL(string: "x-apple.systempreferences:\(id)"), NSWorkspace.shared.open(url) else { throw NexToolError.invalidEnum(field: "pane", allowed: Array(allowed.keys).sorted()) }
+    }
+    func getVolume() throws -> Int { Int(try appleScript("output volume of (get volume settings)")) ?? 0 }
+    func setVolume(_ value: Int) throws { guard 0...100 ~= value else { throw NexToolError.outOfRange(field: "volume", minimum: 0, maximum: 100) }; _ = try appleScript("set volume output volume \(value)") }
+    func displayState() -> NexJSONValue {
+        .array(NSScreen.screens.map { screen in .object(["name": .string(screen.localizedName), "width": .number(screen.frame.width), "height": .number(screen.frame.height), "scale": .number(screen.backingScaleFactor), "main": .bool(screen == NSScreen.main)]) })
+    }
+    func batteryState() async throws -> String { try await command("/usr/bin/pmset", ["-g", "batt"]) }
+    func networkState() async throws -> String { try await command("/usr/sbin/scutil", ["--nwi"]) }
+    func focusUnsupported() throws -> Never { throw NexToolError.executionFailed(code: "unsupported_on_macos", message: "macOS exposes no stable public API for changing Focus mode. Nexus can open Focus settings but will not fake or UI-click the state.") }
+    private func appleScript(_ source: String) throws -> String { var error: NSDictionary?; let result = NSAppleScript(source: source)?.executeAndReturnError(&error); if let error { throw NexToolError.executionFailed(code: "system_automation_failed", message: error.description) }; return result?.stringValue ?? result?.description ?? "" }
+    private func command(_ executable: String, _ arguments: [String]) async throws -> String { try await withCheckedThrowingContinuation { continuation in let process = Process(), pipe = Pipe(); process.executableURL = URL(fileURLWithPath: executable); process.arguments = arguments; process.standardOutput = pipe; process.standardError = pipe; process.terminationHandler = { process in let output = String(data: pipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""; process.terminationStatus == 0 ? continuation.resume(returning: output) : continuation.resume(throwing: NexToolError.executionFailed(code: "system_command_failed", message: output)) }; do { try process.run() } catch { continuation.resume(throwing: error) } } }
+}
+
+actor NexSystemActionCatalog {
+    private let provider: NexSystemProvider; private var registered = false
+    init(provider: NexSystemProvider = NexSystemProvider()) { self.provider = provider }
+    func register(on registry: NexComputerRegistry) async throws {
+        guard !registered else { return }; let provider = provider
+        try await registry.register(manifest: Self.manifest("system.open_setting", "Open one known System Settings pane without changing privacy or security state.", ["Open Display settings"], ["pane": .init(.string, required: true, allowedValues: ["general", "display", "sound", "network", "focus", "privacy", "battery"])], risk: .low)) { args, _ in guard let pane = args["pane"]?.string else { throw NexToolError.missingField("pane") }; try await provider.openSetting(pane); return Self.result("Opened \(pane) settings.") }
+        try await registry.register(manifest: Self.manifest("system.get_volume", "Read the current macOS output volume from zero to one hundred.", ["What is the volume?"], [:], risk: .low)) { _, _ in let value = try await provider.getVolume(); return Self.result("Volume is \(value)%.", value: value) }
+        try await registry.register(manifest: Self.manifest("system.set_volume", "Set macOS output volume to an exact validated value from zero to one hundred.", ["Set volume to 30 percent"], ["volume": .init(.integer, required: true, minimum: 0, maximum: 100)], risk: .medium, confirmation: .always)) { args, _ in guard let value = args["volume"]?.integer else { throw NexToolError.missingField("volume") }; try await provider.setVolume(value); return Self.result("Set volume to \(value)%.", value: value) }
+        try await registry.register(manifest: Self.manifest("system.get_display_state", "Read connected display names, sizes, scale factors, and main-display state.", ["Show my displays"], [:], risk: .low)) { _, _ in let displays = await provider.displayState(); return Self.result("Read display state.", items: displays) }
+        try await registry.register(manifest: Self.manifest("system.toggle_focus_mode", "Focus mode cannot be changed through a stable public macOS API; this action fails explicitly and directs the user to Focus settings.", ["Turn on Focus mode"], ["enabled": .init(.boolean, required: true)], risk: .medium, confirmation: .always, availability: .unsupported("macOS exposes no stable public Focus-mode mutation API; use system.open_setting with pane focus."))) { _, _ in try await provider.focusUnsupported() }
+        try await registry.register(manifest: Self.manifest("system.get_battery", "Read current macOS battery and power-source state through pmset.", ["How much battery is left?"], [:], risk: .low)) { _, _ in let output = try await provider.batteryState(); return Self.result(output.trimmingCharacters(in: .whitespacesAndNewlines), raw: output) }
+        try await registry.register(manifest: Self.manifest("system.get_network_state", "Read interface and reachability state without changing network configuration.", ["Is my network connected?"], [:], risk: .low)) { _, _ in let output = try await provider.networkState(); return Self.result("Read network state.", raw: output) }
+        registered = true
+    }
+    private static let output = NexToolInputSchema(fields: ["display": .init(.string, required: true), "status": .init(.string, required: true), "value": .init(.integer, required: true), "raw": .init(.string, required: true), "items": .init(.array, required: true)])
+    private static func result(_ display: String, value: Int = 0, raw: String = "", items: NexJSONValue = .array([])) -> NexJSONValue { .object(["display": .string(display), "status": .string("completed"), "value": .number(Double(value)), "raw": .string(raw), "items": items]) }
+    private static func manifest(_ id: String, _ description: String, _ examples: [String], _ fields: [String: NexToolFieldSchema], risk: NexComputerRiskClass, confirmation: NexComputerConfirmationPolicy = .never, availability: NexComputerAvailabilityCheck = .always) -> NexComputerActionManifest { .init(actionID: id, application: "macOS", provider: "System", description: description, examples: examples, aliases: [id.replacingOccurrences(of: ".", with: " ")], tags: ["system", "settings", "macos", "battery", "network", "display", "volume", "focus"], inputSchema: .init(fields: fields), outputSchema: output, implementationMethod: id == "system.open_setting" ? .urlScheme : .nativeAPI, registryPermission: .automation, riskClass: risk, confirmationPolicy: confirmation, availabilityCheck: availability, timeoutSeconds: 20, supportsCancellation: false, dryRunBehavior: .supported("Would perform \(id) without changing privacy or network configuration."), previewRenderer: "system.state", tests: ["NexSystemActionTests"]) }
+}
