@@ -42,6 +42,8 @@
 		A2C0001930075C29006660E4 /* NexTerminalActionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2C0001A30075C29006660E4 /* NexTerminalActionTests.swift */; };
 		A2C0001C30075C29006660E4 /* NexFinderActions.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2C0001D30075C29006660E4 /* NexFinderActions.swift */; };
 		A2C0001E30075C29006660E4 /* NexFinderActionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2C0001F30075C29006660E4 /* NexFinderActionTests.swift */; };
+		A2C0002030075C29006660E4 /* NexSpotifyActions.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2C0002130075C29006660E4 /* NexSpotifyActions.swift */; };
+		A2C0002230075C29006660E4 /* NexSpotifyActionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2C0002330075C29006660E4 /* NexSpotifyActionTests.swift */; };
 		R100000330075C29006660E4 /* NexMemoryService.swift in Sources */ = {isa = PBXBuildFile; fileRef = R100000430075C29006660E4 /* NexMemoryService.swift */; };
 		A1B2C3D4E5F60718293A4B5C /* NexCLITaskService.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1B2C3D4E5F60718293A4B5C /* NexCLITaskService.swift */; };
 		C1D2E3F4A5B60718293A4B5C /* NexCLIHostManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = D1D2E3F4A5B60718293A4B5C /* NexCLIHostManager.swift */; };
@@ -140,6 +142,8 @@
 		A2C0001A30075C29006660E4 /* NexTerminalActionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NexTerminalActionTests.swift; sourceTree = "<group>"; };
 		A2C0001D30075C29006660E4 /* NexFinderActions.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NexFinderActions.swift; sourceTree = "<group>"; };
 		A2C0001F30075C29006660E4 /* NexFinderActionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NexFinderActionTests.swift; sourceTree = "<group>"; };
+		A2C0002130075C29006660E4 /* NexSpotifyActions.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NexSpotifyActions.swift; sourceTree = "<group>"; };
+		A2C0002330075C29006660E4 /* NexSpotifyActionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NexSpotifyActionTests.swift; sourceTree = "<group>"; };
 		R100000430075C29006660E4 /* NexMemoryService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NexMemoryService.swift; sourceTree = "<group>"; };
 		B1B2C3D4E5F60718293A4B5C /* NexCLITaskService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NexCLITaskService.swift; sourceTree = "<group>"; };
 		D1D2E3F4A5B60718293A4B5C /* NexCLIHostManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NexCLIHostManager.swift; sourceTree = "<group>"; };
@@ -282,6 +286,7 @@
 			children = (
 				A2C0001830075C29006660E4 /* NexTerminalActions.swift */,
 				A2C0001D30075C29006660E4 /* NexFinderActions.swift */,
+				A2C0002130075C29006660E4 /* NexSpotifyActions.swift */,
 			);
 			path = Apps;
 			sourceTree = "<group>";
@@ -294,6 +299,7 @@
 				A2C0001430075C29006660E4 /* NexComputerConfirmationTests.swift */,
 				A2C0001A30075C29006660E4 /* NexTerminalActionTests.swift */,
 				A2C0001F30075C29006660E4 /* NexFinderActionTests.swift */,
+				A2C0002330075C29006660E4 /* NexSpotifyActionTests.swift */,
 			);
 			name = NexComputer;
 			path = NexComputer;
@@ -569,6 +575,7 @@
 				A2C0001130075C29006660E4 /* NexComputerPermissionManager.swift in Sources */,
 				A2C0001730075C29006660E4 /* NexTerminalActions.swift in Sources */,
 				A2C0001C30075C29006660E4 /* NexFinderActions.swift in Sources */,
+				A2C0002030075C29006660E4 /* NexSpotifyActions.swift in Sources */,
 				R100000330075C29006660E4 /* NexMemoryService.swift in Sources */,
 				A1B2C3D4E5F60718293A4B5C /* NexCLITaskService.swift in Sources */,
 				C1D2E3F4A5B60718293A4B5C /* NexCLIHostManager.swift in Sources */,
@@ -619,6 +626,7 @@
 				A2C0001330075C29006660E4 /* NexComputerConfirmationTests.swift in Sources */,
 				A2C0001930075C29006660E4 /* NexTerminalActionTests.swift in Sources */,
 				A2C0001E30075C29006660E4 /* NexFinderActionTests.swift in Sources */,
+				A2C0002230075C29006660E4 /* NexSpotifyActionTests.swift in Sources */,
 				G100000930075C29006660E4 /* NexusConnectFoundationTests.swift in Sources */,
 				H100000730075C29006660E4 /* NexusConnectDiscoveryTests.swift in Sources */,
 				I100000330075C29006660E4 /* NexusConnectHostServiceTests.swift in Sources */,
