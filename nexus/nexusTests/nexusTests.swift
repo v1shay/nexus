@@ -93,6 +93,27 @@ final class NexusGeometryTests: XCTestCase {
         XCTAssertTrue(prompt.contains("youtube_fullscreen"))
     }
 
+    func testFullscreenMediaRejectsLateHoverAndToolResizeRequests() {
+        let screen = CGSize(width: 1_728, height: 1_117)
+        let resolved = NexusMediaFullscreenSizing.resolvedSize(
+            requested: CGSize(width: 820, height: 461),
+            screenSize: screen,
+            mediaIsActive: true,
+            isFullscreen: true,
+            presentation: .overlay
+        )
+        XCTAssertEqual(resolved, screen)
+
+        let dictation = NexusMediaFullscreenSizing.resolvedSize(
+            requested: CGSize(width: 300, height: 38),
+            screenSize: screen,
+            mediaIsActive: true,
+            isFullscreen: true,
+            presentation: .dictating
+        )
+        XCTAssertEqual(dictation, CGSize(width: 300, height: 38))
+    }
+
     @MainActor
     func testCurrentYouTubeToolUsesOnlyTheActiveChromeVideo() async throws {
         let url = try XCTUnwrap(URL(string: "https://www.youtube.com/watch?v=abcDEF_1234"))

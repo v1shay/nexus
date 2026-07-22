@@ -182,6 +182,10 @@ final class NotchController: ObservableObject {
     /// other platforms retain the normal transcript overlay.
     func openMediaOverlay() {
         guard interaction.presentation == .idle, let screen else { return }
+        // A pointer can enter the newly enlarged fullscreen panel immediately
+        // after the player opens. Never let that incidental interaction turn a
+        // live fullscreen video back into the ordinary media card.
+        guard !(mediaOverlayTab != nil && isMediaFullscreen) else { return }
         isMediaFullscreen = false
         mediaPlaybackWidth = nil
         mediaOverlayTab = music.activeYouTubeTab
@@ -1117,10 +1121,11 @@ final class NotchController: ObservableObject {
             suppressAutomaticResponseReveal = false
             guard !isListening && !isThinking && !isUsingTool else { return }
             automaticRevealIsWaitingForNotchVisit = false
-            // In media mode, the surrounding card is click-to-open. The left
-            // artwork/SVG remains a direct source button and hover alone must
-            // never steal that click by expanding first.
-            if isShowingMusic { return }
+            // The pointer becomes "inside" as soon as a fullscreen player
+            // grows underneath it. A hover enter must never resize an active
+            // player back to the ordinary overlay—media owns its geometry
+            // until the user explicitly quick-dismisses it.
+            if mediaOverlayTab != nil || isShowingMusic { return }
             expand()
         } else {
             if mediaOverlayTab != nil { return }
@@ -1158,14 +1163,24 @@ final class NotchController: ObservableObject {
     private func resize(to size: CGSize, animated: Bool) {
         music.setNotchExpanded(interaction.presentation == .overlay)
         guard let panel, let screen else { return }
-        let requestedSizeChanged = abs(currentSize.width - size.width) > 0.5
-            || abs(currentSize.height - size.height) > 0.5
-        let targetFrame = frame(for: size, on: screen)
+        // Tool events, hover callbacks, and delayed SwiftUI layout can all
+        // arrive after a fullscreen request. While the media player is the
+        // active overlay, its fullscreen frame is the only valid target.
+        let resolvedSize = NexusMediaFullscreenSizing.resolvedSize(
+            requested: size,
+            screenSize: screen.frame.size,
+            mediaIsActive: mediaOverlayTab != nil,
+            isFullscreen: isMediaFullscreen,
+            presentation: interaction.presentation
+        )
+        let requestedSizeChanged = abs(currentSize.width - resolvedSize.width) > 0.5
+            || abs(currentSize.height - resolvedSize.height) > 0.5
+        let targetFrame = frame(for: resolvedSize, on: screen)
         let frameChanged = abs(panel.frame.minX - targetFrame.minX) > 0.5
             || abs(panel.frame.minY - targetFrame.minY) > 0.5
             || abs(panel.frame.width - targetFrame.width) > 0.5
             || abs(panel.frame.height - targetFrame.height) > 0.5
-        currentSize = size
+        currentSize = resolvedSize
         // Streaming tokens can arrive faster than the expansion animation.
         // Once the target size is requested, do not restart that animation for
         // every token just because the presentation layer is mid-flight.
@@ -1285,6 +1300,22 @@ final class NotchController: ObservableObject {
             }
         }
         resize(to: size, animated: false)
+    }
+}
+
+/// Keeps transient hover and tool callbacks from shrinking an already-open
+/// fullscreen media player. The explicit presentation check lets a new
+/// dictation session intentionally take over the panel instead.
+enum NexusMediaFullscreenSizing {
+    static func resolvedSize(
+        requested: CGSize,
+        screenSize: CGSize,
+        mediaIsActive: Bool,
+        isFullscreen: Bool,
+        presentation: NotchPresentation
+    ) -> CGSize {
+        guard mediaIsActive, isFullscreen, presentation == .overlay else { return requested }
+        return screenSize
     }
 }
 
