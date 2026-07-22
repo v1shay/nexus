@@ -1013,7 +1013,14 @@ final class NotchController: ObservableObject {
     }
 
     private func musicSize(for screen: NSScreen) -> CGSize {
-        CGSize(width: min(390, screen.frame.width * 0.34), height: 72)
+        // Music has no status or transcript text, so it belongs in the same
+        // compact notch footprint as the lightweight listening surface—not the
+        // larger tool/coding activity card.
+        let physical = closedSize(for: screen)
+        return CGSize(
+            width: min(350, physical.width + NotchGeometry.wingWidth * 2 + 18),
+            height: max(52, physical.height + 20)
+        )
     }
 
     private func idleSize(for screen: NSScreen) -> CGSize {

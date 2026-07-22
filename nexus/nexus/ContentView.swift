@@ -47,23 +47,23 @@ private struct MusicPlaybackIndicator: View {
 
     var body: some View {
         ZStack(alignment: .top) {
-            NotchSurface(cornerRadius: 18).fill(.black)
-            HStack(spacing: 11) {
+            NotchSurface(cornerRadius: 14).fill(.black)
+            HStack(spacing: 0) {
                 albumArt
-                    .frame(width: 43, height: 43)
+                    .frame(width: 32, height: 32)
 
                 Color.clear.frame(maxWidth: .infinity)
 
                 NexusOrbAnimation(
                     mode: .music,
-                    size: 38,
+                    size: 30,
                     tint: notch.musicPalette.color,
                     energy: notch.musicEnergy
                 )
-                .frame(width: 43, height: 43)
+                .frame(width: 32, height: 32)
             }
-            .padding(.horizontal, 18)
-            .padding(.top, 10)
+            .padding(.horizontal, 13)
+            .frame(maxHeight: .infinity)
         }
         .accessibilityElement(children: .combine)
         .accessibilityLabel(notch.musicTrack.map { "Playing \($0.title) by \($0.artist)" } ?? "System audio is playing")

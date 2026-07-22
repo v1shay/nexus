@@ -59,6 +59,17 @@ final class NexusAudioReactiveMusic: NSObject, ObservableObject {
         }
 
         var svg: Data {
+            let downloads = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Downloads")
+            let suppliedAsset: URL = switch self {
+            case .youtube: downloads.appendingPathComponent("youtube-icon.svg")
+            case .instagram: downloads.appendingPathComponent("instagram-2-1-logo-svgrepo-com.svg")
+            case .x: downloads.appendingPathComponent("icons8-x-48.png")
+            }
+            // Prefer the user-supplied marks. The small inline versions below
+            // remain only as a resilient fallback if Downloads is cleaned up.
+            if let data = try? Data(contentsOf: suppliedAsset), !data.isEmpty {
+                return data
+            }
             let source: String = switch self {
             case .youtube:
                 "<svg viewBox=\"0 0 48 48\" xmlns=\"http://www.w3.org/2000/svg\"><rect x=\"4\" y=\"11\" width=\"40\" height=\"26\" rx=\"8\" fill=\"#ff2525\"/><path d=\"M20 17.5 32 24 20 30.5Z\" fill=\"white\"/></svg>"
