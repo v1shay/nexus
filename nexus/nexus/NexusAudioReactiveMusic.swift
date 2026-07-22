@@ -99,6 +99,7 @@ final class NexusAudioReactiveMusic: NSObject, ObservableObject {
     private var spotifyTimer: Timer?
     private var artworkTask: Task<Void, Never>?
     private var browserArtworkTask: Task<Void, Never>?
+    private var permissionRetryTask: Task<Void, Never>?
     private var isStartingCapture = false
     private var lastSpotifySignature = ""
 
@@ -123,6 +124,8 @@ final class NexusAudioReactiveMusic: NSObject, ObservableObject {
         artworkTask = nil
         browserArtworkTask?.cancel()
         browserArtworkTask = nil
+        permissionRetryTask?.cancel()
+        permissionRetryTask = nil
         let activeStream = stream
         stream = nil
         captureState = .inactive
@@ -136,6 +139,20 @@ final class NexusAudioReactiveMusic: NSObject, ObservableObject {
         guard CGPreflightScreenCaptureAccess() else {
             captureState = .awaitingPermission
             _ = CGRequestScreenCaptureAccess()
+            // CGRequestScreenCaptureAccess returns while the privacy sheet is
+            // still up on some macOS releases. Retry briefly so accepting it
+            // starts the meter immediately rather than requiring an app restart.
+            permissionRetryTask?.cancel()
+            permissionRetryTask = Task { [weak self] in
+                for _ in 0..<20 {
+                    try? await Task.sleep(for: .milliseconds(500))
+                    guard !Task.isCancelled, let self else { return }
+                    if CGPreflightScreenCaptureAccess() {
+                        self.requestAndStartCaptureIfPossible()
+                        return
+                    }
+                }
+            }
             return
         }
         isStartingCapture = true

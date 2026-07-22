@@ -24,6 +24,10 @@
 	<true/>
 	<key>NSMicrophoneUsageDescription</key>
 	<string>Nexus uses the microphone while you hold the dictation hotkey.</string>
+	<key>NSAppleEventsUsageDescription</key>
+	<string>Nexus reads local Spotify playback and the active browser tab to show music and video activity in the notch.</string>
+	<key>NSScreenCaptureUsageDescription</key>
+	<string>Nexus analyzes live system audio locally to animate the music orb. Audio is never saved or sent anywhere.</string>
 	<key>NSSpeechRecognitionUsageDescription</key>
 	<string>Nexus converts your dictated speech into the transcript shown below the notch.</string>
 </dict>
