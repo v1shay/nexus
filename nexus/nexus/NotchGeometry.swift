@@ -1,5 +1,10 @@
 import CoreGraphics
 
+enum NexusMediaClickTarget: Equatable {
+    case source
+    case overlay
+}
+
 struct NotchGeometry {
     static let wingWidth: CGFloat = 62
     /// Compact states stay within the menu-bar/notch height. Only a live
@@ -38,5 +43,10 @@ struct NotchGeometry {
             width: size.width,
             height: size.height
         )
+    }
+
+    static func mediaClickTarget(for point: CGPoint) -> NexusMediaClickTarget {
+        // Includes the artwork/logo and its horizontal breathing room.
+        point.x <= 52 ? .source : .overlay
     }
 }

@@ -45,10 +45,49 @@ final class NexusGeometryTests: XCTestCase {
     }
 
     func testCompactMediaClickReservesOnlyArtworkForSourceNavigation() {
-        XCTAssertEqual(NexusNotchPanel.mediaClickTarget(for: NSPoint(x: 12, y: 16)), .source)
-        XCTAssertEqual(NexusNotchPanel.mediaClickTarget(for: NSPoint(x: 52, y: 16)), .source)
-        XCTAssertEqual(NexusNotchPanel.mediaClickTarget(for: NSPoint(x: 53, y: 16)), .overlay)
-        XCTAssertEqual(NexusNotchPanel.mediaClickTarget(for: NSPoint(x: 176, y: 16)), .overlay)
+        XCTAssertEqual(NotchGeometry.mediaClickTarget(for: NSPoint(x: 12, y: 16)), .source)
+        XCTAssertEqual(NotchGeometry.mediaClickTarget(for: NSPoint(x: 52, y: 16)), .source)
+        XCTAssertEqual(NotchGeometry.mediaClickTarget(for: NSPoint(x: 53, y: 16)), .overlay)
+        XCTAssertEqual(NotchGeometry.mediaClickTarget(for: NSPoint(x: 176, y: 16)), .overlay)
+    }
+
+    func testYouTubeSearchParserKeepsDistinctStableVideoIDs() {
+        let page = #"""
+        {"videoId":"abcDEF_1234"}{"videoId":"abcDEF_1234"}
+        {"videoId":"ZyxWVUT-987"}{"notVideoId":"ignore"}
+        """#
+        XCTAssertEqual(NexYouTubeSearchService.videoIDs(in: page), ["abcDEF_1234", "ZyxWVUT-987"])
+        XCTAssertTrue(NexYouTubeToolController.isValidVideoID("abcDEF_1234"))
+        XCTAssertFalse(NexYouTubeToolController.isValidVideoID("not-a-video"))
+    }
+
+    @MainActor
+    func testCurrentYouTubeToolUsesOnlyTheActiveChromeVideo() async throws {
+        let url = try XCTUnwrap(URL(string: "https://www.youtube.com/watch?v=abcDEF_1234"))
+        let active = BrowserTab(
+            id: "chrome:1:1:test",
+            windowIndex: 1,
+            tabIndex: 1,
+            title: "Test video",
+            url: url,
+            isActive: true
+        )
+        let provider = YouTubeToolTestTabs(active: active)
+        let registry = NexToolRegistry()
+        var selected: MediaTab?
+        let controller = NexYouTubeToolController(registry: registry, browserTabs: provider) { tab, fullscreen in
+            selected = tab
+            return !fullscreen && tab?.mediaID == "abcDEF_1234"
+        }
+
+        try await controller.registerIfNeeded()
+        let result = try await registry.execute(name: "youtube_play_current", arguments: [:], invocation: .modelReadOnly)
+
+        XCTAssertEqual(selected?.tab.id, active.id)
+        guard case .object(let object) = result else {
+            return XCTFail("Expected a structured YouTube result")
+        }
+        XCTAssertEqual(object["video_id"], .string("abcDEF_1234"))
     }
 
     func testChromeMediaClassificationKeepsNonMediaTabsOutOfTheNotch() throws {
@@ -932,4 +971,17 @@ final class NexusGeometryTests: XCTestCase {
         XCTAssertNil(gesture.update(commandIsDown: false, hasDisqualifyingInput: false, now: 40.60))
     }
 
+}
+
+@MainActor
+private final class YouTubeToolTestTabs: BrowserTabProviding {
+    let active: BrowserTab
+
+    init(active: BrowserTab) {
+        self.active = active
+    }
+
+    func listTabs() async throws -> [BrowserTab] { [active] }
+    func activate(tabID: String) async throws {}
+    func activeTab() async throws -> BrowserTab? { active }
 }

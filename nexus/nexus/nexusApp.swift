@@ -164,6 +164,7 @@ final class NotchController: ObservableObject {
     var musicPalette: NexusAudioReactiveMusic.Palette { music.activePalette }
     var musicEnergy: CGFloat { music.energy }
     @Published private(set) var mediaOverlayTab: MediaTab?
+    @Published private(set) var isMediaFullscreen = false
 
     /// The media mark is an explicit source control. Hovering the surrounding
     /// compact notch does not consume it.
@@ -178,9 +179,32 @@ final class NotchController: ObservableObject {
     /// other platforms retain the normal transcript overlay.
     func openMediaOverlay() {
         guard interaction.presentation == .idle, let screen else { return }
+        isMediaFullscreen = false
         mediaOverlayTab = music.activeYouTubeTab
         interaction.showOverlay()
-        resize(to: expandedSize(for: screen), animated: true)
+        resize(to: mediaOverlayTab == nil ? expandedSize(for: screen) : mediaPlaybackSize(for: screen), animated: true)
+    }
+
+    /// A validated YouTube tool request lands here after it has selected an
+    /// existing Chrome video or a stable video ID. `tab == nil` means only
+    /// expand the already-playing surface.
+    private func requestYouTubePlayback(_ tab: MediaTab?, fullscreen: Bool) -> Bool {
+        guard screen != nil else { return false }
+        if let tab { mediaOverlayTab = tab }
+        guard mediaOverlayTab != nil else { return false }
+        isMediaFullscreen = fullscreen || isMediaFullscreen
+        return true
+    }
+
+    private func presentRequestedYouTubePlayback() -> Bool {
+        guard let tab = pendingYouTubePlayback ?? mediaOverlayTab, let screen else { return false }
+        mediaOverlayTab = tab
+        isMediaFullscreen = pendingYouTubeFullscreen || isMediaFullscreen
+        pendingYouTubePlayback = nil
+        pendingYouTubeFullscreen = false
+        interaction.showOverlay()
+        resize(to: isMediaFullscreen ? screen.frame.size : mediaPlaybackSize(for: screen), animated: true)
+        return true
     }
 
     private var panel: NexusNotchPanel?
@@ -206,6 +230,9 @@ final class NotchController: ObservableObject {
     let memory: NexMemoryController
     let settings: NexusAppSettings
     private lazy var webSearch = NexWebSearchController(registry: memory.registry)
+    private lazy var youtubeTools = NexYouTubeToolController(registry: memory.registry) { [weak self] tab, fullscreen in
+        self?.requestYouTubePlayback(tab, fullscreen: fullscreen) ?? false
+    }
     private lazy var toolOrchestrator = NexToolOrchestrator(registry: memory.registry)
     private var memoryObservation: AnyCancellable?
     private var toolEventTask: Task<Void, Never>?
@@ -218,6 +245,8 @@ final class NotchController: ObservableObject {
     private let music = NexusAudioReactiveMusic()
     private var musicObservation: AnyCancellable?
     private var wasShowingMusic = false
+    private var pendingYouTubePlayback: MediaTab?
+    private var pendingYouTubeFullscreen = false
 
     init(connectController: NexusConnectController? = nil) {
         let resolvedConnectController = connectController ?? .shared
@@ -269,7 +298,7 @@ final class NotchController: ObservableObject {
         // the physical-notch area is consistently actionable.
         panel.onMouseDown = { [weak self] location in
             guard let self, self.isShowingMusic else { return false }
-            switch NexusNotchPanel.mediaClickTarget(for: location) {
+            switch NotchGeometry.mediaClickTarget(for: location) {
             case .source:
                 self.activateCurrentMediaSource()
             case .overlay:
@@ -286,6 +315,7 @@ final class NotchController: ObservableObject {
                 guard let self else { return }
                 await memory.prepareToolRegistry()
                 try? await webSearch.registerIfNeeded()
+                try? await youtubeTools.registerIfNeeded()
             }
             installCommandHoldMonitor()
             installPointerMonitor()
@@ -459,6 +489,7 @@ final class NotchController: ObservableObject {
 
                 await memory.prepareToolRegistry()
                 try? await webSearch.registerIfNeeded()
+                try? await youtubeTools.registerIfNeeded()
                 let definitions = await memory.registry.definitions()
                 let planningMessages = NexPrimaryToolPlanner.planningMessages(
                     context: baseMessages,
@@ -519,6 +550,10 @@ final class NotchController: ObservableObject {
                         memoryLookupPerformed = memoryLookupPerformed || actions.contains { $0.tool == "memory_search" }
                         result = result.merging(await toolOrchestrator.execute(actions))
                         guard !Task.isCancelled, responseGeneration == generation else { return }
+                        let startedPlayback = actions.contains {
+                            ["youtube_play_current", "youtube_play", "youtube_fullscreen"].contains($0.tool)
+                        } && mediaOverlayTab != nil
+                        if startedPlayback { break }
 
                         let planningContext = await conversationSession.contextMessages(
                             memoryLookupPerformed: memoryLookupPerformed,
@@ -534,6 +569,15 @@ final class NotchController: ObservableObject {
                         if plannerAdvisory == nil { plannerAdvisory = pendingPlan.memoryWrite }
                     }
                     guard !Task.isCancelled, responseGeneration == generation else { return }
+                    let requestedPlayback = executedActions.contains {
+                        ["youtube_play_current", "youtube_play", "youtube_fullscreen"].contains($0.tool)
+                    }
+                    if requestedPlayback, presentRequestedYouTubePlayback() {
+                        responseIsStreaming = false
+                        responseSpeaker.finishStreaming()
+                        armWakePhraseListener()
+                        return
+                    }
                     responseSpeaker.setWebEvidenceActive(!result.webResponses.isEmpty)
                     interaction.beginThinking()
                     if let screen { resize(to: listeningSize(for: screen), animated: true) }
@@ -724,6 +768,9 @@ final class NotchController: ObservableObject {
     }
 
     func dismissOverlay() {
+        // Media playback is intentionally sticky. A hover-out must not pause
+        // or destroy it; the global double-Command quick-dismiss owns exit.
+        guard mediaOverlayTab == nil else { return }
         if responseIsStreaming, !responseSpeechCursor.text.isEmpty {
             let interrupted = responseSpeechCursor.text
             Task {
@@ -1026,6 +1073,7 @@ final class NotchController: ObservableObject {
             if isShowingMusic { return }
             expand()
         } else {
+            if mediaOverlayTab != nil { return }
             guard !isListening && !isThinking && !isUsingTool else { return }
             guard !automaticRevealIsWaitingForNotchVisit else { return }
             closeTask = Task { [weak self] in
@@ -1049,6 +1097,9 @@ final class NotchController: ObservableObject {
     private func collapse() {
         guard isExpanded, let screen else { return }
         mediaOverlayTab = nil
+        isMediaFullscreen = false
+        pendingYouTubePlayback = nil
+        pendingYouTubeFullscreen = false
         interaction.hideOverlay()
         resize(to: idleSize(for: screen), animated: true)
     }
@@ -1119,6 +1170,13 @@ final class NotchController: ObservableObject {
         CGSize(width: min(680, screen.frame.width * 0.5), height: 245)
     }
 
+    /// Media gets a temporary wider 16:9 canvas. It is derived solely from
+    /// the present screen and resets on dismissal, never a persisted setting.
+    private func mediaPlaybackSize(for screen: NSScreen) -> CGSize {
+        let width = min(820, screen.frame.width * 0.62)
+        return CGSize(width: width, height: width * 9 / 16)
+    }
+
     private func listeningSize(for screen: NSScreen) -> CGSize {
         NotchGeometry.listeningSize(for: closedSize(for: screen))
     }
@@ -1154,7 +1212,12 @@ final class NotchController: ObservableObject {
         case .dictating: listeningSize(for: screen)
         case .thinking: interaction.thinkingSentence == nil ? listeningSize(for: screen) : thinkingActivitySize(for: screen)
         case .tool: toolActivitySize(for: screen)
-        case .overlay: expandedSize(for: screen)
+        case .overlay:
+            if mediaOverlayTab != nil {
+                isMediaFullscreen ? screen.frame.size : mediaPlaybackSize(for: screen)
+            } else {
+                expandedSize(for: screen)
+            }
         }
         resize(to: size, animated: false)
     }
@@ -1371,17 +1434,6 @@ private final class PointerProximityMonitor {
 }
 
 private final class NexusNotchPanel: NSPanel {
-    enum MediaClickTarget: Equatable {
-        case source
-        case overlay
-    }
-
-    /// Includes the artwork and its horizontal breathing room. Everything
-    /// else in compact media mode is an explicit open-Nexus target.
-    static func mediaClickTarget(for point: NSPoint) -> MediaClickTarget {
-        point.x <= 52 ? .source : .overlay
-    }
-
     var onMouseDown: ((NSPoint) -> Bool)?
 
     override init(contentRect: NSRect, styleMask: NSWindow.StyleMask, backing: NSWindow.BackingStoreType, defer flag: Bool) {

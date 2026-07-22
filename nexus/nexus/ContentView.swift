@@ -140,28 +140,13 @@ private struct MusicPlaybackIndicator: View {
 /// top-level watch page gives WKWebView the same client identity as a normal
 /// browser page, while the overlay remains a transient playback surface.
 private struct YouTubePlaybackOverlay: View {
-    @EnvironmentObject private var notch: NotchController
     let tab: MediaTab
 
     var body: some View {
-        ZStack(alignment: .topLeading) {
-            if let playbackURL = YouTubePlaybackURL.make(for: tab) {
-                NexusYouTubePlaybackView(url: playbackURL)
-                    .clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
-                    .padding(.top, 3)
-            }
-
-            Button(action: notch.activateCurrentMediaSource) {
-                ToolIconView(
-                    source: .svg(data: NexusAudioReactiveMusic.BrowserSource.youtube(videoID: tab.mediaID).svg, fallbackSystemName: "play.rectangle.fill"),
-                    size: 18
-                )
-                .padding(9)
-                .background(.black.opacity(0.55), in: Circle())
-            }
-            .buttonStyle(.plain)
-            .padding(12)
-            .accessibilityLabel("Open this video in Google Chrome")
+        if let playbackURL = YouTubePlaybackURL.make(for: tab) {
+            // The actual watch page carries its own YouTube controls and mark;
+            // do not layer a duplicate logo or decorative shape above it.
+            NexusYouTubePlaybackView(url: playbackURL)
         }
     }
 }
@@ -304,9 +289,9 @@ private struct ToolActivityIndicator: View {
 
     @ViewBuilder
     private var compactTextLine: some View {
-        if activity.toolName == "Web Search", !activity.sources.isEmpty {
+        if (activity.toolName == "Web Search" || activity.toolName == "YouTube"), !activity.sources.isEmpty {
             SearchResultTicker(sources: activity.sources)
-        } else if activity.toolName == "Web Search", let query = activity.query,
+        } else if (activity.toolName == "Web Search" || activity.toolName == "YouTube"), let query = activity.query,
                   !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             ShimmeringStatusText(
                 text: query,
@@ -327,7 +312,7 @@ private struct ToolActivityIndicator: View {
     private var statusStyle: StatusShimmerStyle {
         activity.toolName == "Web Search"
             ? .google
-            : (activity.toolName == "Nex Memory" ? .obsidian : (isCodex ? .codex : .white))
+            : (activity.toolName == "YouTube" ? .youtube : (activity.toolName == "Nex Memory" ? .obsidian : (isCodex ? .codex : .white)))
     }
 }
 
@@ -561,6 +546,7 @@ private struct ToolIconView: View {
 private enum StatusShimmerStyle {
     case white
     case google
+    case youtube
     case obsidian
     case codex
 
@@ -568,6 +554,7 @@ private enum StatusShimmerStyle {
         switch self {
         case .white: [.clear, .white.opacity(0.88), .white, .white.opacity(0.88), .clear]
         case .google: [.clear, .red.opacity(0.9), .yellow.opacity(0.95), .green.opacity(0.92), .blue.opacity(0.95), .clear]
+        case .youtube: [.clear, .red.opacity(0.78), .red.opacity(0.98), .white.opacity(0.94), .red.opacity(0.92), .clear]
         case .obsidian: [.clear, .purple.opacity(0.7), .indigo.opacity(0.98), .purple.opacity(0.82), .clear]
         case .codex: [.clear, .cyan.opacity(0.78), .blue.opacity(0.98), .indigo.opacity(0.9), .cyan.opacity(0.78), .clear]
         }

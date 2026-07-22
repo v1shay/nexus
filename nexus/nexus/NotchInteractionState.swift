@@ -47,6 +47,9 @@ struct ToolActivity: Equatable, Sendable {
             || (toolName == "Web Search" && (
                 !sources.isEmpty || query?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
             ))
+            || (toolName == "YouTube" && (
+                !sources.isEmpty || query?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
+            ))
     }
 
     static func googleSearch(query: String) -> ToolActivity {
@@ -63,9 +66,10 @@ struct ToolActivity: Equatable, Sendable {
         let isMemory = event.toolName.hasPrefix("memory_") || event.toolName == "conversation_recall"
         let isWebSearch = event.toolName == "web_search"
         let isNexCLI = event.toolName == "nex_cli_task"
+        let isYouTube = event.toolName.hasPrefix("youtube_")
         let title = isMemory
             ? "Nex Memory"
-            : (isWebSearch ? "Web Search" : (isNexCLI ? "Nex CLI" : event.toolName.replacingOccurrences(of: "_", with: " ").capitalized))
+            : (isWebSearch ? "Web Search" : (isNexCLI ? "Nex CLI" : (isYouTube ? "YouTube" : event.toolName.replacingOccurrences(of: "_", with: " ").capitalized)))
         let icon: ToolIconSource
         if isMemory {
             icon = .asset(name: "Obsidian", fallbackSystemName: "diamond.fill")
@@ -73,6 +77,8 @@ struct ToolActivity: Equatable, Sendable {
             icon = .asset(name: "Chrome", fallbackSystemName: "globe")
         } else if isNexCLI {
             icon = .systemSymbol("terminal")
+        } else if isYouTube {
+            icon = .asset(name: "YouTube", fallbackSystemName: "play.rectangle.fill")
         } else {
             icon = .systemSymbol("wrench.and.screwdriver")
         }
@@ -87,13 +93,13 @@ struct ToolActivity: Equatable, Sendable {
         return ToolActivity(
             toolName: title,
             status: event.message,
-            spokenStatus: isMemory ? "Checking memory." : (isWebSearch ? "Searching the web." : event.message),
+            spokenStatus: isMemory ? "Checking memory." : (isWebSearch ? "Searching the web." : (isYouTube ? "Checking YouTube." : event.message)),
             icon: icon,
             phase: event.phase,
             progress: event.progress,
             detail: isNexCLI ? "NEX > \(event.message)" : nil,
             query: query,
-            sources: isMemory ? memorySources(from: event.result) : (isWebSearch ? webSources(from: event.result) : [])
+            sources: isMemory ? memorySources(from: event.result) : ((isWebSearch || isYouTube) ? webSources(from: event.result) : [])
         )
     }
 

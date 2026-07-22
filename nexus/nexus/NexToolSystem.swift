@@ -124,6 +124,7 @@ enum NexToolPermission: String, Codable, Sendable {
     case writeMemory = "write_memory"
     case forgetMemory = "forget_memory"
     case network
+    case automation
     case files
     case codeExecution = "code_execution"
 }
