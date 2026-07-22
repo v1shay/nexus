@@ -1,4 +1,6 @@
+import AppKit
 import Foundation
+import SwiftUI
 
 enum ModelBackend: String, CaseIterable, Identifiable, Codable, Sendable {
     case ollama
@@ -59,6 +61,70 @@ struct LocalModel: Identifiable, Hashable, Codable, Sendable {
             return identifier.isEmpty ? nil : LocalModel(customIdentifier: identifier, backend: .lmStudio)
         }
         return nil
+    }
+}
+
+/// Resolves only the model artwork the user has supplied.  These are deliberately
+/// rendered as the source image—no app-created tile, circle, or background is
+/// placed behind them.
+enum ModelBrandArtwork {
+    private static let downloadsDirectory = URL(fileURLWithPath: "/Users/vishayagarwal/Downloads", isDirectory: true)
+
+    static func assetURL(for model: LocalModel?) -> URL {
+        let modelText = [
+            model?.name,
+            model?.identifier,
+            model?.family,
+            model?.backend.rawValue
+        ]
+        .compactMap { $0 }
+        .joined(separator: " ")
+        .lowercased()
+
+        let assetName: String
+        if modelText.contains("qwen") {
+            assetName = "qwen-color.svg"
+        } else if modelText.contains("mistral") {
+            assetName = "mistral-color.svg"
+        } else if modelText.contains("deepseek") {
+            assetName = "icons8-deepseek-94.png"
+        } else if modelText.contains("gemma") {
+            assetName = "gemma-color.svg"
+        } else if modelText.contains("ollama") {
+            assetName = "ollama-dark.svg"
+        } else {
+            // The Linux mark is the requested neutral classification for any
+            // local model without a dedicated family mark.
+            assetName = "icons8-linux-48.png"
+        }
+        return downloadsDirectory.appendingPathComponent(assetName)
+    }
+
+    static func image(for model: LocalModel?) -> NSImage? {
+        NSImage(contentsOf: assetURL(for: model))
+    }
+}
+
+/// Raw model-family artwork for model rows and the compact prompt handoff.
+/// It intentionally contains no fallback symbol or decorative container: a
+/// missing user asset simply remains empty instead of being replaced by a tile.
+struct ModelBrandIcon: View {
+    let model: LocalModel?
+    var size: CGFloat = 22
+
+    var body: some View {
+        Group {
+            if let image = ModelBrandArtwork.image(for: model) {
+                Image(nsImage: image)
+                    .resizable()
+                    .interpolation(.high)
+                    .scaledToFit()
+            } else {
+                Color.clear
+            }
+        }
+        .frame(width: size, height: size)
+        .accessibilityHidden(true)
     }
 }
 

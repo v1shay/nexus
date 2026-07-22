@@ -365,6 +365,7 @@ private struct NexusModelsPage: View {
                 Circle()
                     .fill(.green)
                     .frame(width: 6, height: 6)
+                ModelBrandIcon(model: model, size: 16)
                 Text("Using \(model.name)")
                     .lineLimit(1)
                 Text(model.backend.title)
@@ -474,6 +475,7 @@ private struct NexusModelRow: View {
 
     var body: some View {
         HStack(spacing: 8) {
+            ModelBrandIcon(model: model, size: 24)
             VStack(alignment: .leading, spacing: 2) {
                 Text(model.name).lineLimit(1)
                 Text(model.identifier).font(.caption2).foregroundStyle(.secondary).lineLimit(1)

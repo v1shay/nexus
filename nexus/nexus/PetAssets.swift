@@ -2,9 +2,27 @@ import AppKit
 import SwiftUI
 
 struct NexusPet: Identifiable, Equatable, Sendable {
+    enum Artwork: Equatable, Sendable {
+        case atlas
+        case animatedGIF(URL)
+    }
+
     let id: String
     let displayName: String
     let description: String
+    let artwork: Artwork
+
+    init(
+        id: String,
+        displayName: String,
+        description: String,
+        artwork: Artwork = .atlas
+    ) {
+        self.id = id
+        self.displayName = displayName
+        self.description = description
+        self.artwork = artwork
+    }
 }
 
 enum NexusPetActivity: Sendable {
@@ -67,6 +85,14 @@ enum NexusPetCatalog {
             id: "pan-chan-laptop",
             displayName: "Pan-chan",
             description: "A fluffy panda helper who works from a tiny laptop."
+        ),
+        NexusPet(
+            id: "linux",
+            displayName: "Linux",
+            description: "The animated Linux companion from your Downloads folder.",
+            artwork: .animatedGIF(
+                URL(fileURLWithPath: "/Users/vishayagarwal/Downloads/icons8-linux.gif")
+            )
         )
     ]
 
@@ -104,39 +130,68 @@ struct NexusPetView: View {
     private let cellAspectRatio: CGFloat = 192 / 208
 
     var body: some View {
-        TimelineView(.animation(minimumInterval: activity.frameDuration)) { timeline in
-            let frame = Int(
-                timeline.date.timeIntervalSinceReferenceDate / activity.frameDuration
-            ) % activity.frameCount
+        Group {
+            switch pet.artwork {
+            case .atlas:
+                TimelineView(.animation(minimumInterval: activity.frameDuration)) { timeline in
+                    let frame = Int(
+                        timeline.date.timeIntervalSinceReferenceDate / activity.frameDuration
+                    ) % activity.frameCount
 
-            Group {
-                if let atlas = NexusPetAtlasCache.image(for: pet) {
-                    GeometryReader { proxy in
-                        Image(nsImage: atlas)
-                            .resizable()
-                            .interpolation(.high)
-                            .frame(
-                                width: proxy.size.width * atlasColumns,
-                                height: proxy.size.height * atlasRows
-                            )
-                            .offset(
-                                x: -CGFloat(frame) * proxy.size.width,
-                                y: -CGFloat(activity.atlasRow) * proxy.size.height
-                            )
+                    Group {
+                        if let atlas = NexusPetAtlasCache.image(for: pet) {
+                            GeometryReader { proxy in
+                                Image(nsImage: atlas)
+                                    .resizable()
+                                    .interpolation(.high)
+                                    .frame(
+                                        width: proxy.size.width * atlasColumns,
+                                        height: proxy.size.height * atlasRows
+                                    )
+                                    .offset(
+                                        x: -CGFloat(frame) * proxy.size.width,
+                                        y: -CGFloat(activity.atlasRow) * proxy.size.height
+                                    )
+                            }
+                        } else {
+                            Image(systemName: "pawprint.fill")
+                                .resizable()
+                                .scaledToFit()
+                                .foregroundStyle(.cyan)
+                                .padding(height * 0.18)
+                        }
                     }
-                } else {
-                    Image(systemName: "pawprint.fill")
-                        .resizable()
-                        .scaledToFit()
-                        .foregroundStyle(.cyan)
-                        .padding(height * 0.18)
+                    .frame(width: height * cellAspectRatio, height: height)
+                    .clipped()
                 }
+            case .animatedGIF(let url):
+                AnimatedGIFPetView(url: url)
+                    .frame(width: height * cellAspectRatio, height: height)
             }
-            .frame(width: height * cellAspectRatio, height: height)
-            .clipped()
         }
         .frame(width: height * cellAspectRatio, height: height)
         .accessibilityLabel("\(pet.displayName), \(activity.accessibilityDescription)")
+    }
+}
+
+/// AppKit keeps GIF animation alive across SwiftUI updates, unlike a plain
+/// `Image(nsImage:)`, which would freeze on the first frame.
+private struct AnimatedGIFPetView: NSViewRepresentable {
+    let url: URL
+
+    func makeNSView(context: Context) -> NSImageView {
+        let imageView = NSImageView()
+        imageView.imageScaling = .scaleProportionallyUpOrDown
+        imageView.imageAlignment = .alignCenter
+        imageView.animates = true
+        imageView.image = NSImage(contentsOf: url)
+        return imageView
+    }
+
+    func updateNSView(_ imageView: NSImageView, context: Context) {
+        guard imageView.image == nil else { return }
+        imageView.image = NSImage(contentsOf: url)
+        imageView.animates = true
     }
 }
 

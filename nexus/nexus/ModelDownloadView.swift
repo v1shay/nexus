@@ -353,6 +353,7 @@ private struct ModelDownloadRow: View {
 
     var body: some View {
         HStack(spacing: 10) {
+            ModelBrandIcon(model: model, size: 26)
             VStack(alignment: .leading, spacing: 2) {
                 Text(model.name)
                 Text(detail).font(.caption).foregroundStyle(.secondary)

@@ -586,18 +586,45 @@ private struct ListeningWings: View {
                 }
                 .frame(maxWidth: .infinity)
 
-                Group {
+                ZStack {
                     NexusOrbAnimation(
                         mode: isThinking ? .thinkingCycle : .composing,
                         size: 22
                     )
+                    .opacity(isThinking && notch.isShowingThinkingModelMark ? 0 : 1)
+                    .scaleEffect(isThinking && notch.isShowingThinkingModelMark ? 0.55 : 1)
+
+                    if isThinking, notch.isShowingThinkingModelMark {
+                        ModelToThinkingOrb(model: notch.activeModel)
+                            .transition(.opacity.combined(with: .scale(scale: 0.55)))
+                    }
                 }
+                .animation(.easeInOut(duration: 0.22), value: notch.isShowingThinkingModelMark)
                 .frame(width: wingWidth)
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .accessibilityElement(children: .combine)
         .accessibilityLabel(isThinking ? "Nexus is thinking" : "Nexus is dictating")
+    }
+}
+
+/// A raw selected-model mark shrinks into the existing orb.  Keeping both in
+/// the same wing preserves the compact notch geometry while making the active
+/// runtime visible at the beginning of each request.
+private struct ModelToThinkingOrb: View {
+    let model: LocalModel?
+    @State private var hasHandedOff = false
+
+    var body: some View {
+        ModelBrandIcon(model: model, size: 22)
+            .scaleEffect(hasHandedOff ? 0.42 : 1)
+            .opacity(hasHandedOff ? 0.08 : 1)
+            .onAppear {
+                withAnimation(.easeIn(duration: 0.30)) {
+                    hasHandedOff = true
+                }
+            }
     }
 }
 

@@ -141,6 +141,7 @@ final class NotchController: ObservableObject {
     )
     @Published private(set) var codexSessions: [CodexSessionProgress] = []
     @Published private(set) var codexUsageLimit: CodexUsageLimit?
+    @Published private(set) var isShowingThinkingModelMark = false
 
     var presentation: NotchPresentation { interaction.presentation }
     var isExpanded: Bool { interaction.presentation == .overlay }
@@ -153,6 +154,7 @@ final class NotchController: ObservableObject {
     var answer: String { interaction.answer }
     var workingStatus: String? { interaction.workingStatus }
     var thinkingSentence: String? { interaction.thinkingSentence }
+    var activeModel: LocalModel? { modelDownloadViewModel.activeModel }
     var activeModelSupportsThinking: Bool { modelDownloadViewModel.activeModelSupportsThinking }
     var thinkingModeEnabled: Bool { modelDownloadViewModel.thinkingModeEnabled }
     var isShowingMusic: Bool { interaction.presentation == .idle && music.isPlaying }
@@ -180,6 +182,7 @@ final class NotchController: ObservableObject {
     private var responseGeneration = UUID()
     private var responseSpeechCursor = StreamedSpeechCursor()
     private var thinkingSentenceChunker = SpeechSentenceChunker()
+    private var thinkingModelMarkTask: Task<Void, Never>?
     private let conversationSession: NexConversationSession
     let memory: NexMemoryController
     let settings: NexusAppSettings
@@ -322,6 +325,7 @@ final class NotchController: ObservableObject {
         responseSpeechCursor = StreamedSpeechCursor()
         thinkingSentenceChunker = SpeechSentenceChunker()
         responseSpeaker.stop()
+        hideThinkingModelMark()
         suppressAutomaticResponseReveal = false
         interaction.beginDictation()
         if let screen {
@@ -400,7 +404,8 @@ final class NotchController: ObservableObject {
                 let presentationTask = Task { [weak self] in
                     try? await Task.sleep(for: .milliseconds(800))
                     guard let self, !Task.isCancelled, self.responseGeneration == generation else { return }
-                    self.interaction.beginThinking()
+                    guard !self.isThinking, !self.isUsingTool else { return }
+                    self.beginThinkingPresentation()
                     if let screen = self.screen { self.resize(to: self.listeningSize(for: screen), animated: true) }
                 }
                 defer { presentationTask.cancel() }
@@ -442,7 +447,7 @@ final class NotchController: ObservableObject {
                 try? await Task.sleep(for: .milliseconds(280))
                 guard !Task.isCancelled, responseGeneration == generation else { return }
                 if !isThinking && !isUsingTool {
-                    interaction.beginThinking()
+                    beginThinkingPresentation()
                     if let screen { resize(to: listeningSize(for: screen), animated: true) }
                 }
 
@@ -691,6 +696,7 @@ final class NotchController: ObservableObject {
         responseTask?.cancel()
         responseGeneration = UUID()
         responseSpeaker.stop()
+        hideThinkingModelMark()
         automaticRevealIsWaitingForNotchVisit = false
         suppressAutomaticResponseReveal = false
         interaction.dismiss()
@@ -703,6 +709,7 @@ final class NotchController: ObservableObject {
         closeTask?.cancel()
         automaticRevealIsWaitingForNotchVisit = false
         suppressAutomaticResponseReveal = true
+        hideThinkingModelMark()
 
         if isListening {
             speechTranscriber.stop()
@@ -722,6 +729,7 @@ final class NotchController: ObservableObject {
     /// by ordinary prompts yet; when tool execution is added, this keeps UI and
     /// voice status synchronized through the same activity object.
     func beginToolActivity(_ activity: ToolActivity) {
+        hideThinkingModelMark()
         interaction.beginToolActivity(activity)
         if let screen { resize(to: toolActivitySize(for: screen), animated: true) }
         responseSpeaker.speakImmediately(activity.spokenStatus)
@@ -730,6 +738,27 @@ final class NotchController: ObservableObject {
     func finishToolActivity() {
         interaction.beginThinking()
         if let screen { resize(to: listeningSize(for: screen), animated: true) }
+    }
+
+    /// The selected model appears for a beat at the exact compact-orb location,
+    /// then contracts away as the established thinking orb takes over.  It gives
+    /// each request an honest visual handoff without increasing notch height.
+    private func beginThinkingPresentation() {
+        interaction.beginThinking()
+        guard modelDownloadViewModel.activeModel != nil else { return }
+        thinkingModelMarkTask?.cancel()
+        isShowingThinkingModelMark = true
+        thinkingModelMarkTask = Task { [weak self] in
+            try? await Task.sleep(for: .milliseconds(360))
+            guard !Task.isCancelled else { return }
+            self?.isShowingThinkingModelMark = false
+        }
+    }
+
+    private func hideThinkingModelMark() {
+        thinkingModelMarkTask?.cancel()
+        thinkingModelMarkTask = nil
+        isShowingThinkingModelMark = false
     }
 
     func saveConversation() {

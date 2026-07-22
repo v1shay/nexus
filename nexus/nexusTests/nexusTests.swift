@@ -729,12 +729,16 @@ final class NexusGeometryTests: XCTestCase {
         XCTAssertTrue(didRender, "The bundled KaTeX script should replace raw LaTeX with rendered math")
     }
 
-    func testAllSixBundledPetsHaveValidAnimationAtlases() throws {
-        XCTAssertEqual(NexusPetCatalog.all.map(\.id), [
+    func testBundledPetsAndDownloadedLinuxGIFRemainSeparateRenderPaths() throws {
+        let atlasPets = NexusPetCatalog.all.filter {
+            if case .atlas = $0.artwork { return true }
+            return false
+        }
+        XCTAssertEqual(atlasPets.map(\.id), [
             "tiko", "kabi", "macintosh", "lil-finder", "crt-pal", "pan-chan-laptop"
         ])
 
-        for pet in NexusPetCatalog.all {
+        for pet in atlasPets {
             let url = try XCTUnwrap(
                 Bundle.main.url(
                     forResource: "spritesheet",
@@ -746,6 +750,25 @@ final class NexusGeometryTests: XCTestCase {
             let image = try XCTUnwrap(NSImage(contentsOf: url))
             XCTAssertEqual(image.size, CGSize(width: 1_536, height: 1_872), pet.id)
         }
+
+        let linux = try XCTUnwrap(NexusPetCatalog.all.first { $0.id == "linux" })
+        guard case .animatedGIF(let url) = linux.artwork else {
+            return XCTFail("Linux should keep its user-supplied animated GIF artwork")
+        }
+        XCTAssertEqual(url.lastPathComponent, "icons8-linux.gif")
+    }
+
+    func testModelBrandArtworkClassifiesKnownFamiliesAndUsesLinuxFallback() {
+        func model(_ identifier: String) -> LocalModel {
+            LocalModel(customIdentifier: identifier, backend: .lmStudio)
+        }
+
+        XCTAssertEqual(ModelBrandArtwork.assetURL(for: model("Qwen3-8B")).lastPathComponent, "qwen-color.svg")
+        XCTAssertEqual(ModelBrandArtwork.assetURL(for: model("Mistral-Small")).lastPathComponent, "mistral-color.svg")
+        XCTAssertEqual(ModelBrandArtwork.assetURL(for: model("DeepSeek-R1")).lastPathComponent, "icons8-deepseek-94.png")
+        XCTAssertEqual(ModelBrandArtwork.assetURL(for: model("gemma-3-12b")).lastPathComponent, "gemma-color.svg")
+        XCTAssertEqual(ModelBrandArtwork.assetURL(for: LocalModel(customIdentifier: "llama3.2:3b", backend: .ollama)).lastPathComponent, "ollama-dark.svg")
+        XCTAssertEqual(ModelBrandArtwork.assetURL(for: model("phi-4")).lastPathComponent, "icons8-linux-48.png")
     }
 
     func testPetActivitiesUseTheSuppliedTaskSpecificRows() {
