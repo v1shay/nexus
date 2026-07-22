@@ -84,6 +84,12 @@ final class NexComputerExtendedActionTests: XCTestCase {
         do { _ = try await provider.read(relativePath: "../secret"); XCTFail("Expected traversal rejection") } catch { }
     }
 
+    func testGitStatusUsesArgvAndReturnsRepositoryState() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString); try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true); defer { try? FileManager.default.removeItem(at: root) }
+        let cli = NexGitHubCLIProvider(); _ = try await cli.git(["init", "-q"], repository: root); try "hello".write(to: root.appendingPathComponent("README.md"), atomically: true, encoding: .utf8)
+        let result = try await cli.git(["status", "--porcelain=v1"], repository: root); XCTAssertTrue(result.stdout.contains("README.md"))
+    }
+
     private func temporaryFile(_ name: String) -> URL {
         FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString).appendingPathComponent(name)
     }
