@@ -74,6 +74,16 @@ final class NexComputerExtendedActionTests: XCTestCase {
         XCTAssertTrue(Set(["codex.open", "codex.start_task", "codex.continue_task", "codex.get_status", "codex.cancel_task", "codex.open_session"]).isSubset(of: names))
     }
 
+    func testObsidianWritesAreAtomicSearchableAndTraversalSafe() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString); let provider = NexObsidianFileProvider(root: root); try await provider.prepare(); defer { try? FileManager.default.removeItem(at: root) }
+        _ = try await provider.create(relativePath: "20 Projects/Nexus.md", content: "---\ntags: [nexus]\nproject: Nexus\n---\n# Nexus\nNative notch agent.\n")
+        let matches = try await provider.search(query: "notch", folder: "20 Projects", tag: "nexus", frontmatterKey: "project", frontmatterValue: "Nexus", createdAfter: nil, modifiedAfter: nil, limit: 10)
+        XCTAssertEqual(matches.map(\.relativePath), ["20 Projects/Nexus.md"])
+        let diff = try await provider.append(relativePath: "20 Projects/Nexus.md", content: "## Decision\nUse native Swift.")
+        XCTAssertTrue(diff.contains("+Use native Swift."))
+        do { _ = try await provider.read(relativePath: "../secret"); XCTFail("Expected traversal rejection") } catch { }
+    }
+
     private func temporaryFile(_ name: String) -> URL {
         FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString).appendingPathComponent(name)
     }

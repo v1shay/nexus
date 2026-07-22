@@ -637,3 +637,92 @@ actor NexCodexActionCatalog {
         .init(actionID: id, application: "Codex", provider: "Codex CLI", bundleIdentifier: "com.openai.codex", description: description, examples: examples, aliases: [id.replacingOccurrences(of: ".", with: " ")], tags: ["codex", "coding", "agent", "developer", "task"], inputSchema: .init(fields: fields), outputSchema: output, implementationMethod: .cli, registryPermission: risk == .low ? .files : .codeExecution, riskClass: risk, confirmationPolicy: confirmation, availabilityCheck: .executable(paths: ["/opt/homebrew/bin/codex", "/usr/local/bin/codex"]), timeoutSeconds: 300, supportsCancellation: true, dryRunBehavior: .supported("Would perform \(id) through the installed Codex CLI."), previewRenderer: "codex.task", tests: ["NexCodexActionTests"])
     }
 }
+
+// MARK: - Phase 12: Obsidian
+
+struct NexObsidianNoteMatch: Equatable, Sendable { let relativePath: String; let title: String; let excerpt: String; let modifiedAt: Date? }
+
+actor NexObsidianFileProvider {
+    let root: URL
+    init(root: URL = NexVaultLocation.defaultURL()) { self.root = root.standardizedFileURL.resolvingSymlinksInPath() }
+    func prepare() throws { try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true) }
+    func open() async throws {
+        guard let app = NSWorkspace.shared.urlForApplication(withBundleIdentifier: "md.obsidian") else { throw NexToolError.executionFailed(code: "obsidian_unavailable", message: "Obsidian is not installed.") }
+        _ = try await NSWorkspace.shared.openApplication(at: app, configuration: .init())
+    }
+    func openNote(relativePath: String) async throws {
+        let file = try resolve(relativePath); guard FileManager.default.fileExists(atPath: file.path) else { throw NexToolError.executionFailed(code: "note_not_found", message: "Obsidian note was not found.") }
+        let vault = root.lastPathComponent.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? root.lastPathComponent
+        let path = try canonicalRelative(file).addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? relativePath
+        guard let url = URL(string: "obsidian://open?vault=\(vault)&file=\(path)"), NSWorkspace.shared.open(url) else { try await open(); return }
+    }
+    func read(relativePath: String) throws -> String { try String(contentsOf: resolve(relativePath), encoding: .utf8) }
+    func search(query: String?, folder: String?, tag: String?, frontmatterKey: String?, frontmatterValue: String?, createdAfter: Date?, modifiedAfter: Date?, limit: Int) throws -> [NexObsidianNoteMatch] {
+        let base = try folder.map(resolve) ?? root
+        guard let enumerator = FileManager.default.enumerator(at: base, includingPropertiesForKeys: [.contentModificationDateKey, .creationDateKey, .isRegularFileKey], options: [.skipsHiddenFiles]) else { return [] }
+        var results: [NexObsidianNoteMatch] = []
+        for case let file as URL in enumerator where file.pathExtension.lowercased() == "md" {
+            guard let values = try? file.resourceValues(forKeys: [.contentModificationDateKey, .creationDateKey, .isRegularFileKey]), values.isRegularFile == true,
+                  createdAfter.map({ (values.creationDate ?? .distantPast) >= $0 }) ?? true,
+                  modifiedAfter.map({ (values.contentModificationDate ?? .distantPast) >= $0 }) ?? true,
+                  let text = try? String(contentsOf: file, encoding: .utf8) else { continue }
+            let title = text.split(separator: "\n").first(where: { $0.hasPrefix("# ") }).map { String($0.dropFirst(2)) } ?? file.deletingPathExtension().lastPathComponent
+            if let query, !query.isEmpty, !title.localizedCaseInsensitiveContains(query), !text.localizedCaseInsensitiveContains(query) { continue }
+            if let tag, !tag.isEmpty, !text.localizedCaseInsensitiveContains("#\(tag.trimmingCharacters(in: CharacterSet(charactersIn: "#")))") { continue }
+            if let key = frontmatterKey, !key.isEmpty {
+                let needle = "\n\(key):"; guard text.hasPrefix("\(key):") || text.localizedCaseInsensitiveContains(needle) else { continue }
+                if let value = frontmatterValue, !value.isEmpty, !text.localizedCaseInsensitiveContains("\(key): \(value)") { continue }
+            }
+            let excerpt = String(text.replacingOccurrences(of: "\n", with: " ").prefix(500))
+            results.append(.init(relativePath: try canonicalRelative(file), title: title, excerpt: excerpt, modifiedAt: values.contentModificationDate))
+            if results.count >= limit { break }
+        }
+        return results.sorted { ($0.modifiedAt ?? .distantPast) > ($1.modifiedAt ?? .distantPast) }
+    }
+    func create(relativePath: String, content: String) throws -> String {
+        let file = try resolve(relativePath); guard !FileManager.default.fileExists(atPath: file.path) else { throw NexToolError.executionFailed(code: "note_exists", message: "The note already exists; use update_note.") }
+        try FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true); try atomicWrite(content, to: file); return try canonicalRelative(file)
+    }
+    func update(relativePath: String, content: String) throws -> String {
+        let file = try resolve(relativePath), old = try String(contentsOf: file, encoding: .utf8); try atomicWrite(content, to: file); return NexVSCodeCLIProvider.unifiedDiffForTools(path: file.path, old: old, new: content)
+    }
+    func append(relativePath: String, content: String) throws -> String {
+        let file = try resolve(relativePath), old = try String(contentsOf: file, encoding: .utf8); let separator = old.hasSuffix("\n") ? "" : "\n"; let updated = old + separator + content; try atomicWrite(updated, to: file); return NexVSCodeCLIProvider.unifiedDiffForTools(path: file.path, old: old, new: updated)
+    }
+    private func resolve(_ relativePath: String) throws -> URL {
+        var path = relativePath.trimmingCharacters(in: .whitespacesAndNewlines); if !path.lowercased().hasSuffix(".md") { path += ".md" }
+        guard !path.hasPrefix("/"), !path.split(separator: "/").contains("..") else { throw NexObsidianVaultError.unsafePath }
+        let candidate = root.appendingPathComponent(path).standardizedFileURL.resolvingSymlinksInPath(); guard candidate.path.hasPrefix(root.path + "/") else { throw NexObsidianVaultError.unsafePath }; return candidate
+    }
+    private func canonicalRelative(_ file: URL) throws -> String { guard file.path.hasPrefix(root.path + "/") else { throw NexObsidianVaultError.unsafePath }; return String(file.path.dropFirst(root.path.count + 1)) }
+    private func atomicWrite(_ text: String, to file: URL) throws { guard let data = text.data(using: .utf8) else { throw NexToolError.executionFailed(code: "encoding_failed", message: "Note is not valid UTF-8.") }; try data.write(to: file, options: .atomic) }
+}
+
+extension NexVSCodeCLIProvider {
+    nonisolated static func unifiedDiffForTools(path: String, old: String, new: String) -> String {
+        let oldLines = old.components(separatedBy: .newlines), newLines = new.components(separatedBy: .newlines); var lines = ["--- \(path)", "+++ \(path)"]
+        for index in 0..<max(oldLines.count, newLines.count) { let lhs = index < oldLines.count ? oldLines[index] : nil, rhs = index < newLines.count ? newLines[index] : nil; if lhs != rhs { if let lhs { lines.append("-\(lhs)") }; if let rhs { lines.append("+\(rhs)") } } }; return lines.joined(separator: "\n")
+    }
+}
+
+actor NexObsidianActionCatalog {
+    private let provider: NexObsidianFileProvider; private var registered = false
+    init(provider: NexObsidianFileProvider = NexObsidianFileProvider()) { self.provider = provider }
+    func register(on registry: NexComputerRegistry) async throws {
+        guard !registered else { return }; let provider = provider; try await provider.prepare()
+        try await registry.register(manifest: Self.manifest("obsidian.open", "Open or activate Obsidian without editing through its UI.", ["Open Obsidian"], [:])) { _, _ in try await provider.open(); return Self.result("Opened Obsidian.") }
+        try await registry.register(manifest: Self.manifest("obsidian.search", "Search canonical Markdown notes by title/content, folder, tag, frontmatter, creation/modification date, and limit.", ["Find my Nexus architecture notes"], ["query": .init(.string), "folder": .init(.string), "tag": .init(.string), "frontmatter_key": .init(.string), "frontmatter_value": .init(.string), "created_after": .init(.string), "modified_after": .init(.string), "limit": .init(.integer, minimum: 1, maximum: 100)])) { args, _ in
+            let iso = ISO8601DateFormatter(); let matches = try await provider.search(query: args["query"]?.string, folder: args["folder"]?.string, tag: args["tag"]?.string, frontmatterKey: args["frontmatter_key"]?.string, frontmatterValue: args["frontmatter_value"]?.string, createdAfter: args["created_after"]?.string.flatMap(iso.date), modifiedAfter: args["modified_after"]?.string.flatMap(iso.date), limit: args["limit"]?.integer ?? 20)
+            return .object(["display": .string("Found \(matches.count) Obsidian note\(matches.count == 1 ? "" : "s")."), "status": .string("completed"), "path": .string(""), "content": .string(""), "diff": .string(""), "results": .array(matches.map { .object(["path": .string($0.relativePath), "title": .string($0.title), "excerpt": .string($0.excerpt)]) })])
+        }
+        try await registry.register(manifest: Self.manifest("obsidian.read_note", "Read an exact Markdown note path inside the configured vault.", ["Read this Obsidian note"], ["path": .init(.string, required: true)])) { args, _ in guard let path = args["path"]?.string else { throw NexToolError.missingField("path") }; return Self.result("Read the Obsidian note.", path: path, content: try await provider.read(relativePath: path)) }
+        try await registry.register(manifest: Self.manifest("obsidian.open_note", "Open an exact existing note in Obsidian using its URL scheme.", ["Open this note in Obsidian"], ["path": .init(.string, required: true)])) { args, _ in guard let path = args["path"]?.string else { throw NexToolError.missingField("path") }; try await provider.openNote(relativePath: path); return Self.result("Opened the Obsidian note.", path: path) }
+        try await registry.register(manifest: Self.manifest("obsidian.create_note", "Create one UTF-8 Markdown note at a safe app-managed vault-relative path.", ["Create a note in Projects"], ["path": .init(.string, required: true), "content": .init(.string, required: true)], risk: .medium, confirmation: .always)) { args, _ in guard let path = args["path"]?.string, let content = args["content"]?.string else { throw NexToolError.missingField("path") }; return Self.result("Created the Obsidian note.", path: try await provider.create(relativePath: path, content: content)) }
+        try await registry.register(manifest: Self.manifest("obsidian.update_note", "Atomically replace an exact Obsidian Markdown note while preserving the supplied frontmatter and formatting; return a diff.", ["Update this Obsidian note"], ["path": .init(.string, required: true), "content": .init(.string, required: true)], risk: .high, confirmation: .always)) { args, _ in guard let path = args["path"]?.string, let content = args["content"]?.string else { throw NexToolError.missingField("path") }; return Self.result("Updated the Obsidian note.", path: path, diff: try await provider.update(relativePath: path, content: content)) }
+        try await registry.register(manifest: Self.manifest("obsidian.append_note", "Atomically append Markdown to an exact existing note and return a diff.", ["Append this decision to the note"], ["path": .init(.string, required: true), "content": .init(.string, required: true)], risk: .medium, confirmation: .always)) { args, _ in guard let path = args["path"]?.string, let content = args["content"]?.string else { throw NexToolError.missingField("path") }; return Self.result("Appended to the Obsidian note.", path: path, diff: try await provider.append(relativePath: path, content: content)) }
+        registered = true
+    }
+    private static let output = NexToolInputSchema(fields: ["display": .init(.string, required: true), "status": .init(.string, required: true), "path": .init(.string, required: true), "content": .init(.string, required: true), "diff": .init(.string, required: true), "results": .init(.array, required: true)])
+    private static func result(_ display: String, path: String = "", content: String = "", diff: String = "") -> NexJSONValue { .object(["display": .string(display), "status": .string("completed"), "path": .string(path), "content": .string(content), "diff": .string(diff), "results": .array([])]) }
+    private static func manifest(_ id: String, _ description: String, _ examples: [String], _ fields: [String: NexToolFieldSchema], risk: NexComputerRiskClass = .low, confirmation: NexComputerConfirmationPolicy = .never) -> NexComputerActionManifest { .init(actionID: id, application: "Obsidian", provider: "Obsidian Vault", bundleIdentifier: "md.obsidian", description: description, examples: examples, aliases: [id.replacingOccurrences(of: ".", with: " ")], tags: ["obsidian", "notes", "markdown", "vault", "knowledge"], inputSchema: .init(fields: fields), outputSchema: output, implementationMethod: .nativeAPI, registryPermission: risk == .low ? .readMemory : .writeMemory, riskClass: risk, confirmationPolicy: confirmation, availabilityCheck: .always, timeoutSeconds: 30, supportsCancellation: false, dryRunBehavior: .supported("Would perform \(id) directly on the configured Obsidian vault."), previewRenderer: "obsidian.note", tests: ["NexObsidianActionTests"]) }
+}
