@@ -12,7 +12,7 @@ import SwiftUI
 /// are retained, written to disk, or sent over the network.
 @MainActor
 final class NexusAudioReactiveMusic: NSObject, ObservableObject {
-    struct Palette: Equatable {
+    struct Palette: Equatable, Sendable {
         var red: Double
         var green: Double
         var blue: Double
@@ -26,13 +26,13 @@ final class NexusAudioReactiveMusic: NSObject, ObservableObject {
         }
     }
 
-    struct SpotifyTrack: Equatable {
+    struct SpotifyTrack: Equatable, Sendable {
         let title: String
         let artist: String
         let artworkURL: URL?
     }
 
-    enum BrowserSource: Equatable {
+    enum BrowserSource: Equatable, Sendable {
         case youtube(videoID: String?)
         case instagram
         case x
@@ -82,7 +82,7 @@ final class NexusAudioReactiveMusic: NSObject, ObservableObject {
         }
     }
 
-    enum CaptureState: Equatable {
+    enum CaptureState: Equatable, Sendable {
         case inactive
         case awaitingPermission
         case running
@@ -145,7 +145,9 @@ final class NexusAudioReactiveMusic: NSObject, ObservableObject {
         let activeStream = stream
         stream = nil
         captureState = .inactive
-        Task { try? await activeStream?.stopCapture() }
+        Task { @MainActor in
+            try? await activeStream?.stopCapture()
+        }
     }
 
     /// The first call triggers macOS's Screen & System Audio Recording prompt.
@@ -159,9 +161,12 @@ final class NexusAudioReactiveMusic: NSObject, ObservableObject {
             // still up on some macOS releases. Retry briefly so accepting it
             // starts the meter immediately rather than requiring an app restart.
             permissionRetryTask?.cancel()
-            permissionRetryTask = Task { [weak self] in
+            permissionRetryTask = Task { @MainActor [weak self] in
                 for _ in 0..<20 {
-                    try? await Task.sleep(for: .milliseconds(500))
+                    // `Task.sleep(for:)` triggered inconsistent Swift 6
+                    // diagnostics in Xcode's test compiler. Nanoseconds is
+                    // available on every deployment target Nexus supports.
+                    try? await Task.sleep(nanoseconds: 500_000_000)
                     guard !Task.isCancelled, let self else { return }
                     if CGPreflightScreenCaptureAccess() {
                         self.requestAndStartCaptureIfPossible()
@@ -172,7 +177,7 @@ final class NexusAudioReactiveMusic: NSObject, ObservableObject {
             return
         }
         isStartingCapture = true
-        Task { [weak self] in
+        Task { @MainActor [weak self] in
             guard let self else { return }
             defer { self.isStartingCapture = false }
             await self.startCapture()
@@ -223,9 +228,9 @@ final class NexusAudioReactiveMusic: NSObject, ObservableObject {
         end tell
         return \"\"
         """)
-        var error: NSDictionary?
-        let result = script?.executeAndReturnError(&error).stringValue ?? ""
-        guard error == nil, !result.isEmpty else {
+        var scriptError: NSDictionary?
+        let result = script?.executeAndReturnError(&scriptError).stringValue ?? ""
+        guard scriptError == nil, !result.isEmpty else {
             if track != nil {
                 track = nil
                 artwork = nil
@@ -287,9 +292,9 @@ final class NexusAudioReactiveMusic: NSObject, ObservableObject {
         } else {
             script = "tell application \"\(browserName)\" to return URL of active tab of front window"
         }
-        var error: NSDictionary?
-        let value = NSAppleScript(source: script)?.executeAndReturnError(&error).stringValue
-        guard error == nil, let value, !value.isEmpty else { return nil }
+        var scriptError: NSDictionary?
+        let value = NSAppleScript(source: script)?.executeAndReturnError(&scriptError).stringValue
+        guard scriptError == nil, let value, !value.isEmpty else { return nil }
         return URL(string: value)
     }
 
@@ -306,7 +311,7 @@ final class NexusAudioReactiveMusic: NSObject, ObservableObject {
         browserArtworkTask?.cancel()
         browserArtwork = nil
         guard let thumbnailURL = source?.videoThumbnailURL else { return }
-        browserArtworkTask = Task { [weak self] in
+        browserArtworkTask = Task { @MainActor [weak self] in
             guard let self else { return }
             guard let (data, _) = try? await URLSession.shared.data(from: thumbnailURL),
                   !Task.isCancelled,
@@ -320,7 +325,7 @@ final class NexusAudioReactiveMusic: NSObject, ObservableObject {
         artwork = nil
         palette = .defaultBlue
         guard let url else { return }
-        artworkTask = Task { [weak self] in
+        artworkTask = Task { @MainActor [weak self] in
             guard let self else { return }
             do {
                 let (data, _) = try await URLSession.shared.data(from: url)
