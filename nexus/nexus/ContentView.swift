@@ -629,8 +629,15 @@ private struct ModelToThinkingOrb: View {
             .scaleEffect(hasHandedOff ? 0.42 : 1)
             .opacity(hasHandedOff ? 0.08 : 1)
             .onAppear {
-                withAnimation(.easeIn(duration: 0.84)) {
-                    hasHandedOff = true
+                // Let the user actually identify the active model first, then
+                // hand it off to the orb. This is visual-only; generation is
+                // already streaming independently in the controller.
+                Task { @MainActor in
+                    try? await Task.sleep(for: .seconds(1.15))
+                    guard !Task.isCancelled else { return }
+                    withAnimation(.easeIn(duration: 0.78)) {
+                        hasHandedOff = true
+                    }
                 }
             }
     }

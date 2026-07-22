@@ -749,7 +749,9 @@ final class NotchController: ObservableObject {
         thinkingModelMarkTask?.cancel()
         isShowingThinkingModelMark = true
         thinkingModelMarkTask = Task { [weak self] in
-            try? await Task.sleep(for: .seconds(1))
+            // Presentation-only: inference and tool planning started before
+            // this handoff task. Holding the mark never delays the model.
+            try? await Task.sleep(for: .seconds(2))
             guard !Task.isCancelled else { return }
             self?.isShowingThinkingModelMark = false
         }
