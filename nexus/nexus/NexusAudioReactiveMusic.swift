@@ -342,6 +342,12 @@ final class NexusAudioReactiveMusic: NSObject, ObservableObject {
     var isPlaying: Bool { track != nil || browserSource != nil || hasAudibleSystemAudio }
     var activeArtwork: NSImage? { track == nil ? browserArtwork : artwork }
     var activePalette: Palette { track == nil ? (browserSource?.palette ?? .defaultBlue) : palette }
+    var activeYouTubeTab: MediaTab? {
+        guard let activeMediaTab,
+              activeMediaTab.platform == .youtube || activeMediaTab.platform == .youtubeMusic,
+              activeMediaTab.mediaID?.isEmpty == false else { return nil }
+        return activeMediaTab
+    }
 
     private let sampleQueue = DispatchQueue(label: "na.nexus.audio-reactive.samples", qos: .userInteractive)
     private var stream: SCStream?
@@ -512,7 +518,15 @@ final class NexusAudioReactiveMusic: NSObject, ObservableObject {
         rescheduleChromePolling()
     }
 
-    func activateCurrentMediaTab() async {
+    /// Activates the real origin of the compact media card. Spotify is an app
+    /// source; web platforms are existing Chrome tabs, never freshly opened
+    /// URLs. Keeping this single entry point lets the notch artwork be a
+    /// reliable "go back to it" control for every supported source.
+    func activateCurrentMediaSource() async {
+        if track != nil {
+            activateSpotify()
+            return
+        }
         guard let tabID = activeMediaTab?.tab.id else { return }
         do {
             try await chromeTabs.activate(tabID: tabID)
@@ -521,6 +535,21 @@ final class NexusAudioReactiveMusic: NSObject, ObservableObject {
             // removes stale state rather than opening a new URL.
         }
         await refreshChromeTabs(force: true)
+    }
+
+    private func activateSpotify() {
+        if let spotify = NSWorkspace.shared.runningApplications.first(where: {
+            $0.bundleIdentifier == "com.spotify.client"
+        }) {
+            spotify.activate(options: [.activateIgnoringOtherApps])
+            return
+        }
+        // The registered URL scheme works even when Spotify was installed in
+        // a non-standard Applications folder. No account credential is read
+        // or stored by Nexus.
+        if let url = URL(string: "spotify:") {
+            NSWorkspace.shared.open(url)
+        }
     }
 
     private func installChromeWorkspaceObservers() {

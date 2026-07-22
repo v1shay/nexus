@@ -163,11 +163,38 @@ final class NotchController: ObservableObject {
     var musicArtwork: NSImage? { music.activeArtwork }
     var musicPalette: NexusAudioReactiveMusic.Palette { music.activePalette }
     var musicEnergy: CGFloat { music.energy }
+    var youtubePreviewTab: MediaTab? { music.activeYouTubeTab }
+    @Published private(set) var mediaPreviewTab: MediaTab?
+    var isShowingMediaPreview: Bool { mediaPreviewTab != nil }
 
-    func activateCurrentMediaTab() {
+    /// The media mark is an explicit source control: it activates Spotify or
+    /// the already-open Chrome tab, instead of turning a click into a chat
+    /// overlay hover.
+    func activateCurrentMediaSource() {
         Task { @MainActor [weak self] in
-            await self?.music.activateCurrentMediaTab()
+            await self?.music.activateCurrentMediaSource()
         }
+    }
+
+    /// Opening a YouTube preview is deliberate and only available from the
+    /// compact card's centre region. The generic physical-notch hover still
+    /// never opens the full conversation while media is active.
+    func showYouTubePreviewIfAvailable() {
+        guard interaction.presentation == .idle,
+              let tab = youtubePreviewTab,
+              mediaPreviewTab == nil,
+              let screen else { return }
+        mediaPreviewTab = tab
+        objectWillChange.send()
+        resize(to: youtubePreviewSize(for: screen), animated: true)
+    }
+
+    func hideYouTubePreview() {
+        guard mediaPreviewTab != nil else { return }
+        mediaPreviewTab = nil
+        objectWillChange.send()
+        guard let screen else { return }
+        resize(to: idleSize(for: screen), animated: true)
     }
 
     private var panel: NexusNotchPanel?
@@ -316,6 +343,7 @@ final class NotchController: ObservableObject {
     }
 
     private func startGlobalDictation(automaticallySubmitAfterSilence: Bool = false) async {
+        hideYouTubePreview()
         wakePhraseListener.stop()
         closeTask?.cancel()
         // Foreground speech always wins model capacity. If a prior background
@@ -991,10 +1019,23 @@ final class NotchController: ObservableObject {
         closeTask?.cancel()
         if hovering {
             suppressAutomaticResponseReveal = false
+            // Media should stay a compact source switcher. Its platform mark
+            // opens the app/tab; only YouTube's dedicated centre affordance
+            // can request the embedded preview.
+            if isShowingMediaPreview || isShowingMusic { return }
             guard !isListening && !isThinking && !isUsingTool else { return }
             automaticRevealIsWaitingForNotchVisit = false
             expand()
         } else {
+            if isShowingMediaPreview {
+                closeTask = Task { [weak self] in
+                    try? await Task.sleep(for: .milliseconds(120))
+                    guard !Task.isCancelled else { return }
+                    self?.hideYouTubePreview()
+                }
+                return
+            }
+            if isShowingMusic { return }
             guard !isListening && !isThinking && !isUsingTool else { return }
             guard !automaticRevealIsWaitingForNotchVisit else { return }
             closeTask = Task { [weak self] in
@@ -1068,6 +1109,12 @@ final class NotchController: ObservableObject {
             width: min(350, physical.width + NotchGeometry.wingWidth * 2 + 18),
             height: NotchGeometry.compactHeight(for: physical)
         )
+    }
+
+    private func youtubePreviewSize(for screen: NSScreen) -> CGSize {
+        // 16:9 content plus a small safe lower edge. This remains a compact
+        // media surface, not the regular transcript overlay.
+        CGSize(width: min(450, screen.frame.width * 0.36), height: 274)
     }
 
     private func idleSize(for screen: NSScreen) -> CGSize {

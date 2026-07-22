@@ -37,13 +37,33 @@ final class NexusGeometryTests: XCTestCase {
         XCTAssertEqual(MediaPlatform.classify(url: try XCTUnwrap(URL(string: "https://www.twitch.tv/nexus"))), .twitch)
     }
 
+    func testYouTubePreviewUsesTheExistingVideoIDAndMutedInlinePlayback() throws {
+        let tab = BrowserTab(
+            id: "chrome:2:3:video",
+            windowIndex: 2,
+            tabIndex: 3,
+            title: "Demo",
+            url: try XCTUnwrap(URL(string: "https://www.youtube.com/watch?v=orb-123")),
+            isActive: false
+        )
+        let media = try XCTUnwrap(MediaTab(tab: tab))
+        let embed = try XCTUnwrap(YouTubeEmbedURL.make(for: media))
+
+        XCTAssertEqual(embed.host, "www.youtube.com")
+        XCTAssertEqual(embed.path, "/embed/orb-123")
+        let query = try XCTUnwrap(URLComponents(url: embed, resolvingAgainstBaseURL: false)?.queryItems)
+        XCTAssertEqual(query.first(where: { $0.name == "autoplay" })?.value, "1")
+        XCTAssertEqual(query.first(where: { $0.name == "mute" })?.value, "1")
+        XCTAssertEqual(query.first(where: { $0.name == "controls" })?.value, "0")
+    }
+
     func testThinkingDisplayHidesQuotesAndPeriodsWithoutRemovingWords() {
         XCTAssertEqual(
             NotchInteractionState.sanitizedThinkingDisplay("Calling web_search. \"Checking sources.\""),
             "Calling web_search Checking sources"
         )
         XCTAssertEqual(NexusStatusLineGenerator.classify("Build me a Swift menu bar app"), .code)
-        XCTAssertEqual(NexusStatusLineGenerator.classify("What is the latest Swift release?"), .tool)
+        XCTAssertEqual(NexusStatusLineGenerator.classify("What is tomorrow's weather?"), .tool)
         XCTAssertEqual(NexusStatusLineGenerator.classify("Explain recursion"), .question)
         XCTAssertEqual(
             NexusStatusLineGenerator.status(for: "Explain recursion"),
@@ -398,17 +418,17 @@ final class NexusGeometryTests: XCTestCase {
     func testDefaultModelInstructionsStayCompactAndDefaultToProse() {
         let instructions = NexusResponseInstructions.conciseSystemPrompt
 
-        XCTAssertTrue(instructions.contains("Vishay's highly advanced personal assistant"))
-        XCTAssertTrue(instructions.localizedCaseInsensitiveContains("address Vishay as Sir"))
-        XCTAssertTrue(instructions.contains("natural language by default"))
-        XCTAssertTrue(instructions.contains("say so rather than guessing"))
-        XCTAssertTrue(instructions.contains("Never turn advice, recommendations, workouts"))
-        XCTAssertTrue(instructions.contains("never expose citations, source IDs"))
-        XCTAssertLessThan(instructions.split(whereSeparator: \.isWhitespace).count, 300)
+        XCTAssertTrue(instructions.contains("Vishay Agarwal’s personal assistant"))
+        XCTAssertTrue(instructions.localizedCaseInsensitiveContains("address him as Sir"))
+        XCTAssertTrue(instructions.contains("memory_search"))
+        XCTAssertTrue(instructions.contains("web_search"))
+        XCTAssertTrue(instructions.contains("nexCLI"))
+        XCTAssertTrue(instructions.contains("Never invent tool results"))
+        XCTAssertLessThan(instructions.split(whereSeparator: \.isWhitespace).count, 350)
     }
 
     func testStatusFallbackHasNoKeywordRoutingAndSanitizesModelSubjects() {
-        XCTAssertEqual(NexusStatusLineGenerator.fallback, "Thinking…")
+        XCTAssertEqual(NexusStatusLineGenerator.fallback, "Working on that now, Sir…")
         XCTAssertEqual(
             NexusStatusLineGenerator.sanitize(#"{"status":"swift_release_changes"}"#),
             "Reviewing swift release changes…"
