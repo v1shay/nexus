@@ -51,6 +51,21 @@ final class NexusGeometryTests: XCTestCase {
         XCTAssertEqual(NotchGeometry.mediaClickTarget(for: NSPoint(x: 176, y: 16)), .overlay)
     }
 
+    func testMediaOverlayReplacesTransientToolPresentation() {
+        var state = NotchInteractionState()
+        state.beginToolActivity(ToolActivity(
+            toolName: "YouTube",
+            status: "Opening YouTube…",
+            spokenStatus: "Opening YouTube.",
+            icon: .systemSymbol("play.rectangle.fill")
+        ))
+
+        state.showMediaOverlay()
+
+        XCTAssertEqual(state.presentation, .overlay)
+        XCTAssertNil(state.toolActivity)
+    }
+
     func testYouTubeSearchParserKeepsDistinctStableVideoIDs() {
         let page = #"""
         {"videoId":"abcDEF_1234"}{"videoId":"abcDEF_1234"}
@@ -58,7 +73,7 @@ final class NexusGeometryTests: XCTestCase {
         """#
         XCTAssertEqual(NexYouTubeSearchService.videoIDs(in: page), ["abcDEF_1234", "ZyxWVUT-987"])
         XCTAssertTrue(NexYouTubeToolController.isValidVideoID("abcDEF_1234"))
-        XCTAssertFalse(NexYouTubeToolController.isValidVideoID("not-a-video"))
+        XCTAssertFalse(NexYouTubeToolController.isValidVideoID("not a video"))
     }
 
     @MainActor

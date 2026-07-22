@@ -306,6 +306,18 @@ struct NotchInteractionState: Equatable {
         presentation = .overlay
     }
 
+    /// An explicitly requested media player replaces transient work states.
+    /// Hover-driven expansion must not do this, but a playback command must:
+    /// otherwise the panel can resize while the tool indicator still wins the
+    /// view-state switch and the player never appears.
+    mutating func showMediaOverlay() {
+        toolActivity = nil
+        toolReceipt = nil
+        workingStatus = nil
+        thinkingSentence = nil
+        presentation = .overlay
+    }
+
     mutating func hideOverlay() {
         guard presentation != .dictating && presentation != .thinking && presentation != .tool else { return }
         presentation = .idle

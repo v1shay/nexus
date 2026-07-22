@@ -181,7 +181,7 @@ final class NotchController: ObservableObject {
         guard interaction.presentation == .idle, let screen else { return }
         isMediaFullscreen = false
         mediaOverlayTab = music.activeYouTubeTab
-        interaction.showOverlay()
+        interaction.showMediaOverlay()
         resize(to: mediaOverlayTab == nil ? expandedSize(for: screen) : mediaPlaybackSize(for: screen), animated: true)
     }
 
@@ -202,7 +202,7 @@ final class NotchController: ObservableObject {
         isMediaFullscreen = pendingYouTubeFullscreen || isMediaFullscreen
         pendingYouTubePlayback = nil
         pendingYouTubeFullscreen = false
-        interaction.showOverlay()
+        interaction.showMediaOverlay()
         resize(to: isMediaFullscreen ? screen.frame.size : mediaPlaybackSize(for: screen), animated: true)
         return true
     }
