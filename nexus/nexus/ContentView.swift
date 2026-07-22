@@ -10,7 +10,10 @@ struct ContentView: View {
 
     var body: some View {
         ZStack(alignment: .top) {
-            if notch.isUsingTool, let activity = notch.toolActivity {
+            if notch.isShowingMusic {
+                MusicPlaybackIndicator()
+                    .transition(.opacity.combined(with: .scale(scale: 0.94, anchor: .top)))
+            } else if notch.isUsingTool, let activity = notch.toolActivity {
                 ToolActivityIndicator(activity: activity)
                     .transition(.opacity.combined(with: .scale(scale: 0.94, anchor: .top)))
             } else if notch.isListening || notch.isThinking {
@@ -33,6 +36,72 @@ struct ContentView: View {
         .contentShape(Rectangle())
         .animation(.easeInOut(duration: 0.18), value: notch.isListening)
         .animation(.easeInOut(duration: 0.22), value: notch.presentation)
+    }
+}
+
+/// Local playback surface. Spotify supplies title and cover art through its
+/// macOS scripting dictionary; browser video still gets the same real-time
+/// audio-reactive orb without pretending that Nexus knows its title/artwork.
+private struct MusicPlaybackIndicator: View {
+    @EnvironmentObject private var notch: NotchController
+
+    var body: some View {
+        ZStack(alignment: .top) {
+            NotchSurface(cornerRadius: 18).fill(.black)
+            HStack(spacing: 11) {
+                albumArt
+                    .frame(width: 43, height: 43)
+
+                VStack(alignment: .leading, spacing: 2) {
+                    if let track = notch.musicTrack {
+                        Text(track.title)
+                            .font(.system(size: 13, weight: .semibold))
+                            .lineLimit(1)
+                        Text(track.artist)
+                            .font(.system(size: 11, weight: .medium))
+                            .foregroundStyle(.white.opacity(0.56))
+                            .lineLimit(1)
+                    } else {
+                        Text("Now playing")
+                            .font(.system(size: 13, weight: .semibold))
+                        Text("System audio")
+                            .font(.system(size: 11, weight: .medium))
+                            .foregroundStyle(.white.opacity(0.56))
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+
+                NexusOrbAnimation(
+                    mode: .music,
+                    size: 38,
+                    tint: notch.musicPalette.color,
+                    energy: notch.musicEnergy
+                )
+                .frame(width: 43, height: 43)
+            }
+            .padding(.horizontal, 18)
+            .padding(.top, 10)
+        }
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel(notch.musicTrack.map { "Playing \($0.title) by \($0.artist)" } ?? "System audio is playing")
+    }
+
+    @ViewBuilder
+    private var albumArt: some View {
+        if let artwork = notch.musicArtwork {
+            Image(nsImage: artwork)
+                .resizable()
+                .scaledToFill()
+                .clipShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
+        } else {
+            RoundedRectangle(cornerRadius: 9, style: .continuous)
+                .fill(notch.musicPalette.color.opacity(0.24))
+                .overlay {
+                    Image(systemName: "waveform")
+                        .font(.system(size: 16, weight: .semibold))
+                        .foregroundStyle(notch.musicPalette.color)
+                }
+        }
     }
 }
 

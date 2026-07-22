@@ -22,12 +22,20 @@ struct NexusOrbAnimation: View {
         /// The source library's composing ribbon, intentionally 1.5× faster.
         case composing
         case thinkingCycle
+        /// A real system-audio driven version of the orb. Its shape keeps the
+        /// Thinking Orbs language while its scale responds to the live output
+        /// mix and its dots inherit the current album-art palette.
+        case music
     }
 
     fileprivate enum State: Equatable { case composing, listening, searching, solving }
 
     let mode: Mode
     let size: CGFloat
+    var tint: Color = .white
+    /// Expected range is 0...1. This stays optional so every existing Nex
+    /// thinking/dictation call site retains its exact visual behavior.
+    var energy: CGFloat = 0
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
@@ -35,11 +43,20 @@ struct NexusOrbAnimation: View {
             let seconds = reduceMotion ? 0.6 : timeline.date.timeIntervalSinceReferenceDate
             let state = state(at: seconds)
             Canvas { context, canvasSize in
-                NexusOrbRenderer.draw(state: state, into: &context, size: canvasSize, seconds: seconds)
+                NexusOrbRenderer.draw(
+                    state: state,
+                    into: &context,
+                    size: canvasSize,
+                    seconds: seconds,
+                    tint: tint,
+                    energy: mode == .music ? energy : 0
+                )
             }
             .frame(width: size, height: size)
         }
-        .accessibilityLabel(mode == .composing ? "Nex is listening" : "Nex is thinking")
+        .accessibilityLabel(
+            mode == .composing ? "Nex is listening" : (mode == .music ? "Music is playing" : "Nex is thinking")
+        )
     }
 
     private func state(at seconds: TimeInterval) -> State {
@@ -48,6 +65,10 @@ struct NexusOrbAnimation: View {
         case .thinkingCycle:
             let states: [State] = [.searching, .solving, .listening]
             return states[Int(seconds / 2.25) % states.count]
+        case .music:
+            // The rotating dot globe reads naturally as a dancing object when
+            // modulated by live energy, without creating a second visual style.
+            return .listening
         }
     }
 }
@@ -83,7 +104,14 @@ private enum NexusOrbRenderer {
     // when Nexus gives the mark slightly more room in the notch.
     private static let logicalSize = 20.0
 
-    static func draw(state: NexusOrbAnimation.State, into context: inout GraphicsContext, size: CGSize, seconds: TimeInterval) {
+    static func draw(
+        state: NexusOrbAnimation.State,
+        into context: inout GraphicsContext,
+        size: CGSize,
+        seconds: TimeInterval,
+        tint: Color,
+        energy: CGFloat
+    ) {
         let t = seconds * speed(for: state)
         let dots: [Dot]
         switch state {
@@ -92,7 +120,10 @@ private enum NexusOrbRenderer {
         case .listening: dots = wave(time: t)
         case .composing: dots = ribbon(time: t)
         }
-        paint(dots, into: &context, canvasSize: size)
+        let pulse = 1 + min(0.28, max(0, energy) * 0.28)
+        context.scaleBy(x: pulse, y: pulse)
+        context.translateBy(x: (size.width - size.width * pulse) / (2 * pulse), y: (size.height - size.height * pulse) / (2 * pulse))
+        paint(dots, into: &context, canvasSize: size, tint: tint, energy: energy)
     }
 
     private static func speed(for state: NexusOrbAnimation.State) -> Double {
@@ -315,7 +346,13 @@ private enum NexusOrbRenderer {
 
     // MARK: shared source primitives
 
-    private static func paint(_ dots: [Dot], into context: inout GraphicsContext, canvasSize: CGSize) {
+    private static func paint(
+        _ dots: [Dot],
+        into context: inout GraphicsContext,
+        canvasSize: CGSize,
+        tint: Color,
+        energy: CGFloat
+    ) {
         let scale = min(canvasSize.width, canvasSize.height) / logicalSize
         let offsetX = (canvasSize.width - logicalSize * scale) / 2
         let offsetY = (canvasSize.height - logicalSize * scale) / 2
@@ -328,7 +365,11 @@ private enum NexusOrbRenderer {
                 width: radius * 2,
                 height: radius * 2
             )
-            context.fill(Path(ellipseIn: rect), with: .color(Color(white: brightness).opacity(dot.alpha)))
+            let intensity = min(1, brightness + Double(energy) * 0.24)
+            context.fill(
+                Path(ellipseIn: rect),
+                with: .color(tint.opacity(dot.alpha * intensity))
+            )
         }
     }
 

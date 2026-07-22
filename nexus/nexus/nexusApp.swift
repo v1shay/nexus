@@ -155,6 +155,11 @@ final class NotchController: ObservableObject {
     var thinkingSentence: String? { interaction.thinkingSentence }
     var activeModelSupportsThinking: Bool { modelDownloadViewModel.activeModelSupportsThinking }
     var thinkingModeEnabled: Bool { modelDownloadViewModel.thinkingModeEnabled }
+    var isShowingMusic: Bool { interaction.presentation == .idle && music.isPlaying }
+    var musicTrack: NexusAudioReactiveMusic.SpotifyTrack? { music.track }
+    var musicArtwork: NSImage? { music.artwork }
+    var musicPalette: NexusAudioReactiveMusic.Palette { music.palette }
+    var musicEnergy: CGFloat { music.energy }
 
     private var panel: NexusNotchPanel?
     private var screen: NSScreen?
@@ -187,6 +192,9 @@ final class NotchController: ObservableObject {
     private var responseIsStreaming = false
     private var hoverSession = NotchHoverSession()
     private var suppressAutomaticResponseReveal = false
+    private let music = NexusAudioReactiveMusic()
+    private var musicObservation: AnyCancellable?
+    private var wasShowingMusic = false
 
     init(connectController: NexusConnectController? = nil) {
         let resolvedConnectController = connectController ?? .shared
@@ -198,6 +206,11 @@ final class NotchController: ObservableObject {
         memory = NexMemoryController(conversation: conversationSession)
         memoryObservation = memory.objectWillChange.sink { [weak self] _ in
             self?.objectWillChange.send()
+        }
+        musicObservation = music.objectWillChange.sink { [weak self] _ in
+            // The energy changes animate the orb; only playback transitions
+            // resize the panel so the 30fps meter never causes layout churn.
+            Task { @MainActor in self?.refreshMusicPresentation() }
         }
     }
 
@@ -240,6 +253,7 @@ final class NotchController: ObservableObject {
             installCommandHoldMonitor()
             installPointerMonitor()
             armWakePhraseListener()
+            music.start()
         }
         panel.orderFrontRegardless()
         NSLog("Nexus installed its panel, pointer monitor, and global hotkey")
@@ -679,7 +693,7 @@ final class NotchController: ObservableObject {
         automaticRevealIsWaitingForNotchVisit = false
         suppressAutomaticResponseReveal = false
         interaction.dismiss()
-        if let screen { resize(to: closedSize(for: screen), animated: true) }
+        if let screen { resize(to: idleSize(for: screen), animated: true) }
         armWakePhraseListener()
     }
 
@@ -692,13 +706,13 @@ final class NotchController: ObservableObject {
         if isListening {
             speechTranscriber.stop()
             interaction.dismiss()
-            if let screen { resize(to: closedSize(for: screen), animated: true) }
+            if let screen { resize(to: idleSize(for: screen), animated: true) }
             armWakePhraseListener()
         } else if isExpanded {
             collapse()
         } else {
             interaction.dismiss()
-            if let screen { resize(to: closedSize(for: screen), animated: true) }
+            if let screen { resize(to: idleSize(for: screen), animated: true) }
             armWakePhraseListener()
         }
     }
@@ -789,6 +803,7 @@ final class NotchController: ObservableObject {
         codexProgressDismissTask?.cancel()
         codexProgressMonitor?.stop()
         codexProgressMonitor = nil
+        music.stop()
         memory.stop()
         commandHoldMonitor = nil
         modelDownloadViewModel.shutdown()
@@ -868,7 +883,7 @@ final class NotchController: ObservableObject {
                     self.selectCodexSession(nextLiveSession.id)
                 } else {
                     self.interaction.dismiss()
-                    if let screen = self.screen { self.resize(to: self.closedSize(for: screen), animated: true) }
+                    if let screen = self.screen { self.resize(to: self.idleSize(for: screen), animated: true) }
                 }
             }
         case .started, .progress:
@@ -955,7 +970,7 @@ final class NotchController: ObservableObject {
     private func collapse() {
         guard isExpanded, let screen else { return }
         interaction.hideOverlay()
-        resize(to: closedSize(for: screen), animated: true)
+        resize(to: idleSize(for: screen), animated: true)
     }
 
     private func resize(to size: CGSize, animated: Bool) {
@@ -996,6 +1011,23 @@ final class NotchController: ObservableObject {
         return CGSize(width: width, height: height)
     }
 
+    private func musicSize(for screen: NSScreen) -> CGSize {
+        CGSize(width: min(390, screen.frame.width * 0.34), height: 72)
+    }
+
+    private func idleSize(for screen: NSScreen) -> CGSize {
+        isShowingMusic ? musicSize(for: screen) : closedSize(for: screen)
+    }
+
+    private func refreshMusicPresentation() {
+        let isShowing = isShowingMusic
+        let changed = wasShowingMusic != isShowing
+        wasShowingMusic = isShowing
+        objectWillChange.send()
+        guard changed, let screen else { return }
+        resize(to: idleSize(for: screen), animated: true)
+    }
+
     private func expandedSize(for screen: NSScreen) -> CGSize {
         CGSize(width: min(680, screen.frame.width * 0.5), height: 245)
     }
@@ -1020,7 +1052,7 @@ final class NotchController: ObservableObject {
         guard let screen = NSScreen.main ?? NSScreen.screens.first else { return }
         self.screen = screen
         let size: CGSize = switch interaction.presentation {
-        case .idle: closedSize(for: screen)
+        case .idle: idleSize(for: screen)
         case .dictating: listeningSize(for: screen)
         case .thinking: interaction.thinkingSentence == nil ? listeningSize(for: screen) : thinkingActivitySize(for: screen)
         case .tool: toolActivitySize(for: screen)

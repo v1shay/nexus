@@ -36,6 +36,7 @@
 		E1D2E3F4A5B60718293A4B5C /* NexCLIWorkspaceManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = F1D2E3F4A5B60718293A4B5C /* NexCLIWorkspaceManager.swift */; };
 		A2D2E3F4A5B60718293A4B5C /* NexApiClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = B2D2E3F4A5B60718293A4B5C /* NexApiClient.swift */; };
 		Y2D2E3F4A5B60718293A4B5C /* NexusOrbAnimation.swift in Sources */ = {isa = PBXBuildFile; fileRef = Z2D2E3F4A5B60718293A4B5C /* NexusOrbAnimation.swift */; };
+		AA11BB22CC33DD44EE55FF66 /* NexusAudioReactiveMusic.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA11BB22CC33DD44EE55FF67 /* NexusAudioReactiveMusic.swift */; };
 		S100000130075C29006660E4 /* NexMemoryController.swift in Sources */ = {isa = PBXBuildFile; fileRef = S100000230075C29006660E4 /* NexMemoryController.swift */; };
 		T100000130075C29006660E4 /* NexWebSearch.swift in Sources */ = {isa = PBXBuildFile; fileRef = T100000230075C29006660E4 /* NexWebSearch.swift */; };
 		V100000130075C29006660E4 /* NexMemoryGraph.swift in Sources */ = {isa = PBXBuildFile; fileRef = V100000230075C29006660E4 /* NexMemoryGraph.swift */; };
@@ -120,6 +121,7 @@
 		F1D2E3F4A5B60718293A4B5C /* NexCLIWorkspaceManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NexCLIWorkspaceManager.swift; sourceTree = "<group>"; };
 		B2D2E3F4A5B60718293A4B5C /* NexApiClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NexApiClient.swift; sourceTree = "<group>"; };
 		Z2D2E3F4A5B60718293A4B5C /* NexusOrbAnimation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NexusOrbAnimation.swift; sourceTree = "<group>"; };
+		AA11BB22CC33DD44EE55FF67 /* NexusAudioReactiveMusic.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NexusAudioReactiveMusic.swift; sourceTree = "<group>"; };
 		S100000230075C29006660E4 /* NexMemoryController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NexMemoryController.swift; sourceTree = "<group>"; };
 		T100000230075C29006660E4 /* NexWebSearch.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NexWebSearch.swift; sourceTree = "<group>"; };
 		V100000230075C29006660E4 /* NexMemoryGraph.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NexMemoryGraph.swift; sourceTree = "<group>"; };
@@ -222,6 +224,7 @@
 				F1D2E3F4A5B60718293A4B5C /* NexCLIWorkspaceManager.swift */,
 				B2D2E3F4A5B60718293A4B5C /* NexApiClient.swift */,
 				Z2D2E3F4A5B60718293A4B5C /* NexusOrbAnimation.swift */,
+				AA11BB22CC33DD44EE55FF67 /* NexusAudioReactiveMusic.swift */,
 				S100000230075C29006660E4 /* NexMemoryController.swift */,
 				T100000230075C29006660E4 /* NexWebSearch.swift */,
 				V100000230075C29006660E4 /* NexMemoryGraph.swift */,
@@ -469,6 +472,7 @@
 				E1D2E3F4A5B60718293A4B5C /* NexCLIWorkspaceManager.swift in Sources */,
 				A2D2E3F4A5B60718293A4B5C /* NexApiClient.swift in Sources */,
 				Y2D2E3F4A5B60718293A4B5C /* NexusOrbAnimation.swift in Sources */,
+				AA11BB22CC33DD44EE55FF66 /* NexusAudioReactiveMusic.swift in Sources */,
 				S100000130075C29006660E4 /* NexMemoryController.swift in Sources */,
 				T100000130075C29006660E4 /* NexWebSearch.swift in Sources */,
 				V100000130075C29006660E4 /* NexMemoryGraph.swift in Sources */,
