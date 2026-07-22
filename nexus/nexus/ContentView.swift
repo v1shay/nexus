@@ -2,7 +2,6 @@ import AppKit
 import Combine
 import IOKit.ps
 import SwiftUI
-import WebKit
 
 /// The panel is visually indistinguishable from the physical cutout at rest.
 /// Interaction state is supplied by the AppKit controller above the view.
@@ -11,10 +10,7 @@ struct ContentView: View {
 
     var body: some View {
         ZStack(alignment: .top) {
-            if let video = notch.mediaPreviewTab {
-                YouTubeMediaPreview(tab: video)
-                    .transition(.opacity.combined(with: .scale(scale: 0.96, anchor: .top)))
-            } else if notch.isShowingMusic {
+            if notch.isShowingMusic {
                 MusicPlaybackIndicator()
                     .transition(.opacity.combined(with: .scale(scale: 0.94, anchor: .top)))
             } else if notch.isUsingTool, let activity = notch.toolActivity {
@@ -48,7 +44,6 @@ struct ContentView: View {
 /// audio-reactive orb without pretending that Nexus knows its title/artwork.
 private struct MusicPlaybackIndicator: View {
     @EnvironmentObject private var notch: NotchController
-    @State private var previewTask: Task<Void, Never>?
 
     var body: some View {
         ZStack(alignment: .top) {
@@ -63,7 +58,7 @@ private struct MusicPlaybackIndicator: View {
                 .accessibilityLabel(sourceAccessibilityLabel)
                 .accessibilityHint("Open the current media source")
 
-                mediaPreviewTrigger
+                Color.clear.frame(maxWidth: .infinity)
 
                 NexusOrbAnimation(
                     mode: .music,
@@ -78,7 +73,6 @@ private struct MusicPlaybackIndicator: View {
         }
         .accessibilityElement(children: .combine)
         .accessibilityLabel(notch.musicTrack.map { "Playing \($0.title) by \($0.artist)" } ?? "System audio is playing")
-        .onDisappear { previewTask?.cancel() }
     }
 
     @ViewBuilder
@@ -91,24 +85,6 @@ private struct MusicPlaybackIndicator: View {
         } else {
             brandMark
         }
-    }
-
-    private var mediaPreviewTrigger: some View {
-        Color.clear
-            .contentShape(Rectangle())
-            .frame(maxWidth: .infinity)
-            .onHover { hovering in
-                previewTask?.cancel()
-                guard hovering, notch.youtubePreviewTab != nil else { return }
-                // A hover across the physical notch must not immediately
-                // become an overlay. A short, intentional dwell on the
-                // centre of a YouTube card opens the muted in-app preview.
-                previewTask = Task { @MainActor in
-                    try? await Task.sleep(for: .milliseconds(420))
-                    guard !Task.isCancelled else { return }
-                    notch.showYouTubePreviewIfAvailable()
-                }
-            }
     }
 
     private var sourceAccessibilityLabel: String {
@@ -144,93 +120,6 @@ private struct MusicPlaybackIndicator: View {
       <path d="M12 19c9-3 18-2 25 2M13.5 25c7-2 15-1.4 21 1.5M15 30c5.6-1.5 11.4-1 16 1" fill="none" stroke="#07150d" stroke-width="3.2" stroke-linecap="round"/>
     </svg>
     """.utf8)
-}
-
-/// A muted, ephemeral YouTube preview. It is intentionally a separate web
-/// surface from Chrome: clicking it always returns the user to the original
-/// tab, rather than creating a second persistent media session in Nexus.
-private struct YouTubeMediaPreview: View {
-    @EnvironmentObject private var notch: NotchController
-    let tab: MediaTab
-
-    var body: some View {
-        ZStack {
-            NotchSurface(cornerRadius: 20).fill(.black)
-            if let embedURL = YouTubeEmbedURL.make(for: tab) {
-                NexusYouTubeWebView(url: embedURL)
-                    .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
-                    .padding(7)
-                    .allowsHitTesting(false)
-            } else {
-                Color.black
-            }
-            // The preview is a visual handoff, not a second set of playback
-            // controls. Click returns to the original Chrome tab selected by
-            // the browser provider.
-            Button {
-                notch.hideYouTubePreview()
-                notch.activateCurrentMediaSource()
-            } label: {
-                Color.clear.contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            .accessibilityLabel("Open this video in Google Chrome")
-        }
-        .onHover { hovering in
-            if !hovering { notch.hideYouTubePreview() }
-        }
-    }
-}
-
-enum YouTubeEmbedURL {
-    static func make(for tab: MediaTab) -> URL? {
-        guard (tab.platform == .youtube || tab.platform == .youtubeMusic),
-              let id = tab.mediaID,
-              !id.isEmpty else { return nil }
-        var components = URLComponents(string: "https://www.youtube.com/embed/\(id)")
-        components?.queryItems = [
-            .init(name: "autoplay", value: "1"),
-            .init(name: "mute", value: "1"),
-            .init(name: "playsinline", value: "1"),
-            .init(name: "controls", value: "0"),
-            .init(name: "rel", value: "0"),
-            .init(name: "modestbranding", value: "1")
-        ]
-        return components?.url
-    }
-}
-
-private struct NexusYouTubeWebView: NSViewRepresentable {
-    let url: URL
-
-    func makeCoordinator() -> Coordinator { Coordinator() }
-
-    func makeNSView(context: Context) -> WKWebView {
-        let configuration = WKWebViewConfiguration()
-        configuration.mediaTypesRequiringUserActionForPlayback = []
-        let view = WKWebView(frame: .zero, configuration: configuration)
-        view.setValue(false, forKey: "drawsBackground")
-        view.load(URLRequest(url: url))
-        context.coordinator.loadedURL = url
-        return view
-    }
-
-    func updateNSView(_ view: WKWebView, context: Context) {
-        guard context.coordinator.loadedURL != url else { return }
-        context.coordinator.loadedURL = url
-        view.load(URLRequest(url: url))
-    }
-
-    static func dismantleNSView(_ view: WKWebView, coordinator: Coordinator) {
-        // Tearing down the preview is the reliable pause point when the
-        // pointer leaves the media notch. It does not control Chrome itself.
-        view.evaluateJavaScript("document.querySelector('video')?.pause()")
-        view.stopLoading()
-    }
-
-    final class Coordinator {
-        var loadedURL: URL?
-    }
 }
 
 private struct ToolActivityIndicator: View {

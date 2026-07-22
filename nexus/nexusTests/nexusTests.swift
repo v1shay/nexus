@@ -37,26 +37,6 @@ final class NexusGeometryTests: XCTestCase {
         XCTAssertEqual(MediaPlatform.classify(url: try XCTUnwrap(URL(string: "https://www.twitch.tv/nexus"))), .twitch)
     }
 
-    func testYouTubePreviewUsesTheExistingVideoIDAndMutedInlinePlayback() throws {
-        let tab = BrowserTab(
-            id: "chrome:2:3:video",
-            windowIndex: 2,
-            tabIndex: 3,
-            title: "Demo",
-            url: try XCTUnwrap(URL(string: "https://www.youtube.com/watch?v=orb-123")),
-            isActive: false
-        )
-        let media = try XCTUnwrap(MediaTab(tab: tab))
-        let embed = try XCTUnwrap(YouTubeEmbedURL.make(for: media))
-
-        XCTAssertEqual(embed.host, "www.youtube.com")
-        XCTAssertEqual(embed.path, "/embed/orb-123")
-        let query = try XCTUnwrap(URLComponents(url: embed, resolvingAgainstBaseURL: false)?.queryItems)
-        XCTAssertEqual(query.first(where: { $0.name == "autoplay" })?.value, "1")
-        XCTAssertEqual(query.first(where: { $0.name == "mute" })?.value, "1")
-        XCTAssertEqual(query.first(where: { $0.name == "controls" })?.value, "0")
-    }
-
     func testThinkingDisplayHidesQuotesAndPeriodsWithoutRemovingWords() {
         XCTAssertEqual(
             NotchInteractionState.sanitizedThinkingDisplay("Calling web_search. \"Checking sources.\""),
