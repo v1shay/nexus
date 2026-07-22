@@ -108,6 +108,11 @@ final class NexComputerExtendedActionTests: XCTestCase {
 
     func testApplicationCatalogProvidesDeterministicOpenOnly() async throws { let tools = NexToolRegistry(), computer = NexComputerRegistry(toolRegistry: tools, permissionManager: NexComputerPermissionManager(backend: AuthorizedPermissions())); try await NexApplicationActionCatalog().register(on: computer); let names = Set(await tools.definitions().map(\.name)); XCTAssertEqual(names.intersection(["applications.list", "applications.open"]), ["applications.list", "applications.open"]) }
     func testManagedBrowserRejectsInvalidStepPayloadBeforeProvisioning() async throws { do { _ = try await NexManagedBrowserProvider(root: FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)).run(goal: "test", stepsJSON: "{}") { _ in }; XCTFail("Expected invalid steps") } catch let error as NexToolError { XCTAssertEqual(error.code, "invalid_browser_steps") } }
+    func testConnectorCapabilityRegistrationHonorsScopesAndAvailability() async throws {
+        let tools = NexToolRegistry(), computer = NexComputerRegistry(toolRegistry: tools, permissionManager: NexComputerPermissionManager(backend: AuthorizedPermissions())), manager = NexConnectorManager(executor: MockConnectorExecutor())
+        let doc = NexConnectorCapabilityDocument(provider: "google", account: "test@example.com", connected: true, grantedScopes: ["openid", "gmail.readonly"], capabilities: [.init(action: "google.account_info", available: true, missingScope: nil, providerLimitation: nil), .init(action: "gmail.search", available: true, missingScope: nil, providerLimitation: nil), .init(action: "gmail.send_draft", available: false, missingScope: "gmail.send", providerLimitation: nil)])
+        try await manager.apply(doc, to: computer); let names = Set(await tools.definitions().map(\.name)); XCTAssertTrue(names.contains("google.account_info")); XCTAssertTrue(names.contains("gmail.search")); XCTAssertFalse(names.contains("gmail.send_draft")); let unavailable = await manager.unavailableCapabilities(provider: "google"); XCTAssertEqual(unavailable.first?.missingScope, "gmail.send")
+    }
 
     private func temporaryFile(_ name: String) -> URL {
         FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString).appendingPathComponent(name)
@@ -121,6 +126,7 @@ private actor MockCodexProvider: NexCodexProviding {
     func cancel(sessionID: String) async throws {}
     func openSession(sessionID: String) async throws {}
 }
+private struct MockConnectorExecutor: NexConnectorExecuting { func execute(provider: String, account: String, action: String, arguments: [String: NexJSONValue]) async throws -> NexJSONValue { .object(["display": .string("Executed \(action)"), "status": .string("completed"), "provider": .string(provider), "action": .string(action), "id": .string("fixture"), "items": .array([]), "error": .string("")]) } }
 
 private actor MockPhotosProvider: NexPhotosProviding {
     let personSearchSupported: Bool
