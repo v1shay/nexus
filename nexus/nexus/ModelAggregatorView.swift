@@ -90,19 +90,14 @@ private struct NexCLIWorkspacePage: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            HStack(spacing: 10) {
-                Text("NEX")
-                    .font(.system(size: 18, weight: .black, design: .monospaced))
-                    .tracking(-2)
-                    .foregroundStyle(.white)
-                Spacer()
-                Text(managedServiceDetail)
-                    .font(.system(size: 12, weight: .semibold, design: .monospaced))
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-            }
+            NexCLIConsoleHeader(
+                workspace: settings.directory,
+                runtimeDetail: managedServiceDetail,
+                modelID: NexApiClient.Model.localCodingDefault.modelID
+            )
             .padding(.horizontal, 26)
-            .frame(height: 56)
+            .padding(.vertical, 22)
+            .fixedSize(horizontal: false, vertical: true)
 
             Divider().opacity(0.25)
             ScrollViewReader { proxy in
@@ -195,6 +190,68 @@ private struct NexCLIWorkspacePage: View {
             return "Nexus will start NexCLI automatically in the background."
         }
         return status.state == "ready" ? "NexCLI is running locally." : (status.detail ?? "Starting NexCLI…")
+    }
+}
+
+/// Persistent terminal masthead. The selected pet is the exact atlas-backed
+/// pet used by the notch, so a Command-click remains the same familiar way to
+/// cycle it everywhere in Nexus.
+private struct NexCLIConsoleHeader: View {
+    @EnvironmentObject private var notch: NotchController
+
+    let workspace: String
+    let runtimeDetail: String
+    let modelID: String
+
+    var body: some View {
+        HStack(alignment: .center, spacing: 22) {
+            VStack(alignment: .leading, spacing: 15) {
+                NexWordmark(color: Color(red: 0.53, green: 0.80, blue: 0.82))
+                    .frame(width: 98, height: 40, alignment: .leading)
+
+                Text(shortWorkspace)
+                    .font(.system(size: 13, weight: .medium, design: .monospaced))
+                    .foregroundStyle(.white.opacity(0.58))
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+
+                HStack(spacing: 9) {
+                    Text(modelID)
+                    Circle()
+                        .fill(.white.opacity(0.42))
+                        .frame(width: 3, height: 3)
+                    Text(runtimeDetail)
+                }
+                .font(.system(size: 12, weight: .medium, design: .monospaced))
+                .foregroundStyle(.white.opacity(0.52))
+                .lineLimit(1)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+
+            NexusPetView(pet: notch.selectedPet, activity: .idle, height: 92)
+                .contentShape(Rectangle())
+                .onTapGesture {
+                    guard NSEvent.modifierFlags.contains(.command) else { return }
+                    notch.cyclePet()
+                }
+                .help("Command-click to change pet")
+                .accessibilityHint("Command-click to change the current pet")
+                .padding(.trailing, 10)
+        }
+        .padding(.horizontal, 28)
+        .padding(.vertical, 20)
+        .background {
+            RoundedRectangle(cornerRadius: 9, style: .continuous)
+                .strokeBorder(.white.opacity(0.22), style: StrokeStyle(lineWidth: 1, dash: [8, 5]))
+        }
+        .accessibilityElement(children: .contain)
+    }
+
+    private var shortWorkspace: String {
+        let home = FileManager.default.homeDirectoryForCurrentUser.path
+        return workspace.hasPrefix(home)
+            ? "~" + String(workspace.dropFirst(home.count))
+            : workspace
     }
 }
 

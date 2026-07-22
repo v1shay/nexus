@@ -178,17 +178,12 @@ private struct ToolActivityIndicator: View {
     }
 }
 
-/// Compact worker mark: a small, high-contrast ASCII logo rather than a
-/// second pet. Its neutral grey/white treatment shares the thinking shimmer.
+/// Compact NexCLI mark. It intentionally has no backing tile, so it reads as
+/// the same bare NEX identity shown in the native terminal header.
 private struct NexCLIActivityMark: View {
     var body: some View {
-        Text("NEX")
-            .font(.system(size: 10, weight: .black, design: .monospaced))
-            .tracking(-1.2)
-            .foregroundStyle(.white.opacity(0.92))
-            .padding(.horizontal, 7)
-            .padding(.vertical, 6)
-            .background(.white.opacity(0.10), in: Capsule())
+        NexWordmark(color: .white.opacity(0.94))
+            .frame(width: 31, height: 15)
             .accessibilityLabel("Nex CLI")
     }
 }

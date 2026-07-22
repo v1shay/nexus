@@ -140,6 +140,58 @@ struct NexusPetView: View {
     }
 }
 
+/// NEX's compact block wordmark. Keeping it vector-based makes it crisp in
+/// both the terminal masthead and the very small notch tool indicator.
+struct NexWordmark: View {
+    let color: Color
+
+    var body: some View {
+        GeometryReader { proxy in
+            let unit = min(proxy.size.width / 13.2, proxy.size.height / 5)
+            HStack(spacing: unit * 0.55) {
+                nexGlyph(unit: unit, pattern: [
+                    "1001",
+                    "1101",
+                    "1011",
+                    "1001",
+                    "1001"
+                ])
+                nexGlyph(unit: unit, pattern: [
+                    "1111",
+                    "1000",
+                    "1110",
+                    "1000",
+                    "1111"
+                ])
+                nexGlyph(unit: unit, pattern: [
+                    "1001",
+                    "0110",
+                    "0010",
+                    "0110",
+                    "1001"
+                ])
+            }
+            .frame(width: proxy.size.width, height: proxy.size.height, alignment: .leading)
+        }
+        .accessibilityLabel("Nex")
+    }
+
+    @ViewBuilder
+    private func nexGlyph(unit: CGFloat, pattern: [String]) -> some View {
+        VStack(spacing: 0) {
+            ForEach(Array(pattern.enumerated()), id: \.offset) { _, row in
+                HStack(spacing: 0) {
+                    ForEach(Array(row.enumerated()), id: \.offset) { _, bit in
+                        Rectangle()
+                            .fill(bit == "1" ? color : .clear)
+                            .frame(width: unit, height: unit)
+                    }
+                }
+            }
+        }
+    }
+}
+
 private extension NexusPetActivity {
     var accessibilityDescription: String {
         switch self {
