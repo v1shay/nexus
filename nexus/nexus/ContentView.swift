@@ -77,11 +77,7 @@ private struct MusicPlaybackIndicator: View {
                 .scaledToFill()
                 .clipShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
         } else {
-            RoundedRectangle(cornerRadius: 9, style: .continuous)
-                .fill(notch.musicPalette.color.opacity(0.24))
-                .overlay {
-                    brandMark
-                }
+            brandMark
         }
     }
 
