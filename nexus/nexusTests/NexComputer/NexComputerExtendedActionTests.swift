@@ -1,4 +1,5 @@
 import XCTest
+import PDFKit
 @testable import nexus
 
 final class NexComputerExtendedActionTests: XCTestCase {
@@ -98,6 +99,11 @@ final class NexComputerExtendedActionTests: XCTestCase {
 
     func testXcodeCatalogRegistersBuildAndTestActions() async throws {
         let tools = NexToolRegistry(), computer = NexComputerRegistry(toolRegistry: tools, permissionManager: NexComputerPermissionManager(backend: AuthorizedPermissions())); try await NexXcodeActionCatalog().register(on: computer); let names = Set(await tools.definitions().map(\.name)); XCTAssertTrue(Set(["xcode.open", "xcode.open_project", "xcode.build", "xcode.test", "xcode.run", "xcode.get_build_status", "xcode.open_file"]).isSubset(of: names))
+    }
+
+    func testPreviewCombinesPDFsInOrder() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString); try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true); defer { try? FileManager.default.removeItem(at: root) }
+        let first = PDFDocument(), second = PDFDocument(); first.insert(PDFPage(image: NSImage(size: .init(width: 10, height: 10)))!, at: 0); second.insert(PDFPage(image: NSImage(size: .init(width: 20, height: 20)))!, at: 0); let a = root.appendingPathComponent("a.pdf"), b = root.appendingPathComponent("b.pdf"); XCTAssertTrue(first.write(to: a)); XCTAssertTrue(second.write(to: b)); let output = root.appendingPathComponent("combined.pdf"); let result = try await NexPreviewProvider().combine(inputs: [a, b], output: output, overwrite: false); XCTAssertEqual(result.1, 2); XCTAssertEqual(PDFDocument(url: output)?.pageCount, 2)
     }
 
     private func temporaryFile(_ name: String) -> URL {

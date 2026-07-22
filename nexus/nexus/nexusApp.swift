@@ -261,6 +261,7 @@ final class NotchController: ObservableObject {
     private lazy var githubActions = NexGitHubActionCatalog()
     private lazy var systemActions = NexSystemActionCatalog()
     private lazy var xcodeActions = NexXcodeActionCatalog()
+    private lazy var previewActions = NexPreviewActionCatalog()
     private lazy var webSearch = NexWebSearchController(registry: memory.registry)
     private lazy var youtubeTools = NexYouTubeToolController(registry: memory.registry) { [weak self] tab, fullscreen in
         self?.requestYouTubePlayback(tab, fullscreen: fullscreen) ?? false
@@ -360,6 +361,7 @@ final class NotchController: ObservableObject {
                 try? await githubActions.register(on: computerRegistry)
                 try? await systemActions.register(on: computerRegistry)
                 try? await xcodeActions.register(on: computerRegistry)
+                try? await previewActions.register(on: computerRegistry)
                 try? await toolSearch.registerIfNeeded()
             }
             installCommandHoldMonitor()
@@ -555,6 +557,7 @@ final class NotchController: ObservableObject {
                 try? await githubActions.register(on: computerRegistry)
                 try? await systemActions.register(on: computerRegistry)
                 try? await xcodeActions.register(on: computerRegistry)
+                try? await previewActions.register(on: computerRegistry)
                 try? await toolSearch.registerIfNeeded()
                 let allDefinitions = await memory.registry.definitions()
                 let discovery = await toolSearch.search(query: prompt)

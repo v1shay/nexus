@@ -1,5 +1,6 @@
 import AppKit
 import Foundation
+import PDFKit
 import Photos
 
 // MARK: - Phase 9: Photos
@@ -862,4 +863,44 @@ actor NexXcodeActionCatalog {
     private static func result(_ display: String) -> NexJSONValue { .object(["display": .string(display), "status": .string("completed"), "output": .string(""), "diagnostics": .array([]), "tests": .string(""), "artifacts": .array([])]) }
     private static func result(_ s: NexXcodeProvider.Snapshot) -> NexJSONValue { .object(["display": .string("Xcode \(s.status)."), "status": .string(s.status), "output": .string(s.output), "diagnostics": .array(s.diagnostics.map(NexJSONValue.string)), "tests": .string(s.tests), "artifacts": .array(s.artifactPaths.map(NexJSONValue.string))]) }
     private static func manifest(_ id: String, _ description: String, _ examples: [String], _ fields: [String: NexToolFieldSchema], risk: NexComputerRiskClass = .low, confirmation: NexComputerConfirmationPolicy = .never) -> NexComputerActionManifest { .init(actionID: id, application: "Xcode", provider: "xcodebuild/xed", bundleIdentifier: "com.apple.dt.Xcode", description: description, examples: examples, aliases: [id.replacingOccurrences(of: ".", with: " ")], tags: ["xcode", "build", "test", "swift", "developer"], inputSchema: .init(fields: fields), outputSchema: output, implementationMethod: .cli, registryPermission: risk == .low ? .files : .codeExecution, riskClass: risk, confirmationPolicy: confirmation, availabilityCheck: .executable(paths: ["/usr/bin/xcodebuild"]), timeoutSeconds: 300, supportsCancellation: true, dryRunBehavior: .supported("Would run \(id) with explicit xcodebuild arguments."), previewRenderer: "xcode.build", tests: ["NexXcodeActionTests"]) }
+}
+
+// MARK: - Phase 16: Preview and documents
+
+actor NexPreviewProvider {
+    func open(_ file: URL, page: Int? = nil) throws {
+        guard FileManager.default.fileExists(atPath: file.path) else { throw NexToolError.executionFailed(code: "document_missing", message: "Document was not found.") }
+        var target = file; if let page { guard page > 0 else { throw NexToolError.outOfRange(field: "page", minimum: 1, maximum: nil) }; if let url = URL(string: file.absoluteString + "#page=\(page)") { target = url } }
+        guard NSWorkspace.shared.open(target) else { throw NexToolError.executionFailed(code: "preview_open_failed", message: "macOS could not open the document.") }
+    }
+    func export(source: URL, destination: URL, overwrite: Bool) throws -> URL {
+        guard FileManager.default.fileExists(atPath: source.path) else { throw NexToolError.executionFailed(code: "document_missing", message: "Source document was not found.") }
+        if FileManager.default.fileExists(atPath: destination.path), !overwrite { throw NexToolError.executionFailed(code: "destination_exists", message: "Destination exists; choose a new path or explicitly allow overwrite.") }
+        let sourceExt = source.pathExtension.lowercased(), targetExt = destination.pathExtension.lowercased()
+        if sourceExt == "pdf", targetExt == "pdf" { try FileManager.default.copyItem(at: source, to: destination); return destination }
+        guard let image = NSImage(contentsOf: source), let tiff = image.tiffRepresentation, let bitmap = NSBitmapImageRep(data: tiff) else { throw NexToolError.executionFailed(code: "unsupported_conversion", message: "This native document conversion is unsupported.") }
+        let data: Data? = targetExt == "png" ? bitmap.representation(using: .png, properties: [:]) : (["jpg", "jpeg"].contains(targetExt) ? bitmap.representation(using: .jpeg, properties: [.compressionFactor: 0.9]) : nil)
+        guard let data else { throw NexToolError.executionFailed(code: "unsupported_conversion", message: "Supported image exports are PNG and JPEG.") }; try data.write(to: destination, options: .atomic); return destination
+    }
+    func combine(inputs: [URL], output: URL, overwrite: Bool) throws -> (URL, Int) {
+        guard !inputs.isEmpty else { throw NexToolError.executionFailed(code: "missing_documents", message: "Provide at least one PDF.") }; if FileManager.default.fileExists(atPath: output.path), !overwrite { throw NexToolError.executionFailed(code: "destination_exists", message: "Output exists; choose a new path or explicitly allow overwrite.") }
+        let combined = PDFDocument(); var pageIndex = 0
+        for input in inputs { guard input.pathExtension.lowercased() == "pdf", let document = PDFDocument(url: input) else { throw NexToolError.executionFailed(code: "invalid_pdf", message: "Could not read \(input.lastPathComponent).") }; for index in 0..<document.pageCount { if let page = document.page(at: index) { combined.insert(page, at: pageIndex); pageIndex += 1 } } }
+        guard combined.write(to: output) else { throw NexToolError.executionFailed(code: "pdf_write_failed", message: "Could not write the combined PDF.") }; return (output, pageIndex)
+    }
+}
+
+actor NexPreviewActionCatalog {
+    private let provider: NexPreviewProvider; private var registered = false
+    init(provider: NexPreviewProvider = NexPreviewProvider()) { self.provider = provider }
+    func register(on registry: NexComputerRegistry) async throws {
+        guard !registered else { return }; let provider = provider
+        for (id, page) in [("preview.open", false), ("preview.open_at_page", true)] { var fields: [String: NexToolFieldSchema] = ["path": .init(.string, required: true)]; if page { fields["page"] = .init(.integer, required: true, minimum: 1) }; try await registry.register(manifest: Self.manifest(id, page ? "Open a PDF with a page fragment hint where Preview supports it." : "Open a supported document with the default macOS Preview handler.", [page ? "Open this PDF at page 4" : "Open this document"], fields)) { args, _ in let path = try required(args, "path"); try await provider.open(URL(fileURLWithPath: path), page: args["page"]?.integer); return Self.result("Opened the document.", path: path) } }
+        try await registry.register(manifest: Self.manifest("preview.export", "Export a supported image to PNG/JPEG or copy PDF to a distinct validated destination.", ["Export this image as PNG"], ["source": .init(.string, required: true), "destination": .init(.string, required: true), "overwrite": .init(.boolean)], risk: .medium, confirmation: .always)) { args, _ in let output = try await provider.export(source: URL(fileURLWithPath: try required(args, "source")), destination: URL(fileURLWithPath: try required(args, "destination")), overwrite: args["overwrite"]?.bool ?? false); return Self.result("Exported the document.", path: output.path) }
+        try await registry.register(manifest: Self.manifest("preview.combine_pdfs", "Combine validated PDFs in the supplied order into a distinct output file.", ["Combine these PDFs in order"], ["inputs": .init(.stringArray, required: true), "output": .init(.string, required: true), "overwrite": .init(.boolean)], risk: .medium, confirmation: .always)) { args, _ in guard let inputs = args["inputs"]?.strings else { throw NexToolError.missingField("inputs") }; let result = try await provider.combine(inputs: inputs.map(URL.init(fileURLWithPath:)), output: URL(fileURLWithPath: try required(args, "output")), overwrite: args["overwrite"]?.bool ?? false); return Self.result("Combined \(result.1) PDF pages.", path: result.0.path, count: result.1) }
+        registered = true
+    }
+    private static let output = NexToolInputSchema(fields: ["display": .init(.string, required: true), "status": .init(.string, required: true), "path": .init(.string, required: true), "page_count": .init(.integer, required: true)])
+    private static func result(_ display: String, path: String = "", count: Int = 0) -> NexJSONValue { .object(["display": .string(display), "status": .string("completed"), "path": .string(path), "page_count": .number(Double(count))]) }
+    private static func manifest(_ id: String, _ description: String, _ examples: [String], _ fields: [String: NexToolFieldSchema], risk: NexComputerRiskClass = .low, confirmation: NexComputerConfirmationPolicy = .never) -> NexComputerActionManifest { .init(actionID: id, application: "Preview", provider: "PDFKit/AppKit", bundleIdentifier: "com.apple.Preview", description: description, examples: examples, aliases: [id.replacingOccurrences(of: ".", with: " ")], tags: ["preview", "pdf", "document", "image", "export"], inputSchema: .init(fields: fields), outputSchema: output, implementationMethod: .nativeAPI, registryPermission: .files, riskClass: risk, confirmationPolicy: confirmation, availabilityCheck: .application(bundleIdentifier: "com.apple.Preview"), timeoutSeconds: 60, supportsCancellation: false, dryRunBehavior: .supported("Would perform \(id) with native document APIs."), previewRenderer: "preview.document", tests: ["NexPreviewActionTests"]) }
 }
