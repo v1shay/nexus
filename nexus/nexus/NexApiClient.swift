@@ -114,7 +114,7 @@ actor NexApiClient {
         ))
         let (data, response) = try await session.data(for: request)
         try validate(response: response, data: data)
-        return try JSONDecoder().decode(AcceptedTask.self, from: data)
+        return try decode(AcceptedTask.self, from: data, endpoint: "task creation")
     }
 
     func events(for task: AcceptedTask, directory: URL, receive: @escaping @Sendable (Event) async -> Void) async throws {
@@ -125,9 +125,9 @@ actor NexApiClient {
         try validate(response: response, data: nil)
         for try await line in bytes.lines {
             guard line.hasPrefix("data:"),
-                  let data = line.dropFirst(5).trimmingCharacters(in: .whitespaces).data(using: .utf8),
-                  let event = try? JSONDecoder().decode(Event.self, from: data),
-                  event.taskId == task.taskId else { continue }
+                  let data = line.dropFirst(5).trimmingCharacters(in: .whitespaces).data(using: .utf8) else { continue }
+            let event = try decode(Event.self, from: data, endpoint: "event stream")
+            guard event.taskId == task.taskId else { continue }
             await receive(event)
             if [.completed, .failed].contains(event.kind) || event.status == "cancelled" { return }
         }
@@ -137,7 +137,7 @@ actor NexApiClient {
         let request = try makeRequest(path: task.resultUrl, directory: Self.canonicalDirectory(directory))
         let (data, response) = try await session.data(for: request)
         try validate(response: response, data: data)
-        return try JSONDecoder().decode(Result.self, from: data)
+        return try decode(Result.self, from: data, endpoint: "task result")
     }
 
     private func makeRequest(path: String, directory: String) throws -> URLRequest {
@@ -177,6 +177,17 @@ actor NexApiClient {
             throw NexApiClientError.invalidResponse("Nex task API returned \(http.statusCode). \(body.prefix(240))")
         }
     }
+
+    private func decode<T: Decodable>(_ type: T.Type, from data: Data, endpoint: String) throws -> T {
+        do {
+            return try JSONDecoder().decode(type, from: data)
+        } catch {
+            let preview = String(data: data.prefix(240), encoding: .utf8) ?? "non-text response"
+            throw NexApiClientError.incompatibleResponse(
+                "Nex \(endpoint) response is incompatible with this Nexus build. Nexus will use only its managed local worker after restart. Response: \(preview). Decoder: \(error.localizedDescription)"
+            )
+        }
+    }
 }
 
 enum NexAPIJSONValue: Decodable, Equatable, Sendable {
@@ -201,11 +212,12 @@ enum NexAPIJSONValue: Decodable, Equatable, Sendable {
 enum NexApiClientError: LocalizedError {
     case invalidURL
     case invalidResponse(String)
+    case incompatibleResponse(String)
 
     var errorDescription: String? {
         switch self {
         case .invalidURL: "Nex task API produced an invalid URL."
-        case .invalidResponse(let message): message
+        case .invalidResponse(let message), .incompatibleResponse(let message): message
         }
     }
 }

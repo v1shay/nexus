@@ -84,6 +84,14 @@ struct NexCLIHostManager: @unchecked Sendable {
     var standardOutputURL: URL { supportDirectory.appendingPathComponent("worker.log") }
     var standardErrorURL: URL { supportDirectory.appendingPathComponent("worker-error.log") }
 
+    /// Read the last host record even when the LaunchAgent itself has been
+    /// restarted. The worker PID is the authority for a reusable daemon;
+    /// `processID` only identifies the small launchd supervisor.
+    private func storedStatus() -> NexCLIHostStatus? {
+        guard let data = try? Data(contentsOf: statusURL) else { return nil }
+        return try? NexusPayloadCoder.decoder.decode(NexCLIHostStatus.self, from: data)
+    }
+
     func installAndStart() throws {
         guard !NexCLIHostProcess.isCurrentProcess else { return }
         _ = try NexCLILoopbackCredential.loadOrCreate()
@@ -103,8 +111,7 @@ struct NexCLIHostManager: @unchecked Sendable {
     }
 
     func currentStatus() -> NexCLIHostStatus? {
-        guard let data = try? Data(contentsOf: statusURL),
-              let status = try? NexusPayloadCoder.decoder.decode(NexCLIHostStatus.self, from: data),
+        guard let status = storedStatus(),
               status.isLive else { return nil }
         return status
     }
@@ -114,13 +121,94 @@ struct NexCLIHostManager: @unchecked Sendable {
     /// managed worker, then waits for its authenticated Nex health endpoint.
     func ensureReady() async throws {
         let password = try NexCLILoopbackCredential.loadOrCreate()
-        if await Self.isHealthy(password: password) { return }
+        if await isManagedDaemonReady(password: password) { return }
+        try reclaimKnownLegacyDaemonIfNeeded()
         try installAndStart()
         for _ in 0..<25 {
             try await Task.sleep(for: .milliseconds(400))
-            if await Self.isHealthy(password: password) { return }
+            if await isManagedDaemonReady(password: password) { return }
         }
-        throw NexusConnectError.unavailable("Nex local daemon did not become healthy. Check the NexCLI worker log and try again.")
+        throw NexusConnectError.unavailable("Nex local daemon did not become ready. Nexus only accepts its managed NexCLI worker; check the NexCLI worker log and try again.")
+    }
+
+    /// A 200 health response alone is deliberately insufficient. An earlier
+    /// version treated any Nex/OpenCode process on 4096 as ours, which let an
+    /// old development server answer newer `/nex/tasks` requests with an
+    /// incompatible JSON shape.
+    func isManagedDaemonReady(password: String) async -> Bool {
+        guard await Self.isHealthy(password: password),
+              let status = storedStatus(),
+              status.workerProcessID > 0,
+              Self.isProcessAlive(status.workerProcessID),
+              let listenerPID = Self.listenerProcessID(),
+              listenerPID == status.workerProcessID else { return false }
+        return true
+    }
+
+    func managedWorkerProcessID() -> Int32? {
+        guard let status = storedStatus(),
+              status.workerProcessID > 0,
+              Self.isProcessAlive(status.workerProcessID),
+              Self.listenerProcessID() == status.workerProcessID else { return nil }
+        return status.workerProcessID
+    }
+
+    /// Port 4096 belongs to the managed local runtime. We only reclaim an
+    /// identifiable legacy Nex development worker—not an arbitrary process
+    /// which happens to listen on that port.
+    func reclaimKnownLegacyDaemonIfNeeded() throws {
+        guard let listenerPID = Self.listenerProcessID() else { return }
+        if managedWorkerProcessID() == listenerPID { return }
+        let commandLine = Self.commandLine(for: listenerPID) ?? ""
+        guard Self.isKnownLegacyNexListener(commandLine: commandLine) else {
+            throw NexusConnectError.unavailable("Port 4096 is already used by another local service. Quit that service or choose a different Nex CLI endpoint; Nexus will not replace an unknown process.")
+        }
+        guard Darwin.kill(listenerPID, SIGTERM) == 0 || errno == ESRCH else {
+            throw NexusConnectError.unavailable("Nexus could not restart its older local NexCLI worker.")
+        }
+        for _ in 0..<20 {
+            if Self.listenerProcessID() != listenerPID { return }
+            Thread.sleep(forTimeInterval: 0.1)
+        }
+        throw NexusConnectError.unavailable("The older local NexCLI worker did not stop. Quit it once, then retry; Nexus will preserve your workspace.")
+    }
+
+    static func isKnownLegacyNexListener(commandLine: String) -> Bool {
+        let normalized = commandLine.replacingOccurrences(of: "\n", with: " ")
+        return normalized.contains("/Documents/nex-cli/packages/opencode/src/index.ts")
+            && normalized.contains(" serve")
+            && normalized.contains("--port 4096")
+    }
+
+    private static func isProcessAlive(_ processID: Int32) -> Bool {
+        Darwin.kill(processID, 0) == 0 || errno == EPERM
+    }
+
+    private static func listenerProcessID() -> Int32? {
+        guard let output = capture(
+            executable: URL(fileURLWithPath: "/usr/sbin/lsof"),
+            arguments: ["-nP", "-iTCP:4096", "-sTCP:LISTEN", "-t"]
+        ) else { return nil }
+        return output.split(whereSeparator: \.isNewline).compactMap { Int32($0) }.first
+    }
+
+    private static func commandLine(for processID: Int32) -> String? {
+        capture(executable: URL(fileURLWithPath: "/bin/ps"), arguments: ["-p", "\(processID)", "-o", "command="])
+    }
+
+    private static func capture(executable: URL, arguments: [String]) -> String? {
+        let process = Process()
+        let output = Pipe()
+        process.executableURL = executable
+        process.arguments = arguments
+        process.standardOutput = output
+        process.standardError = FileHandle.nullDevice
+        do {
+            try process.run()
+            process.waitUntilExit()
+            guard process.terminationStatus == 0 else { return nil }
+            return String(data: output.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8)
+        } catch { return nil }
     }
 
     static func isHealthy(password: String) async -> Bool {
@@ -177,6 +265,7 @@ final class NexCLIHostDaemon {
     private var monitor: Task<Void, Never>?
     private var isStopping = false
     private var ownsLock = false
+    private var adoptedWorkerProcessID: Int32?
 
     init(manager: NexCLIHostManager = .shared, fileManager: FileManager = .default) {
         self.manager = manager
@@ -186,11 +275,13 @@ final class NexCLIHostDaemon {
     func start() async {
         do {
             let password = try NexCLILoopbackCredential.loadOrCreate()
-            if await NexCLIHostManager.isHealthy(password: password) {
-                writeStatus(state: "ready", detail: nil, runtime: "existing Nex daemon")
+            if await manager.isManagedDaemonReady(password: password) {
+                adoptedWorkerProcessID = manager.managedWorkerProcessID()
+                writeStatus(state: "ready", detail: nil, runtime: "managed Nex daemon")
                 monitor = Task { [weak self] in await self?.monitorWorker(runtime: nil, password: password) }
                 return
             }
+            try manager.reclaimKnownLegacyDaemonIfNeeded()
             guard try acquireLock() else {
                 writeStatus(state: "starting", detail: "Another Nex daemon is starting.", runtime: nil)
                 monitor = Task { [weak self] in await self?.monitorWorker(runtime: nil, password: password) }
@@ -268,19 +359,34 @@ final class NexCLIHostDaemon {
     }
 
     private func monitorWorker(runtime: NexCLIManagedRuntime?, password: String) async {
+        var activeRuntime = runtime
         for attempt in 0..<Int.max where !Task.isCancelled && !isStopping {
             if await workerResponds(password: password) {
-                writeStatus(state: "ready", detail: nil, runtime: runtime?.description ?? "existing Nex daemon")
+                writeStatus(state: "ready", detail: nil, runtime: activeRuntime?.description ?? "managed Nex daemon")
             } else if worker?.isRunning == true {
-                writeStatus(state: "starting", detail: "Starting local NexCLI…", runtime: runtime?.description)
-            } else if let runtime {
-                writeStatus(state: "restarting", detail: "Restarting local NexCLI…", runtime: runtime.description)
+                writeStatus(state: "starting", detail: "Starting local NexCLI…", runtime: activeRuntime?.description)
+            } else if let activeRuntime {
+                writeStatus(state: "restarting", detail: "Restarting local NexCLI…", runtime: activeRuntime.description)
                 try? await Task.sleep(for: .seconds(min(20, max(1, attempt + 1))))
                 guard !Task.isCancelled, !isStopping else { return }
-                do { try startWorker(runtime: runtime, password: password) }
-                catch { writeStatus(state: "failed", detail: error.localizedDescription, runtime: runtime.description) }
+                do { try startWorker(runtime: activeRuntime, password: password) }
+                catch { writeStatus(state: "failed", detail: error.localizedDescription, runtime: activeRuntime.description) }
             } else {
-                writeStatus(state: "starting", detail: "Waiting for the existing Nex daemon.", runtime: nil)
+                // This supervisor may have adopted an already-running managed
+                // worker. If that worker exits, promote the supervisor into
+                // the owner and restart it instead of waiting forever.
+                do {
+                    guard try acquireLock() else {
+                        writeStatus(state: "starting", detail: "Waiting for the managed Nex daemon.", runtime: nil)
+                        try? await Task.sleep(for: .seconds(1))
+                        continue
+                    }
+                    activeRuntime = try resolveRuntime()
+                    try startWorker(runtime: activeRuntime!, password: password)
+                    writeStatus(state: "starting", detail: "Restarting local NexCLI…", runtime: activeRuntime?.description)
+                } catch {
+                    writeStatus(state: "failed", detail: error.localizedDescription, runtime: nil)
+                }
             }
             try? await Task.sleep(for: .seconds(1))
         }
@@ -317,7 +423,7 @@ final class NexCLIHostDaemon {
     private func writeStatus(state: String, detail: String?, runtime: String?) {
         let status = NexCLIHostStatus(
             processID: ProcessInfo.processInfo.processIdentifier,
-            workerProcessID: worker?.processIdentifier ?? 0,
+            workerProcessID: worker?.processIdentifier ?? adoptedWorkerProcessID ?? 0,
             state: state,
             detail: detail,
             runtime: runtime,

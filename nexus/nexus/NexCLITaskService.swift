@@ -238,11 +238,18 @@ actor NexCLITaskService {
         }
         let snapshot = try await client.result(for: accepted, directory: directory)
         record = await recordStore.current()
+        // A failed gateway task may still contain a model-proposed filename in
+        // its tool history.  Never seal or rename the active workspace unless
+        // Nex reports a completed task; otherwise a retry would be forced into
+        // a fresh folder even though no build actually succeeded.
         let completedWorkspace = try await MainActor.run {
-            try NexCLIWorkspaceManager.shared.completeBuild(
-                title: title ?? prompt,
-                filesChanged: snapshot.filesChanged
-            )
+            if snapshot.status == "completed" {
+                return try NexCLIWorkspaceManager.shared.completeBuild(
+                    title: title ?? prompt,
+                    filesChanged: snapshot.filesChanged
+                )
+            }
+            return try NexCLIWorkspaceManager.shared.currentWorkspace()
         }
         record.finalText = snapshot.finalText
         record.state = snapshot.status == "completed" ? .completed : (snapshot.status == "cancelled" ? .cancelled : .failed)

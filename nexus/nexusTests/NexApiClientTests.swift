@@ -52,6 +52,95 @@ extension NexusGeometryTests {
         XCTAssertEqual(text.kind, .textDelta)
         XCTAssertEqual(completed.kind, .completed)
     }
+
+    func testNexApiClientMakesIncompatibleCreateResponseActionable() async throws {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [NexApiClientURLProtocol.self]
+        let session = URLSession(configuration: configuration)
+        NexApiClientURLProtocol.handler = { _ in (200, "{\"unexpected\":true}") }
+        defer { NexApiClientURLProtocol.handler = nil }
+
+        let client = NexApiClient(
+            baseURL: URL(string: "http://127.0.0.1:4096")!,
+            username: "opencode",
+            password: "test-password",
+            session: session
+        )
+
+        do {
+            _ = try await client.create(.init(
+                directory: URL(fileURLWithPath: "/tmp/nex-api-client"),
+                prompt: "Create a file.",
+                title: nil,
+                agent: "nex-local",
+                model: .localCodingDefault,
+                idempotencyKey: UUID()
+            ))
+            XCTFail("Expected an incompatible response error")
+        } catch {
+            let message = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+            XCTAssertTrue(message.contains("task creation response is incompatible"))
+            XCTAssertTrue(message.contains("managed local worker"))
+        }
+    }
+
+    func testLegacyNexListenerMatchingIsNarrow() {
+        XCTAssertTrue(NexCLIHostManager.isKnownLegacyNexListener(
+            commandLine: "/Users/me/.local/bin/bun /Users/me/Documents/nex-cli/packages/opencode/src/index.ts serve --hostname 127.0.0.1 --port 4096"
+        ))
+        XCTAssertFalse(NexCLIHostManager.isKnownLegacyNexListener(
+            commandLine: "/usr/local/bin/node local-dashboard --port 4096"
+        ))
+        XCTAssertFalse(NexCLIHostManager.isKnownLegacyNexListener(
+            commandLine: "/Users/me/.local/bin/bun /Users/me/Documents/nex-cli/packages/opencode/src/index.ts serve --port 4100"
+        ))
+    }
+
+    /// Opt-in because this intentionally sends a real task through the same
+    /// authenticated 4096 daemon, request schema, SSE stream, and snapshot
+    /// decoder that the notch tool uses. Run with
+    /// `NEXUS_RUN_LIVE_NEXCLI_TEST=1` when validating a local installation.
+    func testLiveManagedNexTaskAPIEndToEnd() async throws {
+        let runsLiveValidation = ProcessInfo.processInfo.environment["NEXUS_RUN_LIVE_NEXCLI_TEST"] == "1"
+            || UserDefaults.standard.bool(forKey: "NEXUS_RUN_LIVE_NEXCLI_TEST")
+        try XCTSkipUnless(
+            runsLiveValidation,
+            "Live NexCLI validation is opt-in."
+        )
+        let password = try NexCLILoopbackCredential.loadOrCreate()
+        try await NexCLIHostManager.shared.ensureReady()
+        let workspace = FileManager.default.temporaryDirectory
+            .appendingPathComponent("nexus-live-task-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: workspace, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: workspace) }
+
+        let client = NexApiClient(
+            baseURL: URL(string: "http://127.0.0.1:4096")!,
+            username: "opencode",
+            password: password
+        )
+        let accepted = try await client.create(.init(
+            directory: workspace,
+            prompt: "Create exactly one file named nexus-e2e.txt containing the text 'managed Nex task API verified'. Do not modify any other files. Then briefly report completion.",
+            title: "Managed API verification",
+            agent: "nex-local",
+            model: .localCodingDefault,
+            idempotencyKey: UUID()
+        ))
+        let eventKinds = NexApiEventKindCollector()
+        try await client.events(for: accepted, directory: workspace) { event in
+            await eventKinds.append(event.kind)
+        }
+        let result = try await client.result(for: accepted, directory: workspace)
+        let receivedKinds = await eventKinds.values
+
+        XCTAssertEqual(result.status, "completed", result.error ?? result.finalText)
+        XCTAssertTrue(receivedKinds.contains(.queued) || receivedKinds.contains(.thinking))
+        XCTAssertTrue(receivedKinds.contains(.toolStarted) || receivedKinds.contains(.completed))
+        XCTAssertTrue(receivedKinds.contains(.completed))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: workspace.appendingPathComponent("nexus-e2e.txt").path))
+        XCTAssertTrue(result.filesChanged.contains(where: { $0.hasSuffix("nexus-e2e.txt") }))
+    }
 }
 
 private final class NexApiClientURLProtocol: URLProtocol {
@@ -100,4 +189,9 @@ private final class Locked<Value>: @unchecked Sendable {
     init(_ value: Value) { storage = value }
     var value: Value { lock.lock(); defer { lock.unlock() }; return storage }
     func set(_ value: Value) { lock.lock(); storage = value; lock.unlock() }
+}
+
+private actor NexApiEventKindCollector {
+    private(set) var values: [NexApiClient.Event.Kind] = []
+    func append(_ value: NexApiClient.Event.Kind) { values.append(value) }
 }
