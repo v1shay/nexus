@@ -104,8 +104,15 @@ final class NexComputerSystemPermissionBackend: NexComputerPermissionChecking, @
             }
         } else if id == "full_disk_access" || id.hasPrefix("full_disk_access.") {
             // macOS intentionally offers no public API that can grant or
-            // reliably preflight Full Disk Access.
-            state = .unsupported
+            // reliably preflight Full Disk Access globally. Check only the
+            // exact protected resource needed by a declared action.
+            if id == "full_disk_access.messages" {
+                let path = FileManager.default.homeDirectoryForCurrentUser
+                    .appendingPathComponent("Library/Messages/chat.db").path
+                state = FileManager.default.isReadableFile(atPath: path) ? .authorized : .unsupported
+            } else {
+                state = .unsupported
+            }
         } else if id.hasPrefix("automation.") {
             let bundleIdentifier = String(requirement.id.dropFirst("automation.".count))
             state = automationState(bundleIdentifier: bundleIdentifier, request: request)
