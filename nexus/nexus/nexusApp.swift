@@ -263,6 +263,8 @@ final class NotchController: ObservableObject {
     private lazy var xcodeActions = NexXcodeActionCatalog()
     private lazy var previewActions = NexPreviewActionCatalog()
     private lazy var applicationActions = NexApplicationActionCatalog()
+    private lazy var browserActions = NexBrowserActionCatalog()
+    private lazy var chromeTabActions = NexChromeTabActionCatalog()
     private lazy var webSearch = NexWebSearchController(registry: memory.registry)
     private lazy var youtubeTools = NexYouTubeToolController(registry: memory.registry) { [weak self] tab, fullscreen in
         self?.requestYouTubePlayback(tab, fullscreen: fullscreen) ?? false
@@ -364,6 +366,8 @@ final class NotchController: ObservableObject {
                 try? await xcodeActions.register(on: computerRegistry)
                 try? await previewActions.register(on: computerRegistry)
                 try? await applicationActions.register(on: computerRegistry)
+                try? await browserActions.register(on: computerRegistry)
+                try? await chromeTabActions.register(on: computerRegistry)
                 try? await toolSearch.registerIfNeeded()
             }
             installCommandHoldMonitor()
@@ -561,6 +565,8 @@ final class NotchController: ObservableObject {
                 try? await xcodeActions.register(on: computerRegistry)
                 try? await previewActions.register(on: computerRegistry)
                 try? await applicationActions.register(on: computerRegistry)
+                try? await browserActions.register(on: computerRegistry)
+                try? await chromeTabActions.register(on: computerRegistry)
                 try? await toolSearch.registerIfNeeded()
                 let allDefinitions = await memory.registry.definitions()
                 let discovery = await toolSearch.search(query: prompt)

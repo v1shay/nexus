@@ -48,6 +48,7 @@
 		A2C0002630075C29006660E4 /* NexMessagesActionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2C0002730075C29006660E4 /* NexMessagesActionTests.swift */; };
 		A2C0002830075C29006660E4 /* NexComputerExtendedActions.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2C0002930075C29006660E4 /* NexComputerExtendedActions.swift */; };
 		A2C0002A30075C29006660E4 /* NexComputerExtendedActionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2C0002B30075C29006660E4 /* NexComputerExtendedActionTests.swift */; };
+		A2C0002C30075C29006660E4 /* NexManagedBrowser.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2C0002D30075C29006660E4 /* NexManagedBrowser.swift */; };
 		R100000330075C29006660E4 /* NexMemoryService.swift in Sources */ = {isa = PBXBuildFile; fileRef = R100000430075C29006660E4 /* NexMemoryService.swift */; };
 		A1B2C3D4E5F60718293A4B5C /* NexCLITaskService.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1B2C3D4E5F60718293A4B5C /* NexCLITaskService.swift */; };
 		C1D2E3F4A5B60718293A4B5C /* NexCLIHostManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = D1D2E3F4A5B60718293A4B5C /* NexCLIHostManager.swift */; };
@@ -152,6 +153,7 @@
 		A2C0002730075C29006660E4 /* NexMessagesActionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NexMessagesActionTests.swift; sourceTree = "<group>"; };
 		A2C0002930075C29006660E4 /* NexComputerExtendedActions.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NexComputerExtendedActions.swift; sourceTree = "<group>"; };
 		A2C0002B30075C29006660E4 /* NexComputerExtendedActionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NexComputerExtendedActionTests.swift; sourceTree = "<group>"; };
+		A2C0002D30075C29006660E4 /* NexManagedBrowser.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NexManagedBrowser.swift; sourceTree = "<group>"; };
 		R100000430075C29006660E4 /* NexMemoryService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NexMemoryService.swift; sourceTree = "<group>"; };
 		B1B2C3D4E5F60718293A4B5C /* NexCLITaskService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NexCLITaskService.swift; sourceTree = "<group>"; };
 		D1D2E3F4A5B60718293A4B5C /* NexCLIHostManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NexCLIHostManager.swift; sourceTree = "<group>"; };
@@ -252,6 +254,7 @@
 				A2C0001530075C29006660E4 /* Confirmation */,
 				A2C0001630075C29006660E4 /* Permissions */,
 				A2C0001B30075C29006660E4 /* Apps */,
+				A2C0002E30075C29006660E4 /* Browser */,
 			);
 			path = NexComputer;
 			sourceTree = "<group>";
@@ -299,6 +302,14 @@
 				A2C0002930075C29006660E4 /* NexComputerExtendedActions.swift */,
 			);
 			path = Apps;
+			sourceTree = "<group>";
+		};
+		A2C0002E30075C29006660E4 /* Browser */ = {
+			isa = PBXGroup;
+			children = (
+				A2C0002D30075C29006660E4 /* NexManagedBrowser.swift */,
+			);
+			path = Browser;
 			sourceTree = "<group>";
 		};
 		A2C0000A30075C29006660E4 /* NexComputer tests */ = {
@@ -590,6 +601,7 @@
 				A2C0002030075C29006660E4 /* NexSpotifyActions.swift in Sources */,
 				A2C0002430075C29006660E4 /* NexMessagesActions.swift in Sources */,
 				A2C0002830075C29006660E4 /* NexComputerExtendedActions.swift in Sources */,
+				A2C0002C30075C29006660E4 /* NexManagedBrowser.swift in Sources */,
 				R100000330075C29006660E4 /* NexMemoryService.swift in Sources */,
 				A1B2C3D4E5F60718293A4B5C /* NexCLITaskService.swift in Sources */,
 				C1D2E3F4A5B60718293A4B5C /* NexCLIHostManager.swift in Sources */,
