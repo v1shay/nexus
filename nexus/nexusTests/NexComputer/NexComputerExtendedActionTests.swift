@@ -114,6 +114,31 @@ final class NexComputerExtendedActionTests: XCTestCase {
         try await manager.apply(doc, to: computer); let names = Set(await tools.definitions().map(\.name)); XCTAssertTrue(names.contains("google.account_info")); XCTAssertTrue(names.contains("gmail.search")); XCTAssertFalse(names.contains("gmail.send_draft")); let unavailable = await manager.unavailableCapabilities(provider: "google"); XCTAssertEqual(unavailable.first?.missingScope, "gmail.send")
     }
 
+    @MainActor
+    func testConnectorCredentialsPersistOnlyThroughSecretStore() throws {
+        let memory = NexusMemorySecretStore()
+        let store = NexKeychainConnectorCredentialStore(secrets: memory)
+        let credential = NexConnectorCredential(provider: .google, account: "test@example.com", accessToken: "secret-access", refreshToken: "secret-refresh", tokenType: "Bearer", scopes: ["openid"], expiresAt: Date().addingTimeInterval(3_600), connectedAt: .now, lastSuccessfulUse: .now)
+        try store.save(credential)
+        let loaded = try XCTUnwrap(store.credential(for: .google))
+        XCTAssertEqual(loaded.provider, credential.provider)
+        XCTAssertEqual(loaded.account, credential.account)
+        XCTAssertEqual(loaded.accessToken, credential.accessToken)
+        XCTAssertEqual(loaded.refreshToken, credential.refreshToken)
+        XCTAssertEqual(loaded.scopes, credential.scopes)
+        let controller = NexConnectorAuthController(store: store, transport: MockOAuthTransport())
+        XCTAssertEqual(controller.statuses[.google]?.account, "test@example.com")
+        XCTAssertTrue(controller.statuses[.google]?.healthy == true)
+        controller.disconnect(.google)
+    }
+
+    @MainActor
+    func testConnectorScopesBeginLeastPrivilege() {
+        XCTAssertEqual(NexConnectorAuthController.minimumScopes(.google), ["openid"])
+        XCTAssertEqual(NexConnectorAuthController.minimumScopes(.notion), ["notion.content.read"])
+        XCTAssertFalse(NexConnectorAuthController.scopeOptions(.google).map(\.id).contains("https://mail.google.com/"))
+    }
+
     private func temporaryFile(_ name: String) -> URL {
         FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString).appendingPathComponent(name)
     }
@@ -127,6 +152,11 @@ private actor MockCodexProvider: NexCodexProviding {
     func openSession(sessionID: String) async throws {}
 }
 private struct MockConnectorExecutor: NexConnectorExecuting { func execute(provider: String, account: String, action: String, arguments: [String: NexJSONValue]) async throws -> NexJSONValue { .object(["display": .string("Executed \(action)"), "status": .string("completed"), "provider": .string(provider), "action": .string(action), "id": .string("fixture"), "items": .array([]), "error": .string("")]) } }
+private struct MockOAuthTransport: NexOAuthTransporting {
+    func exchange(configuration: NexOAuthConfiguration, code: String, verifier: String, callbackURL: URL, scopes: [String]) async throws -> NexConnectorCredential { .init(provider: configuration.provider, account: "test@example.com", accessToken: "access", refreshToken: "refresh", tokenType: "Bearer", scopes: scopes, expiresAt: .distantFuture, connectedAt: .now, lastSuccessfulUse: nil) }
+    func verify(configuration: NexOAuthConfiguration, credential: NexConnectorCredential) async throws -> String { credential.account }
+    func revoke(configuration: NexOAuthConfiguration, credential: NexConnectorCredential) async throws { }
+}
 
 private actor MockPhotosProvider: NexPhotosProviding {
     let personSearchSupported: Bool

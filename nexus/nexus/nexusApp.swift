@@ -265,6 +265,7 @@ final class NotchController: ObservableObject {
     private lazy var applicationActions = NexApplicationActionCatalog()
     private lazy var browserActions = NexBrowserActionCatalog()
     private lazy var chromeTabActions = NexChromeTabActionCatalog()
+    private let connectorAuth = NexConnectorAuthController.shared
     private lazy var webSearch = NexWebSearchController(registry: memory.registry)
     private lazy var youtubeTools = NexYouTubeToolController(registry: memory.registry) { [weak self] tab, fullscreen in
         self?.requestYouTubePlayback(tab, fullscreen: fullscreen) ?? false
@@ -1007,7 +1008,8 @@ final class NotchController: ObservableObject {
             memory: memory,
             settings: settings,
             cli: .shared,
-            cliSettings: .shared
+            cliSettings: .shared,
+            connectorAuth: connectorAuth
         )
         // The app window is a separate NSHostingView from the notch panel.
         // Keep its terminal masthead on the same selected-pet state instead

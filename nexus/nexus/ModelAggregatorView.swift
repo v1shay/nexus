@@ -15,6 +15,7 @@ struct ModelAggregatorView: View {
     @ObservedObject var settings: NexusAppSettings
     @ObservedObject var cli: NexCLITaskController
     @ObservedObject var cliSettings: NexCLITaskSettings
+    @ObservedObject var connectorAuth: NexConnectorAuthController
     @State private var page: NexusAppPage = .models
 
     var body: some View {
@@ -29,7 +30,7 @@ struct ModelAggregatorView: View {
                 case .memory:
                     NexusMemoryPage(memory: memory)
                 case .settings:
-                    NexusSettingsPage(settings: settings, viewModel: viewModel)
+                    NexusSettingsPage(settings: settings, viewModel: viewModel, connectorAuth: connectorAuth)
                 case .cli:
                     NexCLIWorkspacePage(controller: cli, settings: cliSettings)
                 }
@@ -259,6 +260,7 @@ private struct NexCLIConsoleHeader: View {
 private struct NexusSettingsPage: View {
     @ObservedObject var settings: NexusAppSettings
     @ObservedObject var viewModel: ModelDownloadViewModel
+    @ObservedObject var connectorAuth: NexConnectorAuthController
 
     var body: some View {
         Form {
@@ -289,6 +291,7 @@ private struct NexusSettingsPage: View {
                         .foregroundStyle(.secondary)
                 }
             }
+            NexConnectionsSettingsView(controller: connectorAuth)
         }
         .formStyle(.grouped)
         .padding(28)

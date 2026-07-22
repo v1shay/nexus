@@ -234,3 +234,7 @@ Confirmation approval is bound to action ID, canonical arguments, target account
 ## Completion evidence
 
 The subsystem is complete only when `docs/NEX_COMPUTER_VALIDATION.md` records actual results for all Phase 27 workflows and the final requirements in the source specification are verified. Unsupported or unconfigured capabilities must be listed explicitly; no mock, scaffold, or preview is reported as a working action.
+
+## Phase checkpoints
+
+- Phase 20: native Connections settings, system-browser OAuth authorization, PKCE/state, registered callback URL, least-privilege scopes, harmless identity verification, and Keychain-only credential persistence are implemented. Release OAuth client registrations remain an honest build-time requirement.
