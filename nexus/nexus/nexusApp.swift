@@ -249,12 +249,14 @@ final class NotchController: ObservableObject {
     private let conversationSession: NexConversationSession
     let memory: NexMemoryController
     let settings: NexusAppSettings
+    private lazy var computerRegistry = NexComputerRegistry(toolRegistry: memory.registry)
+    private lazy var terminalActions = NexTerminalActionCatalog()
     private lazy var webSearch = NexWebSearchController(registry: memory.registry)
     private lazy var youtubeTools = NexYouTubeToolController(registry: memory.registry) { [weak self] tab, fullscreen in
         self?.requestYouTubePlayback(tab, fullscreen: fullscreen) ?? false
     }
     private lazy var toolOrchestrator = NexToolOrchestrator(registry: memory.registry)
-    private lazy var toolSearch = NexToolSearchService(registry: memory.registry)
+    private lazy var toolSearch = NexToolSearchService(registry: memory.registry, computerRegistry: computerRegistry)
     private var memoryObservation: AnyCancellable?
     private var toolEventTask: Task<Void, Never>?
     private var codexProgressMonitor: CodexProgressMonitor?
@@ -337,6 +339,8 @@ final class NotchController: ObservableObject {
                 await memory.prepareToolRegistry()
                 try? await webSearch.registerIfNeeded()
                 try? await youtubeTools.registerIfNeeded()
+                try? await terminalActions.register(on: computerRegistry)
+                try? await toolSearch.registerIfNeeded()
             }
             installCommandHoldMonitor()
             installPointerMonitor()
@@ -520,6 +524,7 @@ final class NotchController: ObservableObject {
                 await memory.prepareToolRegistry()
                 try? await webSearch.registerIfNeeded()
                 try? await youtubeTools.registerIfNeeded()
+                try? await terminalActions.register(on: computerRegistry)
                 try? await toolSearch.registerIfNeeded()
                 let allDefinitions = await memory.registry.definitions()
                 let discovery = await toolSearch.search(query: prompt)
