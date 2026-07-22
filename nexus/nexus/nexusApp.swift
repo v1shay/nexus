@@ -165,6 +165,9 @@ final class NotchController: ObservableObject {
     var musicEnergy: CGFloat { music.energy }
     @Published private(set) var mediaOverlayTab: MediaTab?
     @Published private(set) var isMediaFullscreen = false
+    @Published private(set) var mediaPlaybackWidth: CGFloat?
+
+    var currentMediaPlaybackWidth: CGFloat { mediaPlaybackWidth ?? currentSize.width }
 
     /// The media mark is an explicit source control. Hovering the surrounding
     /// compact notch does not consume it.
@@ -180,9 +183,19 @@ final class NotchController: ObservableObject {
     func openMediaOverlay() {
         guard interaction.presentation == .idle, let screen else { return }
         isMediaFullscreen = false
+        mediaPlaybackWidth = nil
         mediaOverlayTab = music.activeYouTubeTab
         interaction.showMediaOverlay()
         resize(to: mediaOverlayTab == nil ? expandedSize(for: screen) : mediaPlaybackSize(for: screen), animated: true)
+    }
+
+    /// The player stays 16:9 but can be widened or narrowed for the current
+    /// media session. This intentionally does not persist between videos.
+    func resizeMediaPlayback(startingAt startWidth: CGFloat, translation: CGFloat) {
+        guard mediaOverlayTab != nil, !isMediaFullscreen, let screen else { return }
+        let limits = mediaPlaybackWidthLimits(for: screen)
+        mediaPlaybackWidth = min(max(startWidth + translation, limits.min), limits.max)
+        resize(to: mediaPlaybackSize(for: screen), animated: false)
     }
 
     /// A validated YouTube tool request lands here after it has selected an
@@ -190,7 +203,10 @@ final class NotchController: ObservableObject {
     /// expand the already-playing surface.
     private func requestYouTubePlayback(_ tab: MediaTab?, fullscreen: Bool) -> Bool {
         guard screen != nil else { return false }
-        if let tab { mediaOverlayTab = tab }
+        if let tab, mediaOverlayTab?.tab.id != tab.tab.id {
+            mediaPlaybackWidth = nil
+            mediaOverlayTab = tab
+        }
         guard mediaOverlayTab != nil else { return false }
         isMediaFullscreen = fullscreen || isMediaFullscreen
         return true
@@ -1123,6 +1139,7 @@ final class NotchController: ObservableObject {
         guard isExpanded, let screen else { return }
         mediaOverlayTab = nil
         isMediaFullscreen = false
+        mediaPlaybackWidth = nil
         pendingYouTubePlayback = nil
         pendingYouTubeFullscreen = false
         interaction.hideOverlay()
@@ -1187,7 +1204,9 @@ final class NotchController: ObservableObject {
         let changed = wasShowingMusic != isShowing
         wasShowingMusic = isShowing
         objectWillChange.send()
-        guard changed, let screen else { return }
+        // Audio polling continues while a browser video is open. That refresh
+        // must never reclaim the panel from the player or overwrite its size.
+        guard changed, mediaOverlayTab == nil, let screen else { return }
         resize(to: idleSize(for: screen), animated: true)
     }
 
@@ -1198,8 +1217,16 @@ final class NotchController: ObservableObject {
     /// Media gets a temporary wider 16:9 canvas. It is derived solely from
     /// the present screen and resets on dismissal, never a persisted setting.
     private func mediaPlaybackSize(for screen: NSScreen) -> CGSize {
-        let width = min(820, screen.frame.width * 0.62)
+        let defaultWidth = min(820, screen.frame.width * 0.62)
+        let limits = mediaPlaybackWidthLimits(for: screen)
+        let width = min(max(mediaPlaybackWidth ?? defaultWidth, limits.min), limits.max)
         return CGSize(width: width, height: width * 9 / 16)
+    }
+
+    private func mediaPlaybackWidthLimits(for screen: NSScreen) -> (min: CGFloat, max: CGFloat) {
+        let minimum = min(480, screen.frame.width * 0.42)
+        let maximum = min(1_100, screen.frame.width * 0.92)
+        return (minimum, max(minimum, maximum))
     }
 
     private func listeningSize(for screen: NSScreen) -> CGSize {

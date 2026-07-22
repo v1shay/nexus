@@ -140,6 +140,7 @@ private struct MusicPlaybackIndicator: View {
 /// top-level watch page gives WKWebView the same client identity as a normal
 /// browser page, while the overlay remains a transient playback surface.
 private struct YouTubePlaybackOverlay: View {
+    @EnvironmentObject private var notch: NotchController
     let tab: MediaTab
     @State private var isLoading = true
 
@@ -155,10 +156,45 @@ private struct YouTubePlaybackOverlay: View {
                     YouTubePlayerLoadingAnimation()
                         .transition(.opacity)
                 }
+
+                if !isLoading, !notch.isMediaFullscreen {
+                    MediaPlaybackResizeGrip()
+                        .padding(12)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing)
+                }
             }
             .background(.black)
             .animation(.easeOut(duration: 0.2), value: isLoading)
         }
+    }
+}
+
+/// A minimal lower-right handle. Drag horizontally to resize the temporary
+/// player canvas while preserving the video aspect ratio.
+private struct MediaPlaybackResizeGrip: View {
+    @EnvironmentObject private var notch: NotchController
+    @State private var startWidth: CGFloat?
+
+    var body: some View {
+        Image(systemName: "arrow.up.left.and.arrow.down.right")
+            .font(.system(size: 10, weight: .bold))
+            .foregroundStyle(.white.opacity(0.68))
+            .frame(width: 28, height: 28)
+            .contentShape(Rectangle())
+            .gesture(
+                DragGesture(minimumDistance: 1)
+                    .onChanged { value in
+                        if startWidth == nil { startWidth = notch.currentMediaPlaybackWidth }
+                        if let startWidth {
+                            notch.resizeMediaPlayback(startingAt: startWidth, translation: value.translation.width)
+                        }
+                    }
+                    .onEnded { _ in
+                        startWidth = nil
+                    }
+            )
+            .accessibilityLabel("Resize video player")
+            .accessibilityHint("Drag left or right to change the player size")
     }
 }
 
