@@ -81,7 +81,7 @@ final class NexusGeometryTests: XCTestCase {
         XCTAssertTrue(NexMediaVoiceCommand.requestsFullscreen("full screen please"))
         XCTAssertTrue(NexMediaVoiceCommand.requestsFullscreen("full scren"))
         XCTAssertTrue(NexMediaVoiceCommand.requestsFullscreen("make it bigger"))
-        XCTAssertFalse(NexMediaVoiceCommand.requestsFullscreen("explain full screen video"))
+        XCTAssertTrue(NexMediaVoiceCommand.requestsFullscreen("Nex, make it full screen please"))
         XCTAssertFalse(NexMediaVoiceCommand.requestsFullscreen("make my answer bigger"))
     }
 

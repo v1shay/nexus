@@ -38,8 +38,8 @@ enum NexMediaVoiceCommand {
             "make this bigger"
         ]
 
-        return normalized == "enlarge"
-            || explicitPhrases.contains { normalized == $0 || normalized.hasPrefix("\($0) ") }
+        return normalized.split(separator: " ").contains("enlarge")
+            || explicitPhrases.contains { normalized.contains($0) }
     }
 }
 
