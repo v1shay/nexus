@@ -31,6 +31,10 @@ enum NexJSONValue: Codable, Equatable, Sendable {
     }
 
     var string: String? { if case .string(let value) = self { value } else { nil } }
+    var number: Double? { if case .number(let value) = self { value } else { nil } }
+    var bool: Bool? { if case .bool(let value) = self { value } else { nil } }
+    var array: [NexJSONValue]? { if case .array(let value) = self { value } else { nil } }
+    var object: [String: NexJSONValue]? { if case .object(let value) = self { value } else { nil } }
     var integer: Int? {
         guard case .number(let value) = self, value.rounded() == value else { return nil }
         return Int(value)
@@ -48,6 +52,7 @@ enum NexToolFieldType: String, Codable, Sendable {
     case number
     case boolean
     case stringArray = "string_array"
+    case array
 }
 
 struct NexToolFieldSchema: Codable, Equatable, Sendable {
@@ -102,6 +107,7 @@ struct NexToolInputSchema: Codable, Equatable, Sendable {
             case .number: if case .number = value { valid = true } else { valid = false }
             case .boolean: if case .bool = value { valid = true } else { valid = false }
             case .stringArray: valid = value.strings != nil
+            case .array: if case .array = value { valid = true } else { valid = false }
             }
             guard valid else { throw NexToolError.invalidType(field: name, expected: field.type) }
             if !field.allowedValues.isEmpty, let string = value.string,
