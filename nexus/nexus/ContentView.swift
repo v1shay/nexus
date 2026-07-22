@@ -84,7 +84,15 @@ private struct MusicPlaybackIndicator: View {
     @ViewBuilder
     private var brandMark: some View {
         if let source = notch.musicBrowserSource {
-            ToolIconView(source: .svg(data: source.svg, fallbackSystemName: "play.rectangle.fill"), size: 20)
+            if case .x = source {
+                // The user-supplied Icons8 X PNG is black on transparency.
+                // Invert only the glyph so it remains visible on the black
+                // notch without reintroducing a custom background/tile.
+                ToolIconView(source: .svg(data: source.svg, fallbackSystemName: "xmark"), size: 20)
+                    .colorInvert()
+            } else {
+                ToolIconView(source: .svg(data: source.svg, fallbackSystemName: "play.rectangle.fill"), size: 20)
+            }
         } else if notch.musicTrack != nil {
             ToolIconView(source: .svg(data: Self.spotifySVG, fallbackSystemName: "music.note"), size: 20)
         } else {
