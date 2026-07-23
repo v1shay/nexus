@@ -132,7 +132,15 @@ final class NexPrimaryToolPlannerTests: XCTestCase {
         let attempt = try XCTUnwrap(
             NexusManagedCloudInferenceStore().configurations().first(where: { $0.provider == .nvidiaNIM })
         )
-        let plan = try await livePlan(using: attempt.configuration)
+        // Exercise the public NVIDIA preset path, not just the internal
+        // managed fallback representation.
+        let configuration = NexusAPIProviderConfiguration(
+            kind: .nvidiaNIM,
+            baseURL: attempt.configuration.baseURL,
+            model: NexusAPIProviderKind.nvidiaNIM.defaultModel,
+            apiKey: attempt.configuration.apiKey
+        )
+        let plan = try await livePlan(using: configuration)
         XCTAssertEqual(Set(plan.actions.map(\.tool)), ["memory_search", "web_search"])
         XCTAssertGreaterThanOrEqual(plan.actions.first(where: { $0.tool == "web_search" })?.arguments["query"]?.string?.split(separator: " ").count ?? 0, 4)
     }
@@ -143,12 +151,15 @@ final class NexPrimaryToolPlannerTests: XCTestCase {
             "Set NEXUS_LIVE_CLOUD_TEST=1 to run the live Gemini routing test."
         )
         let secrets = NexusKeychainSecretStore(service: "na.nexus.model-provider")
-        let keyData = try XCTUnwrap(try secrets.data(for: "primary-model-api-key.v1"))
+        let keyData = try XCTUnwrap(
+            try secrets.data(for: NexusAPIProviderKind.gemini.keyAccount)
+                ?? secrets.data(for: "primary-model-api-key.v1")
+        )
         let key = try XCTUnwrap(String(data: keyData, encoding: .utf8))
         let configuration = NexusAPIProviderConfiguration(
             kind: .gemini,
-            baseURL: URL(string: "https://generativelanguage.googleapis.com/v1beta")!,
-            model: "gemini-2.5-flash",
+            baseURL: URL(string: NexusAPIProviderKind.gemini.defaultBaseURL)!,
+            model: NexusAPIProviderKind.gemini.defaultModel,
             apiKey: key
         )
         let plan = try await livePlan(using: configuration)

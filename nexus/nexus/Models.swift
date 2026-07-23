@@ -67,6 +67,7 @@ struct LocalModel: Identifiable, Hashable, Codable, Sendable {
 enum ModelProviderIdentity: String, Equatable, Sendable {
     case openAI
     case gemini
+    case nvidia
     case qwen
     case mistral
     case deepSeek
@@ -98,6 +99,7 @@ enum ModelProviderResolver {
         baseURL: String
     ) -> ModelProviderIdentity {
         if kind == .gemini { return .gemini }
+        if kind == .nvidiaNIM { return .nvidia }
         if URL(string: baseURL)?.host?.lowercased() == "api.openai.com" {
             return .openAI
         }
@@ -157,6 +159,7 @@ enum ModelBrandArtwork {
         switch identity {
         case .openAI: "openai.webp"
         case .gemini: "gemini-color.svg"
+        case .nvidia: "nvidia-color.svg"
         case .qwen: "qwen-color.svg"
         case .mistral: "mistral-color.svg"
         case .deepSeek: "icons8-deepseek-94.png"
@@ -182,6 +185,26 @@ enum ModelBrandArtwork {
             return NSImage(data: data)
         }
         return nil
+    }
+
+    /// AppKit menu items do not consistently honor SwiftUI's resizable frame
+    /// when the source is an SVG with CSS `em` dimensions. Rasterizing the
+    /// supplied mark into a fixed square before it reaches a Picker prevents
+    /// the giant provider-logo menu shown in the API sheet.
+    static func icon(for identity: ModelProviderIdentity, size: CGFloat) -> NSImage? {
+        guard let source = image(for: identity) else { return nil }
+        let target = NSSize(width: size, height: size)
+        let rendered = NSImage(size: target)
+        rendered.lockFocus()
+        source.draw(in: NSRect(origin: .zero, size: target),
+                    from: NSRect(origin: .zero, size: source.size),
+                    operation: .sourceOver,
+                    fraction: 1,
+                    respectFlipped: true,
+                    hints: [.interpolation: NSImageInterpolation.high])
+        rendered.unlockFocus()
+        rendered.isTemplate = false
+        return rendered
     }
 }
 
@@ -217,11 +240,8 @@ struct ModelProviderIcon: View {
 
     var body: some View {
         Group {
-            if let image = ModelBrandArtwork.image(for: identity) {
+            if let image = ModelBrandArtwork.icon(for: identity, size: size) {
                 Image(nsImage: image)
-                    .resizable()
-                    .interpolation(.high)
-                    .scaledToFit()
             } else {
                 Image(systemName: ModelBrandArtwork.fallbackSystemName)
                     .resizable()

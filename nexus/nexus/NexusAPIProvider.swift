@@ -1,15 +1,58 @@
 import Foundation
 
 enum NexusAPIProviderKind: String, CaseIterable, Codable, Identifiable, Sendable {
+    /// Kept for previously saved custom configurations and internal managed
+    /// OpenAI-compatible providers. The API sheet intentionally exposes only
+    /// the two verified presets below.
     case openAICompatible
     case gemini
+    case nvidiaNIM
 
     var id: String { rawValue }
-    var title: String { self == .openAICompatible ? "OpenAI-compatible" : "Gemini" }
+    static let supportedPresets: [Self] = [.gemini, .nvidiaNIM]
+
+    var title: String {
+        switch self {
+        case .openAICompatible: "OpenAI-compatible"
+        case .gemini: "Gemini"
+        case .nvidiaNIM: "NVIDIA NIM"
+        }
+    }
+
     var defaultBaseURL: String {
         switch self {
         case .openAICompatible: "https://api.openai.com/v1"
-        case .gemini: "https://generativelanguage.googleapis.com/v1beta"
+        // Gemini's OpenAI-compatible endpoint is deliberate. It is the path
+        // that works with Nexus's streaming tool-plan and response transport.
+        case .gemini: "https://generativelanguage.googleapis.com/v1beta/openai"
+        case .nvidiaNIM: "https://integrate.api.nvidia.com/v1"
+        }
+    }
+
+    var defaultModel: String {
+        switch self {
+        case .openAICompatible: ""
+        case .gemini: "gemini-2.5-flash"
+        case .nvidiaNIM: "openai/gpt-oss-120b"
+        }
+    }
+
+    var keyAccount: String {
+        switch self {
+        case .openAICompatible: "primary-model-api-key.v1"
+        case .gemini: "gemini-api-key.v1"
+        case .nvidiaNIM: "nvidia.nim.v1"
+        }
+    }
+
+    var helpText: String {
+        switch self {
+        case .gemini:
+            "Gemini via Google’s OpenAI-compatible endpoint. Use a Google AI Studio API key."
+        case .nvidiaNIM:
+            "NVIDIA NIM GPT-OSS 120B via NVIDIA’s OpenAI-compatible inference endpoint."
+        case .openAICompatible:
+            "Custom OpenAI-compatible endpoint."
         }
     }
 }
@@ -37,33 +80,57 @@ final class NexusAPIProviderStore: ObservableObject {
 
     private let defaults: UserDefaults
     private let secretStore: NexusSecretStore
+    private let managedSecretStore: NexusSecretStore
     private let settingsKey = "nexus.api-provider.settings.v1"
-    private let keyAccount = "primary-model-api-key.v1"
+    private let legacyGeminiKeyAccount = "primary-model-api-key.v1"
 
     init(
         defaults: UserDefaults = .standard,
-        secretStore: NexusSecretStore = NexusKeychainSecretStore(service: "na.nexus.model-provider")
+        secretStore: NexusSecretStore = NexusKeychainSecretStore(service: "na.nexus.model-provider"),
+        managedSecretStore: NexusSecretStore = NexusKeychainSecretStore(service: NexusManagedCloudInferenceStore.keychainService)
     ) {
         self.defaults = defaults
         self.secretStore = secretStore
+        self.managedSecretStore = managedSecretStore
         let stored = defaults.dictionary(forKey: settingsKey)
+        let storedBaseURL = stored?["baseURL"] as? String ?? ""
+        let storedModel = stored?["model"] as? String ?? ""
+        let restoredKind = NexusAPIProviderKind(rawValue: stored?["kind"] as? String ?? "") ?? .gemini
+        // Earlier releases could save Gemini as a generic OpenAI-compatible
+        // provider. Identify that specific legacy configuration so the user
+        // lands on the working, named Gemini preset rather than a blank picker.
+        let inferredKind: NexusAPIProviderKind
+        if restoredKind == .openAICompatible,
+           storedBaseURL.localizedCaseInsensitiveContains("generativelanguage.googleapis.com") || storedModel.lowercased().contains("gemini") {
+            inferredKind = .gemini
+        } else if restoredKind == .openAICompatible,
+                  storedBaseURL.localizedCaseInsensitiveContains("integrate.api.nvidia.com") {
+            inferredKind = .nvidiaNIM
+        } else {
+            inferredKind = restoredKind
+        }
         self.enabled = stored?["enabled"] as? Bool ?? false
-        self.kind = NexusAPIProviderKind(rawValue: stored?["kind"] as? String ?? "") ?? .openAICompatible
-        self.baseURL = stored?["baseURL"] as? String ?? NexusAPIProviderKind.openAICompatible.defaultBaseURL
-        self.model = stored?["model"] as? String ?? ""
-        self.savedKey = stored?["hasKey"] as? Bool ?? false
+        self.kind = inferredKind
+        // The visible Gemini and NIM choices are verified presets, not loose
+        // endpoint fields. Normalize old saved native-Gemini URLs on launch.
+        self.baseURL = inferredKind == .openAICompatible
+            ? (storedBaseURL.isEmpty ? inferredKind.defaultBaseURL : storedBaseURL)
+            : inferredKind.defaultBaseURL
+        self.model = inferredKind == .openAICompatible
+            ? (storedModel.isEmpty ? inferredKind.defaultModel : storedModel)
+            : inferredKind.defaultModel
+        self.savedKey = false
+        self.savedKey = (try? self.keyData(for: inferredKind)) != nil
+        if inferredKind != .openAICompatible { persist() }
     }
 
     func selectKind(_ newKind: NexusAPIProviderKind, replacing previous: NexusAPIProviderKind) {
         kind = newKind
-        if baseURL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-            || baseURL == previous.defaultBaseURL
-            || (newKind == .gemini && isLegacyGeminiOpenAIEndpoint(baseURL)) {
-            baseURL = newKind.defaultBaseURL
-        }
-        if model.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, newKind == .gemini {
-            model = "gemini-2.5-flash"
-        }
+        baseURL = newKind.defaultBaseURL
+        model = newKind.defaultModel
+        savedKey = (try? keyData(for: newKind)) != nil
+        errorMessage = nil
+        connectionMessage = nil
     }
 
     func save() throws {
@@ -73,7 +140,7 @@ final class NexusAPIProviderStore: ObservableObject {
             throw LocalModelError.invalidResponse("Enter a valid API base URL")
         }
         if !apiKeyInput.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            try secretStore.set(Data(apiKeyInput.utf8), for: keyAccount)
+            try keyStore(for: kind).set(Data(apiKeyInput.utf8), for: kind.keyAccount)
             apiKeyInput = ""
             savedKey = true
         }
@@ -89,21 +156,11 @@ final class NexusAPIProviderStore: ObservableObject {
 
     func configuration() throws -> NexusAPIProviderConfiguration {
         guard enabled else { throw LocalModelError.invalidResponse("The API provider is not enabled") }
-        guard let data = try secretStore.data(for: keyAccount),
+        guard let data = try keyData(for: kind),
               let key = String(data: data, encoding: .utf8), !key.isEmpty else {
             savedKey = false
             persist()
             throw LocalModelError.invalidResponse("Add an API key in the model window")
-        }
-        // Gemini uses its native GenerateContent endpoint, not its separate
-        // OpenAI-compatibility path. Older Nexus builds could persist either
-        // OpenAI's default URL or `/v1beta/openai`, which makes native Gemini
-        // requests hit a guaranteed 404.
-        if kind == .gemini,
-           normalizedBaseURL() == NexusAPIProviderKind.openAICompatible.defaultBaseURL
-                || isLegacyGeminiOpenAIEndpoint(baseURL) {
-            baseURL = NexusAPIProviderKind.gemini.defaultBaseURL
-            persist()
         }
         guard let endpoint = URL(string: normalizedBaseURL()) else {
             throw LocalModelError.invalidResponse("Enter a valid API base URL")
@@ -142,18 +199,25 @@ final class NexusAPIProviderStore: ObservableObject {
     private func normalizedBaseURL() -> String {
         let value = baseURL.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !value.isEmpty else { return kind.defaultBaseURL }
-        if kind == .gemini, isLegacyGeminiOpenAIEndpoint(value) {
-            return NexusAPIProviderKind.gemini.defaultBaseURL
-        }
         return value.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
     }
 
-    private func isLegacyGeminiOpenAIEndpoint(_ candidate: String) -> Bool {
-        guard let components = URLComponents(string: candidate.trimmingCharacters(in: .whitespacesAndNewlines)),
-              components.host?.localizedCaseInsensitiveCompare("generativelanguage.googleapis.com") == .orderedSame else {
-            return false
+    private func keyStore(for provider: NexusAPIProviderKind) -> NexusSecretStore {
+        provider == .nvidiaNIM ? managedSecretStore : secretStore
+    }
+
+    private func keyData(for provider: NexusAPIProviderKind) throws -> Data? {
+        if let data = try keyStore(for: provider).data(for: provider.keyAccount), !data.isEmpty {
+            return data
         }
-        return components.path.lowercased().hasSuffix("/openai")
+        // Migrate the earlier single Gemini field once, without exposing or
+        // duplicating the secret outside Keychain.
+        guard provider == .gemini,
+              let legacy = try secretStore.data(for: legacyGeminiKeyAccount), !legacy.isEmpty else {
+            return nil
+        }
+        try secretStore.set(legacy, for: provider.keyAccount)
+        return legacy
     }
 
     private func persist() {
@@ -224,11 +288,23 @@ enum NexusAPIProviderClient {
         onDelta: @escaping @Sendable (String, String) async -> Void
     ) async throws -> String {
         switch configuration.kind {
-        case .openAICompatible:
+        case .openAICompatible, .nvidiaNIM:
             try await openAICompatible(configuration, messages, temperature, maximumTokens, onDelta)
         case .gemini:
-            try await gemini(configuration, messages, temperature, maximumTokens, onDelta)
+            // The configured Gemini preset is Google's OpenAI-compatible API.
+            // Keep native Gemini support for callers that supply the native
+            // base URL programmatically.
+            if isGeminiOpenAICompatibleEndpoint(configuration.baseURL) {
+                try await openAICompatible(configuration, messages, temperature, maximumTokens, onDelta)
+            } else {
+                try await gemini(configuration, messages, temperature, maximumTokens, onDelta)
+            }
         }
+    }
+
+    private static func isGeminiOpenAICompatibleEndpoint(_ url: URL) -> Bool {
+        url.host?.localizedCaseInsensitiveCompare("generativelanguage.googleapis.com") == .orderedSame
+            && url.path.lowercased().hasSuffix("/openai")
     }
 
     private static func openAICompatible(

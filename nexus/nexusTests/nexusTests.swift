@@ -292,7 +292,7 @@ final class NexusGeometryTests: XCTestCase {
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
         defer { defaults.removePersistentDomain(forName: suite) }
         let secrets = NexusMemorySecretStore()
-        let store = NexusAPIProviderStore(defaults: defaults, secretStore: secrets)
+        let store = NexusAPIProviderStore(defaults: defaults, secretStore: secrets, managedSecretStore: secrets)
         store.kind = .gemini
         store.baseURL = NexusAPIProviderKind.gemini.defaultBaseURL
         store.model = "gemini-2.5-flash"
@@ -313,7 +313,8 @@ final class NexusGeometryTests: XCTestCase {
         let suite = "nexus-api-provider-kind-test-\(UUID().uuidString)"
         let defaults = UserDefaults(suiteName: suite)!
         defer { defaults.removePersistentDomain(forName: suite) }
-        let store = NexusAPIProviderStore(defaults: defaults, secretStore: NexusMemorySecretStore())
+        let secrets = NexusMemorySecretStore()
+        let store = NexusAPIProviderStore(defaults: defaults, secretStore: secrets, managedSecretStore: secrets)
 
         store.baseURL = NexusAPIProviderKind.openAICompatible.defaultBaseURL
         store.selectKind(.gemini, replacing: .openAICompatible)
@@ -330,13 +331,39 @@ final class NexusGeometryTests: XCTestCase {
 
         let attempts = try store.configurations()
         XCTAssertEqual(attempts.map(\.provider), [.inception, .nvidiaNIM])
-        XCTAssertEqual(attempts.map { $0.configuration.model }, ["mercury-2", "moonshotai/kimi-k2.6"])
+        XCTAssertEqual(attempts.map { $0.configuration.model }, ["mercury-2", "openai/gpt-oss-120b"])
         XCTAssertEqual(attempts.map { $0.configuration.baseURL.absoluteString }, [
             "https://api.inceptionlabs.ai/v1",
             "https://integrate.api.nvidia.com/v1"
         ])
         XCTAssertEqual(attempts[0].configuration.apiKey, "inception-key")
         XCTAssertEqual(attempts[1].configuration.apiKey, "nvidia-key")
+    }
+
+    @MainActor
+    func testNVIDIAPresetUsesDedicatedKeychainAccountAndVerifiedDefaults() throws {
+        let suite = "nexus-nvidia-provider-test-\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let standardSecrets = NexusMemorySecretStore()
+        let managedSecrets = NexusMemorySecretStore()
+        let store = NexusAPIProviderStore(
+            defaults: defaults,
+            secretStore: standardSecrets,
+            managedSecretStore: managedSecrets
+        )
+        store.selectKind(.nvidiaNIM, replacing: .gemini)
+        store.apiKeyInput = "nvidia-test-key"
+        store.enabled = true
+
+        try store.save()
+        let configuration = try store.configuration()
+
+        XCTAssertEqual(configuration.kind, .nvidiaNIM)
+        XCTAssertEqual(configuration.baseURL.absoluteString, "https://integrate.api.nvidia.com/v1")
+        XCTAssertEqual(configuration.model, "openai/gpt-oss-120b")
+        XCTAssertEqual(try managedSecrets.data(for: "nvidia.nim.v1"), Data("nvidia-test-key".utf8))
+        XCTAssertNil(try standardSecrets.data(for: "nvidia.nim.v1"))
     }
 
     func testRequestedModelAndConnectCameraSizing() {
@@ -1040,8 +1067,8 @@ final class NexusGeometryTests: XCTestCase {
         XCTAssertEqual(ModelBrandArtwork.assetURL(for: model("Mistral-Small")).lastPathComponent, "mistral-color.svg")
         XCTAssertEqual(ModelBrandArtwork.assetURL(for: model("DeepSeek-R1")).lastPathComponent, "icons8-deepseek-94.png")
         XCTAssertEqual(ModelBrandArtwork.assetURL(for: model("gemma-3-12b")).lastPathComponent, "gemma-color.svg")
-        XCTAssertEqual(ModelBrandArtwork.assetURL(for: model("openai/gpt-oss-20b")).lastPathComponent, "icons-8-chatgpt-48.png")
-        XCTAssertEqual(ModelBrandArtwork.assetURL(for: LocalModel(customIdentifier: "gpt-oss:latest", backend: .ollama)).lastPathComponent, "icons-8-chatgpt-48.png")
+        XCTAssertEqual(ModelBrandArtwork.assetURL(for: model("openai/gpt-oss-20b")).lastPathComponent, "openai.webp")
+        XCTAssertEqual(ModelBrandArtwork.assetURL(for: LocalModel(customIdentifier: "gpt-oss:latest", backend: .ollama)).lastPathComponent, "openai.webp")
         XCTAssertEqual(ModelBrandArtwork.assetURL(for: LocalModel(customIdentifier: "llama3.2:3b", backend: .ollama)).lastPathComponent, "ollama-dark.svg")
         XCTAssertEqual(ModelBrandArtwork.assetURL(for: model("phi-4")).lastPathComponent, "icons8-linux-48.png")
     }

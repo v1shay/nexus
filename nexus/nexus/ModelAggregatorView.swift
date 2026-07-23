@@ -417,32 +417,33 @@ private struct NexusAPIProviderView: View {
         VStack(alignment: .leading, spacing: 16) {
             HStack { Text("API model").font(.headline); Spacer(); Toggle("Use", isOn: $store.enabled).labelsHidden() }
             Picker("Provider", selection: $store.kind) {
-                ForEach(NexusAPIProviderKind.allCases) { provider in
-                    HStack(spacing: 6) {
-                        ModelProviderIcon(
-                            identity: ModelProviderResolver.identity(
-                                for: provider,
-                                modelID: store.model,
-                                baseURL: provider.defaultBaseURL
-                            ),
-                            size: 15
-                        )
-                        Text(provider.title)
-                    }
-                    .tag(provider)
+                ForEach(NexusAPIProviderKind.supportedPresets) { provider in
+                    APIProviderPickerLabel(provider: provider)
+                        .tag(provider)
                 }
             }
             .onChange(of: store.kind) { previous, next in
                 store.selectKind(next, replacing: previous)
             }
-            TextField("Base URL", text: $store.baseURL)
-            TextField("Model", text: $store.model)
-            SecureField(store.savedKey ? "API key (saved — enter to replace)" : "API key", text: $store.apiKeyInput)
-            if store.kind == .gemini {
-                Text("Requires a Google AI Studio API key, not a Google OAuth client ID.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+            .labelsHidden()
+
+            VStack(alignment: .leading, spacing: 8) {
+                LabeledContent("Endpoint") {
+                    Text(store.baseURL)
+                        .font(.system(.caption, design: .monospaced))
+                        .textSelection(.enabled)
+                        .lineLimit(1)
+                }
+                LabeledContent("Model") {
+                    Text(store.model)
+                        .font(.system(.caption, design: .monospaced))
+                        .textSelection(.enabled)
+                }
             }
+            SecureField(store.savedKey ? "API key (saved — enter to replace)" : "API key", text: $store.apiKeyInput)
+            Text(store.kind.helpText)
+                .font(.caption)
+                .foregroundStyle(.secondary)
             if let error = store.errorMessage { Text(error).font(.caption).foregroundStyle(.red) }
             if let connection = store.connectionMessage { Text(connection).font(.caption).foregroundStyle(.green) }
             HStack {
@@ -460,7 +461,28 @@ private struct NexusAPIProviderView: View {
             }
         }
         .padding(24)
-        .frame(width: 440)
+        .frame(width: 520)
+    }
+}
+
+/// Deliberately rasterized, text-sized marks. Supplying an SVG directly to an
+/// AppKit Picker can make it use its CSS/intrinsic canvas instead of the SwiftUI
+/// frame, which is why Gemini previously filled the entire menu.
+private struct APIProviderPickerLabel: View {
+    let provider: NexusAPIProviderKind
+
+    var body: some View {
+        HStack(spacing: 6) {
+            ModelProviderIcon(
+                identity: ModelProviderResolver.identity(
+                    for: provider,
+                    modelID: provider.defaultModel,
+                    baseURL: provider.defaultBaseURL
+                ),
+                size: 14
+            )
+            Text(provider.title)
+        }
     }
 }
 

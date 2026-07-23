@@ -323,6 +323,29 @@ final class ModelDownloadViewModel: ObservableObject {
         onDelta: @escaping @Sendable (_ delta: String, _ accumulated: String) async -> Void
     ) async throws -> String {
         cloudFallbackMessage = nil
+
+        // The provider selected in the API sheet is an explicit user choice,
+        // so it must run before Nexus's managed fallback chain. Previously
+        // Inception could answer first even while the user had selected
+        // Gemini, making the API selector effectively cosmetic.
+        if apiProvider.enabled {
+            do {
+                return try await NexusAPIProviderClient.streamChat(
+                    configuration: try apiProvider.configuration(),
+                    messages: messages,
+                    temperature: temperature,
+                    maximumTokens: maximumTokens,
+                    onDelta: onDelta
+                )
+            } catch is CancellationError {
+                throw CancellationError()
+            } catch {
+                let apiFailure = "Selected API provider failed: \(error.localizedDescription)"
+                cloudFallbackMessage = apiFailure
+                apiProvider.recordError(error)
+            }
+        }
+
         let cloudAttempts: [(provider: NexusManagedCloudProvider, configuration: NexusAPIProviderConfiguration)]
         do {
             cloudAttempts = try managedCloud.configurations()
@@ -367,29 +390,6 @@ final class ModelDownloadViewModel: ObservableObject {
             }
         }
 
-        if apiProvider.enabled {
-            do {
-                return try await NexusAPIProviderClient.streamChat(
-                    configuration: try apiProvider.configuration(),
-                    messages: messages,
-                    temperature: temperature,
-                    maximumTokens: maximumTokens,
-                    onDelta: onDelta
-                )
-            } catch {
-                // A configured API provider (including Gemini) is an
-                // optional cloud fallback, never a dead end. If it rejects a
-                // request before output starts, preserve the diagnostic and
-                // continue to the selected remote/local model.
-                let apiFailure = "API fallback failed: \(error.localizedDescription)"
-                if let existingFailure = cloudFallbackMessage, !existingFailure.isEmpty {
-                    cloudFallbackMessage = "\(existingFailure) \(apiFailure)"
-                } else {
-                    cloudFallbackMessage = apiFailure
-                }
-                apiProvider.recordError(error)
-            }
-        }
         activeCloudProvider = nil
         guard let activeModel else {
             throw LocalModelError.invalidResponse("Choose an installed model in the model window first")
