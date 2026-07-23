@@ -320,7 +320,14 @@ final class OllamaManager: @unchecked Sendable {
                     + messages.map { .init(role: $0.role, content: $0.content) },
                 stream: true,
                 think: false,
-                options: .init(temperature: 0, numPredict: 160),
+                // Native calls can include model-internal reasoning before the
+                // compact function arguments.  A small cap can therefore cut
+                // off otherwise-valid JSON (for example halfway through a
+                // web-search query), which makes the whole turn fail.  This is
+                // planning only, but it must have enough room to finish one
+                // complete call; the planner still returns as soon as Ollama
+                // finishes the tool response.
+                options: .init(temperature: 0, numPredict: 512),
                 tools: registeredTools
                     .filter { $0.permission != .writeMemory && $0.permission != .forgetMemory }
                     .map(OllamaToolPlanningRequest.Tool.init)

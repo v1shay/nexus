@@ -13,7 +13,7 @@ final class NexusGeometryTests: XCTestCase {
         let configured = try NexusManagedCloudInferenceStore(secrets: secrets).configurations()
 
         XCTAssertEqual(configured.map(\.provider), [.inception, .nvidiaNIM])
-        XCTAssertEqual(configured.map { $0.configuration.model }, ["mercury-2", "moonshotai/kimi-k2.6"])
+        XCTAssertEqual(configured.map { $0.configuration.model }, ["mercury-2", "openai/gpt-oss-120b"])
     }
 
     func testLiveManagedCloudChainFallsBackToInceptionWhenEnabled() async throws {

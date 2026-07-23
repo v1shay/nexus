@@ -56,7 +56,9 @@ final class NexusAPIProviderStore: ObservableObject {
 
     func selectKind(_ newKind: NexusAPIProviderKind, replacing previous: NexusAPIProviderKind) {
         kind = newKind
-        if baseURL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || baseURL == previous.defaultBaseURL {
+        if baseURL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            || baseURL == previous.defaultBaseURL
+            || (newKind == .gemini && isLegacyGeminiOpenAIEndpoint(baseURL)) {
             baseURL = newKind.defaultBaseURL
         }
         if model.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, newKind == .gemini {
@@ -93,10 +95,13 @@ final class NexusAPIProviderStore: ObservableObject {
             persist()
             throw LocalModelError.invalidResponse("Add an API key in the model window")
         }
-        // Repair the endpoint saved by the first API-provider build: the Picker
-        // updated `kind` before its change handler ran, so a Gemini selection
-        // could retain OpenAI's default endpoint.
-        if kind == .gemini, normalizedBaseURL() == NexusAPIProviderKind.openAICompatible.defaultBaseURL {
+        // Gemini uses its native GenerateContent endpoint, not its separate
+        // OpenAI-compatibility path. Older Nexus builds could persist either
+        // OpenAI's default URL or `/v1beta/openai`, which makes native Gemini
+        // requests hit a guaranteed 404.
+        if kind == .gemini,
+           normalizedBaseURL() == NexusAPIProviderKind.openAICompatible.defaultBaseURL
+                || isLegacyGeminiOpenAIEndpoint(baseURL) {
             baseURL = NexusAPIProviderKind.gemini.defaultBaseURL
             persist()
         }
@@ -136,7 +141,19 @@ final class NexusAPIProviderStore: ObservableObject {
 
     private func normalizedBaseURL() -> String {
         let value = baseURL.trimmingCharacters(in: .whitespacesAndNewlines)
-        return value.isEmpty ? kind.defaultBaseURL : value.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        guard !value.isEmpty else { return kind.defaultBaseURL }
+        if kind == .gemini, isLegacyGeminiOpenAIEndpoint(value) {
+            return NexusAPIProviderKind.gemini.defaultBaseURL
+        }
+        return value.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+    }
+
+    private func isLegacyGeminiOpenAIEndpoint(_ candidate: String) -> Bool {
+        guard let components = URLComponents(string: candidate.trimmingCharacters(in: .whitespacesAndNewlines)),
+              components.host?.localizedCaseInsensitiveCompare("generativelanguage.googleapis.com") == .orderedSame else {
+            return false
+        }
+        return components.path.lowercased().hasSuffix("/openai")
     }
 
     private func persist() {
@@ -172,7 +189,21 @@ enum NexusAPIProviderClient {
     private struct GeminiRequest: Encodable {
         struct Part: Encodable { let text: String }
         struct Content: Encodable { let role: String?; let parts: [Part] }
-        struct GenerationConfig: Encodable { let temperature: Double?; let maxOutputTokens: Int?; enum CodingKeys: String, CodingKey { case temperature; case maxOutputTokens = "maxOutputTokens" } }
+        struct GenerationConfig: Encodable {
+            struct ThinkingConfig: Encodable {
+                let thinkingBudget: Int
+            }
+
+            let temperature: Double?
+            let maxOutputTokens: Int?
+            let thinkingConfig: ThinkingConfig?
+
+            enum CodingKeys: String, CodingKey {
+                case temperature
+                case maxOutputTokens = "maxOutputTokens"
+                case thinkingConfig
+            }
+        }
         let systemInstruction: Content
         let contents: [Content]
         let generationConfig: GenerationConfig
@@ -264,7 +295,19 @@ enum NexusAPIProviderClient {
         request.httpBody = try JSONEncoder().encode(GeminiRequest(
             systemInstruction: .init(role: nil, parts: [.init(text: system)]),
             contents: contents,
-            generationConfig: .init(temperature: temperature, maxOutputTokens: maximumTokens)
+            // Gemini 2.5 Flash reserves a hidden thinking budget by default.
+            // Nexus does not surface that hidden chain of thought and users can
+            // explicitly enable visible thinking only for a supporting local
+            // model, so leave Gemini's invisible budget at zero. This also
+            // prevents a small planning request from spending its entire token
+            // limit before it produces the required JSON plan.
+            generationConfig: .init(
+                temperature: temperature,
+                maxOutputTokens: maximumTokens,
+                thinkingConfig: configuration.model.hasPrefix("gemini-2.5")
+                    ? .init(thinkingBudget: 0)
+                    : nil
+            )
         ))
         let (bytes, response) = try await URLSession.shared.bytes(for: request)
         try await requireSuccess(response, bytes: bytes, provider: "Gemini")

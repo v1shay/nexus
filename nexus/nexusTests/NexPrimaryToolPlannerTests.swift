@@ -124,6 +124,73 @@ final class NexPrimaryToolPlannerTests: XCTestCase {
         XCTAssertFalse(query.localizedCaseInsensitiveContains("let's search"))
     }
 
+    func testLiveNVIDIANIMProducesFocusedMultiToolPlanWhenEnabled() async throws {
+        try XCTSkipUnless(
+            ProcessInfo.processInfo.environment["NEXUS_LIVE_CLOUD_TEST"] == "1",
+            "Set NEXUS_LIVE_CLOUD_TEST=1 to run the live NVIDIA NIM routing test."
+        )
+        let attempt = try XCTUnwrap(
+            NexusManagedCloudInferenceStore().configurations().first(where: { $0.provider == .nvidiaNIM })
+        )
+        let plan = try await livePlan(using: attempt.configuration)
+        XCTAssertEqual(Set(plan.actions.map(\.tool)), ["memory_search", "web_search"])
+        XCTAssertGreaterThanOrEqual(plan.actions.first(where: { $0.tool == "web_search" })?.arguments["query"]?.string?.split(separator: " ").count ?? 0, 4)
+    }
+
+    func testLiveGeminiProducesFocusedMultiToolPlanWhenEnabled() async throws {
+        try XCTSkipUnless(
+            ProcessInfo.processInfo.environment["NEXUS_LIVE_CLOUD_TEST"] == "1",
+            "Set NEXUS_LIVE_CLOUD_TEST=1 to run the live Gemini routing test."
+        )
+        let secrets = NexusKeychainSecretStore(service: "na.nexus.model-provider")
+        let keyData = try XCTUnwrap(try secrets.data(for: "primary-model-api-key.v1"))
+        let key = try XCTUnwrap(String(data: keyData, encoding: .utf8))
+        let configuration = NexusAPIProviderConfiguration(
+            kind: .gemini,
+            baseURL: URL(string: "https://generativelanguage.googleapis.com/v1beta")!,
+            model: "gemini-2.5-flash",
+            apiKey: key
+        )
+        let plan = try await livePlan(using: configuration)
+        XCTAssertEqual(Set(plan.actions.map(\.tool)), ["memory_search", "web_search"])
+        XCTAssertGreaterThanOrEqual(plan.actions.first(where: { $0.tool == "memory_search" })?.arguments["query"]?.string?.split(separator: " ").count ?? 0, 4)
+    }
+
+    func testLiveLocalOllamaProducesFocusedMultiToolPlanWhenEnabled() async throws {
+        try XCTSkipUnless(
+            ProcessInfo.processInfo.environment["NEXUS_LIVE_LOCAL_TEST"] == "1",
+            "Set NEXUS_LIVE_LOCAL_TEST=1 to run the live Ollama routing test."
+        )
+        let manager = OllamaManager()
+        let names = try await manager.installedModelNames()
+        let model = ProcessInfo.processInfo.environment["NEXUS_LIVE_LOCAL_MODEL"] ?? "gpt-oss:latest"
+        try XCTSkipUnless(names.contains(model), "Install \(model) to run the local routing integration test.")
+        let firstPlan = try await manager.planTools(
+            model: model,
+            messages: NexPrimaryToolPlanner.planningMessages(
+                context: [.init(role: "user", content: "Based on my previous robotics project, should I apply to the current Conrad Challenge?")],
+                tools: tools()
+            ),
+            registeredTools: tools()
+        )
+        var executed = firstPlan.actions
+        if !executed.contains(where: { $0.tool == "web_search" }) {
+            let nextPlan = try await manager.planTools(
+                model: model,
+                messages: NexPrimaryToolPlanner.planningMessages(
+                    context: [
+                        .init(role: "user", content: "Based on my previous robotics project, should I apply to the current Conrad Challenge?"),
+                        .init(role: "system", content: "Tool result from memory_search: The user's robotics project was a vision-guided robotic arm. The current public Conrad Challenge details are still required before answering.")
+                    ],
+                    tools: tools()
+                ),
+                registeredTools: tools()
+            )
+            executed += nextPlan.actions
+        }
+        XCTAssertEqual(Set(executed.map(\.tool)), ["memory_search", "web_search"])
+    }
+
     func testStressParsesVagueMemoryAndWebPlansWithSeparateEvidenceQueries() {
         let plan = parse("""
         {"status":"Checking your project fit…","actions":[
@@ -177,6 +244,28 @@ final class NexPrimaryToolPlannerTests: XCTestCase {
         XCTAssertEqual(templateStatus.status, NexPrimaryToolPlan.fallback.status)
     }
 
+    func testMalformedPlannerOutputFallsBackWithoutBlockingTheConversation() {
+        // The planner is advisory. A model that answers in prose cannot be
+        // allowed to turn a simple greeting into a hard failure before the
+        // regular conversational generation even begins.
+        let plan = NexPrimaryToolPlanner.parse(
+            "Hello Sir — what would you like me to do?",
+            registeredTools: tools()
+        )
+        XCTAssertEqual(plan, .fallback)
+        XCTAssertTrue(plan.actions.isEmpty)
+    }
+
+    func testRepairsProviderOmittedToolWrapperBeforeStrictValidation() {
+        let plan = parse("""
+        {"actions":[
+          {"tool":"memory_search","arguments":{"query":"Vishay robotics project details"}},
+          "web_search","arguments":{"query":"2026 Conrad Challenge eligibility deadline"}}
+        ],"memory_write":null}
+        """)
+        XCTAssertEqual(Set(plan.actions.map(\.tool)), ["memory_search", "web_search"])
+    }
+
     func testDeduplicatesRepeatedActionsWhileKeepingModelQueryUntouched() {
         let plan = parse("""
         {"status":"Checking current rules…","actions":[
@@ -204,6 +293,21 @@ final class NexPrimaryToolPlannerTests: XCTestCase {
 
     private func parse(_ response: String) -> NexPrimaryToolPlan {
         NexPrimaryToolPlanner.parse(response, registeredTools: tools())
+    }
+
+    private func livePlan(using configuration: NexusAPIProviderConfiguration) async throws -> NexPrimaryToolPlan {
+        let messages = NexPrimaryToolPlanner.planningMessages(
+            context: [.init(role: "user", content: "Based on my previous robotics project, should I apply to the current Conrad Challenge?")],
+            tools: tools()
+        )
+        let raw = try await NexusAPIProviderClient.streamChat(
+            configuration: configuration,
+            messages: messages,
+            temperature: 0,
+            maximumTokens: 512,
+            onDelta: { _, _ in }
+        )
+        return try XCTUnwrap(NexPrimaryToolPlanner.parseStrict(raw, registeredTools: tools()), "Provider returned non-plan text: \(raw.prefix(300))")
     }
 
     private func tools() -> [NexRegisteredTool] {

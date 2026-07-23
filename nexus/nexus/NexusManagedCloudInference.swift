@@ -10,14 +10,19 @@ enum NexusManagedCloudProvider: String, CaseIterable, Sendable {
     var title: String {
         switch self {
         case .inception: "Inception Mercury"
-        case .nvidiaNIM: "NVIDIA NIM Kimi K2.6"
+        case .nvidiaNIM: "NVIDIA NIM GPT-OSS"
         }
     }
 
     var model: String {
         switch self {
         case .inception: "mercury-2"
-        case .nvidiaNIM: "moonshotai/kimi-k2.6"
+        // Kimi K2.6 is listed by NVIDIA's model catalogue for this account,
+        // but its inference deployment currently returns a provider-side 404
+        // before producing a token. GPT-OSS 120B is verified against the same
+        // NIM key and is therefore the safe managed route. Keep the provider
+        // separate so Kimi can be re-enabled once NVIDIA provisions it.
+        case .nvidiaNIM: "openai/gpt-oss-120b"
         }
     }
 
@@ -49,8 +54,9 @@ struct NexusManagedCloudInferenceStore: Sendable {
     }
 
     /// Ordered primary-to-secondary configurations. This is deliberately
-    /// deterministic: Inception is the fast default and NVIDIA NIM Kimi K2.6
-    /// is tried only when Inception rejects the request before streaming.
+    /// deterministic: Inception is the fast default and the verified NVIDIA
+    /// GPT-OSS deployment is tried only when Inception rejects the request
+    /// before streaming.
     func configurations() throws -> [(provider: NexusManagedCloudProvider, configuration: NexusAPIProviderConfiguration)] {
         try NexusManagedCloudProvider.allCases.compactMap { provider in
             guard let data = try secrets.data(for: provider.keyAccount),

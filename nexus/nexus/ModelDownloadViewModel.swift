@@ -469,26 +469,13 @@ final class ModelDownloadViewModel: ObservableObject {
             return plan
         }
 
-        // A prose planning response is unsafe: it could contain the model's
-        // private route/thinking text, and treating it as a no-tool plan makes
-        // current questions hallucinate rather than search. Give the same
-        // model one compact repair pass before failing honestly.
-        let repairMessages = messages + [
-            .init(
-                role: "system",
-                content: "Your previous planning response was invalid. Return ONLY one valid JSON object with actions and memory_write. Never include an answer, reasoning, Markdown, or prose."
-            )
-        ]
-        let repaired = try await response(
-            messages: repairMessages,
-            temperature: 0,
-            maximumTokens: 360,
-            onDelta: { _, _ in }
-        )
-        guard let plan = NexPrimaryToolPlanner.parseStrict(repaired, registeredTools: registeredTools) else {
-            throw LocalModelError.invalidResponse("Nex could not produce a valid tool plan, so it did not generate an ungrounded answer")
-        }
-        return plan
+        // Planning is advisory. A second repair request used to make every
+        // malformed plan consume another full cloud response, then could still
+        // strand an ordinary greeting before generation began. Fall through
+        // immediately: the actual response path still gets the unmodified
+        // conversation and can answer normally.
+        NSLog("Nex tool planner returned invalid JSON; continuing without planned tools.")
+        return .fallback
     }
 
     /// Used only for optional, non-blocking status-line generation. It never

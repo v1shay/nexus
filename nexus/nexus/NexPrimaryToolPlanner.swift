@@ -117,7 +117,8 @@ enum NexPrimaryToolPlanner {
         _ response: String,
         registeredTools: [NexRegisteredTool]
     ) -> NexPrimaryToolPlan? {
-        guard let data = jsonObject(in: response)?.data(using: .utf8),
+        guard let object = jsonObject(in: response),
+              let data = repairMalformedActionObjects(object, registeredTools: registeredTools).data(using: .utf8),
               let decoded = try? JSONDecoder().decode(NexPrimaryToolPlan.self, from: data) else {
             return nil
         }
@@ -164,6 +165,34 @@ enum NexPrimaryToolPlanner {
         guard let first = trimmed.firstIndex(of: "{"),
               let last = trimmed.lastIndex(of: "}"), first <= last else { return nil }
         return String(trimmed[first...last])
+    }
+
+    /// A few OpenAI-compatible providers occasionally omit the `{ "tool":`
+    /// wrapper for the second and later action while otherwise returning the
+    /// requested JSON. This is a structural normalization, not routing: only
+    /// names already present in the per-request allowlist are repaired and the
+    /// regular strict schema validation still runs immediately afterwards.
+    private static func repairMalformedActionObjects(
+        _ object: String,
+        registeredTools: [NexRegisteredTool]
+    ) -> String {
+        var repaired = object
+        let allowedNames = registeredTools
+            .filter { $0.permission != .writeMemory && $0.permission != .forgetMemory }
+            .map(\.name)
+            .sorted { $0.count > $1.count }
+        for name in allowedNames {
+            let escapedName = NSRegularExpression.escapedPattern(for: name)
+            let pattern = "\\},\\s*\\\"\(escapedName)\\\"\\s*,\\s*\\\"arguments\\\"\\s*:"
+            guard let expression = try? NSRegularExpression(pattern: pattern) else { continue }
+            let range = NSRange(repaired.startIndex..<repaired.endIndex, in: repaired)
+            repaired = expression.stringByReplacingMatches(
+                in: repaired,
+                range: range,
+                withTemplate: "},{\"tool\":\"\(name)\",\"arguments\":"
+            )
+        }
+        return repaired
     }
 }
 
