@@ -1,0 +1,67 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="referrer" content="no-referrer">
+    <title>Nexus connection</title>
+    <style>
+      :root {
+        color-scheme: dark;
+        font-family: system-ui, sans-serif;
+      }
+
+      html,
+      body {
+        height: 100%;
+        margin: 0;
+      }
+
+      body {
+        display: grid;
+        place-items: center;
+        background: #000;
+        color: #fff;
+        text-align: center;
+      }
+
+      h1,
+      p {
+        margin: 0;
+      }
+
+      h1 {
+        font-size: clamp(3rem, 10vw, 7rem);
+        font-weight: 600;
+        letter-spacing: -0.06em;
+      }
+
+      p {
+        margin-top: 0.75rem;
+        color: #a3a3a3;
+        font-size: clamp(1rem, 2vw, 1.25rem);
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>Returning to Nexus…</h1>
+      <p id="message">If Nexus does not open, return to the app and try connecting again.</p>
+    </main>
+    <script>
+      (() => {
+        const input = new URLSearchParams(window.location.search);
+        const output = new URLSearchParams();
+        for (const key of ["code", "state", "error", "error_description"]) {
+          const value = input.get(key);
+          if (value) output.set(key, value);
+        }
+        if (output.has("state") && (output.has("code") || output.has("error"))) {
+          window.location.replace(`na.nexus.oauth://oauth/callback?${output.toString()}`);
+        } else {
+          document.getElementById("message").textContent = "This authorization response was incomplete. Return to Nexus and try again.";
+        }
+      })();
+    </script>
+  </body>
+</html>
