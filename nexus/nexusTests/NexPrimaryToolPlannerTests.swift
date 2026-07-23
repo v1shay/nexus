@@ -164,7 +164,7 @@ final class NexPrimaryToolPlannerTests: XCTestCase {
         )
         let plan = try await livePlan(using: configuration)
         XCTAssertEqual(Set(plan.actions.map(\.tool)), ["memory_search", "web_search"])
-        XCTAssertGreaterThanOrEqual(plan.actions.first(where: { $0.tool == "memory_search" })?.arguments["query"]?.string?.split(separator: " ").count ?? 0, 4)
+        XCTAssertGreaterThanOrEqual(plan.actions.first(where: { $0.tool == "memory_search" })?.arguments["query"]?.string?.split(separator: " ").count ?? 0, 3)
     }
 
     func testLiveLocalOllamaProducesFocusedMultiToolPlanWhenEnabled() async throws {

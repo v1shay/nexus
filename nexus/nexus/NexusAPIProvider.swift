@@ -247,7 +247,12 @@ enum NexusAPIProviderClient {
         let stream: Bool
         let temperature: Double?
         let maxTokens: Int?
-        enum CodingKeys: String, CodingKey { case model, messages, stream, temperature; case maxTokens = "max_tokens" }
+        let reasoningEffort: String?
+        enum CodingKeys: String, CodingKey {
+            case model, messages, stream, temperature
+            case maxTokens = "max_tokens"
+            case reasoningEffort = "reasoning_effort"
+        }
     }
 
     private struct OpenAIEvent: Decodable {
@@ -321,6 +326,15 @@ enum NexusAPIProviderClient {
         _ maximumTokens: Int?,
         _ onDelta: @escaping @Sendable (String, String) async -> Void
     ) async throws -> String {
+        // NVIDIA's GPT-OSS endpoint emits private reasoning before visible
+        // content. A small planner/status budget can otherwise end before the
+        // first answer token, which looks like an empty model response. Keep
+        // the reasoning setting low and reserve enough room for real output.
+        let isNVIDIA = configuration.baseURL.host?.localizedCaseInsensitiveCompare("integrate.api.nvidia.com") == .orderedSame
+            || configuration.model.localizedCaseInsensitiveContains("gpt-oss")
+        let resolvedMaximumTokens: Int? = isNVIDIA
+            ? max(maximumTokens ?? 1_024, 1_024)
+            : maximumTokens
         var url = configuration.baseURL
         if !url.path.hasSuffix("/chat/completions") { url.appendPathComponent("chat/completions") }
         var request = URLRequest(url: url)
@@ -334,7 +348,8 @@ enum NexusAPIProviderClient {
                 + messages.map { .init(role: $0.role, content: $0.content) },
             stream: true,
             temperature: temperature,
-            maxTokens: maximumTokens
+            maxTokens: resolvedMaximumTokens,
+            reasoningEffort: isNVIDIA ? "low" : nil
         ))
         let (bytes, response) = try await URLSession.shared.bytes(for: request)
         try await requireSuccess(response, bytes: bytes, provider: "API")

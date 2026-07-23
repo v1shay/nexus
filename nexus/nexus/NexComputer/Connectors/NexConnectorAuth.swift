@@ -129,12 +129,9 @@ struct NexOAuthConfiguration: Sendable {
         }
         let redirectURL: URL?
         switch provider {
-        case .notion, .slack, .github:
+        case .google, .notion, .slack, .github:
             redirectURL = (bundle.object(forInfoDictionaryKey: "NEXOAuthWebRedirectURL") as? String).flatMap(URL.init(string:))
-        case .google, .discord:
-            // Google uses the native desktop custom scheme registered by this
-            // app; routing it through a static web page would break its
-            // installed-app redirect policy.
+        case .discord:
             redirectURL = nil
         }
         let secret = try registrations.clientSecret(for: provider)
