@@ -1,30 +1,30 @@
 import Foundation
 
 /// The built-in, low-latency cloud chain. These identifiers and endpoints are
-/// public configuration; only the two API keys are stored in the local
+/// public configuration; only the provider API keys are stored in the local
 /// Keychain. A missing key simply removes that provider from the chain.
 enum NexusManagedCloudProvider: String, CaseIterable, Sendable {
-    case cerebras
     case inception
+    case nvidiaNIM
 
     var title: String {
         switch self {
-        case .cerebras: "Cerebras GPT-OSS"
         case .inception: "Inception Mercury"
+        case .nvidiaNIM: "NVIDIA NIM Kimi K2.6"
         }
     }
 
     var model: String {
         switch self {
-        case .cerebras: "gpt-oss-120b"
         case .inception: "mercury-2"
+        case .nvidiaNIM: "moonshotai/kimi-k2.6"
         }
     }
 
     var baseURL: URL {
         switch self {
-        case .cerebras: URL(string: "https://api.cerebras.ai/v1")!
         case .inception: URL(string: "https://api.inceptionlabs.ai/v1")!
+        case .nvidiaNIM: URL(string: "https://integrate.api.nvidia.com/v1")!
         }
     }
 
@@ -33,8 +33,8 @@ enum NexusManagedCloudProvider: String, CaseIterable, Sendable {
     /// and all other Nexus secrets.
     var keyAccount: String {
         switch self {
-        case .cerebras: "cerebras.gpt-oss.v1"
         case .inception: "nexus"
+        case .nvidiaNIM: "nvidia.nim.v1"
         }
     }
 }
@@ -49,9 +49,8 @@ struct NexusManagedCloudInferenceStore: Sendable {
     }
 
     /// Ordered primary-to-secondary configurations. This is deliberately
-    /// deterministic: Cerebras always gets the first attempt and Inception
-    /// never runs unless Cerebras is unavailable or rejects the request before
-    /// it begins streaming.
+    /// deterministic: Inception is the fast default and NVIDIA NIM Kimi K2.6
+    /// is tried only when Inception rejects the request before streaming.
     func configurations() throws -> [(provider: NexusManagedCloudProvider, configuration: NexusAPIProviderConfiguration)] {
         try NexusManagedCloudProvider.allCases.compactMap { provider in
             guard let data = try secrets.data(for: provider.keyAccount),
@@ -119,7 +118,12 @@ enum NexusManagedCloudInferenceClient {
                 let text = try await NexusAPIProviderClient.streamChat(
                     configuration: attempt.configuration,
                     messages: messages,
-                    temperature: temperature,
+                    // Mercury rejects temperatures below 0.5. Supplying its
+                    // supported deterministic floor prevents a warning-only
+                    // completion from consuming the small planning budget.
+                    temperature: attempt.provider == .inception
+                        ? max(temperature ?? 0.5, 0.5)
+                        : temperature,
                     maximumTokens: maximumTokens
                 ) { delta, accumulated in
                     await streamStart.markStarted()

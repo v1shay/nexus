@@ -3,17 +3,17 @@ import WebKit
 @testable import nexus
 
 final class NexusGeometryTests: XCTestCase {
-    func testManagedCloudConfigurationOrderIsCerebrasThenInception() throws {
+    func testManagedCloudConfigurationOrderIsInceptionThenNVIDIA() throws {
         let store = NexusManagedCloudInferenceStore(secrets: NexusMemorySecretStore())
         XCTAssertTrue(try store.configurations().isEmpty)
 
         let secrets = NexusMemorySecretStore()
-        try secrets.set(Data("cerebras-test".utf8), for: NexusManagedCloudProvider.cerebras.keyAccount)
         try secrets.set(Data("inception-test".utf8), for: NexusManagedCloudProvider.inception.keyAccount)
+        try secrets.set(Data("nvidia-test".utf8), for: NexusManagedCloudProvider.nvidiaNIM.keyAccount)
         let configured = try NexusManagedCloudInferenceStore(secrets: secrets).configurations()
 
-        XCTAssertEqual(configured.map(\.provider), [.cerebras, .inception])
-        XCTAssertEqual(configured.map { $0.configuration.model }, ["gpt-oss-120b", "mercury-2"])
+        XCTAssertEqual(configured.map(\.provider), [.inception, .nvidiaNIM])
+        XCTAssertEqual(configured.map { $0.configuration.model }, ["mercury-2", "moonshotai/kimi-k2.6"])
     }
 
     func testLiveManagedCloudChainFallsBackToInceptionWhenEnabled() async throws {
@@ -319,22 +319,24 @@ final class NexusGeometryTests: XCTestCase {
         store.selectKind(.gemini, replacing: .openAICompatible)
 
         XCTAssertEqual(store.baseURL, NexusAPIProviderKind.gemini.defaultBaseURL)
+        XCTAssertEqual(store.model, "gemini-2.5-flash")
     }
 
-    func testManagedCloudInferenceUsesCerebrasThenInceptionWithKeysOutsideDefaults() throws {
+    func testManagedCloudInferenceUsesInceptionThenNVIDIAWithKeysOutsideDefaults() throws {
         let secrets = NexusMemorySecretStore()
         let store = NexusManagedCloudInferenceStore(secrets: secrets)
-        try secrets.set(Data("cerebras-key".utf8), for: NexusManagedCloudProvider.cerebras.keyAccount)
         try secrets.set(Data("inception-key".utf8), for: NexusManagedCloudProvider.inception.keyAccount)
+        try secrets.set(Data("nvidia-key".utf8), for: NexusManagedCloudProvider.nvidiaNIM.keyAccount)
 
         let attempts = try store.configurations()
-        XCTAssertEqual(attempts.map(\.provider), [.cerebras, .inception])
-        XCTAssertEqual(attempts.map { $0.configuration.model }, ["gpt-oss-120b", "mercury-2"])
+        XCTAssertEqual(attempts.map(\.provider), [.inception, .nvidiaNIM])
+        XCTAssertEqual(attempts.map { $0.configuration.model }, ["mercury-2", "moonshotai/kimi-k2.6"])
         XCTAssertEqual(attempts.map { $0.configuration.baseURL.absoluteString }, [
-            "https://api.cerebras.ai/v1",
-            "https://api.inceptionlabs.ai/v1"
+            "https://api.inceptionlabs.ai/v1",
+            "https://integrate.api.nvidia.com/v1"
         ])
-        XCTAssertEqual(attempts[1].configuration.apiKey, "inception-key")
+        XCTAssertEqual(attempts[0].configuration.apiKey, "inception-key")
+        XCTAssertEqual(attempts[1].configuration.apiKey, "nvidia-key")
     }
 
     func testRequestedModelAndConnectCameraSizing() {

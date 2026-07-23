@@ -91,8 +91,10 @@ enum NexPrimaryToolPlanner {
 
         `memory_write` is an advisory for Nex's validated background memory policy, not a registered action. Set it only for stable, user-supported preferences, corrections, decisions, workflows, explicit remembering, or explicit forgetting. Do not set it for requests, temporary facts, speculation, sensitive facts without an explicit user request, or assistant-generated claims. Do not call the policy-owned write tools memory_propose or memory_forget directly.
 
-        When native function definitions are supplied, call the required function directly and do not write an answer or JSON. When native functions are not supplied, return ONLY one JSON object, with no Markdown or explanation:
-        {"actions":[{"tool":"registered tool name","arguments":{"field":"value"}}],"memory_write":null}
+        When native function definitions are supplied, call the required function directly and do not write an answer or JSON. When native functions are not supplied, your ENTIRE response must be exactly one JSON object. Never answer the user, narrate your reasoning, say what you are about to do, or add Markdown. A normal question such as “What model are you?” needs no action and must return exactly:
+        {"actions":[],"memory_write":null}
+        A current external question must return a tool plan like:
+        {"actions":[{"tool":"web_search","arguments":{"query":"complete standalone query"}}],"memory_write":null}
 
         Today is \(formatter.string(from: date)).
         Available tools:

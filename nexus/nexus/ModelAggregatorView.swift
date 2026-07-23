@@ -362,7 +362,7 @@ private struct NexusModelsPage: View {
         if let cloud = viewModel.activeCloudProvider {
             HStack(spacing: 6) {
                 Circle().fill(.green).frame(width: 6, height: 6)
-                Image(systemName: cloud == .cerebras ? "bolt.fill" : "sparkles")
+                Image(systemName: cloud == .nvidiaNIM ? "bolt.fill" : "sparkles")
                     .font(.caption)
                 Text("Using \(cloud.model)").lineLimit(1)
                 Text(cloud.title).foregroundStyle(.secondary)
@@ -438,10 +438,20 @@ private struct NexusAPIProviderView: View {
             TextField("Base URL", text: $store.baseURL)
             TextField("Model", text: $store.model)
             SecureField(store.savedKey ? "API key (saved — enter to replace)" : "API key", text: $store.apiKeyInput)
+            if store.kind == .gemini {
+                Text("Requires a Google AI Studio API key, not a Google OAuth client ID.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
             if let error = store.errorMessage { Text(error).font(.caption).foregroundStyle(.red) }
+            if let connection = store.connectionMessage { Text(connection).font(.caption).foregroundStyle(.green) }
             HStack {
                 Button("Disable") { store.disable(); dismiss() }
                 Spacer()
+                Button(store.isTestingConnection ? "Testing…" : "Test") {
+                    Task { await store.testConnection() }
+                }
+                .disabled(store.isTestingConnection)
                 Button("Save") {
                     do { try store.save(); dismiss() }
                     catch { store.recordError(error) }

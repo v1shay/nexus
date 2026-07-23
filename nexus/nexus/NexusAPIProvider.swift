@@ -32,6 +32,8 @@ final class NexusAPIProviderStore: ObservableObject {
     @Published var apiKeyInput = ""
     @Published private(set) var savedKey = false
     @Published private(set) var errorMessage: String?
+    @Published private(set) var connectionMessage: String?
+    @Published private(set) var isTestingConnection = false
 
     private let defaults: UserDefaults
     private let secretStore: NexusSecretStore
@@ -56,6 +58,9 @@ final class NexusAPIProviderStore: ObservableObject {
         kind = newKind
         if baseURL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || baseURL == previous.defaultBaseURL {
             baseURL = newKind.defaultBaseURL
+        }
+        if model.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, newKind == .gemini {
+            model = "gemini-2.5-flash"
         }
     }
 
@@ -104,6 +109,30 @@ final class NexusAPIProviderStore: ObservableObject {
     }
 
     func recordError(_ error: Error) { errorMessage = error.localizedDescription }
+
+    /// Saves the current configuration and verifies that the provider streams
+    /// a real response. This is deliberately local to the settings screen so
+    /// a bad endpoint/key is discovered before it is placed in the fallback
+    /// chain.
+    func testConnection() async {
+        connectionMessage = nil
+        do {
+            try save()
+            let configuration = try configuration()
+            isTestingConnection = true
+            defer { isTestingConnection = false }
+            _ = try await NexusAPIProviderClient.streamChat(
+                configuration: configuration,
+                messages: [.init(role: "user", content: "Reply with exactly: Nexus API connection verified")],
+                temperature: 0,
+                maximumTokens: 32
+            ) { _, _ in }
+            connectionMessage = "Connected — streaming verified"
+            errorMessage = nil
+        } catch {
+            recordError(error)
+        }
+    }
 
     private func normalizedBaseURL() -> String {
         let value = baseURL.trimmingCharacters(in: .whitespacesAndNewlines)
