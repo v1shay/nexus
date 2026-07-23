@@ -129,6 +129,13 @@ final class NexusAPIProviderStore: ObservableObject {
         baseURL = newKind.defaultBaseURL
         model = newKind.defaultModel
         savedKey = (try? keyData(for: newKind)) != nil
+        // Picking a provider with an already-stored credential is a model
+        // selection, not merely a form edit. Make it active immediately so
+        // the next request cannot quietly take the Mercury fallback instead.
+        if savedKey {
+            enabled = true
+            persist()
+        }
         errorMessage = nil
         connectionMessage = nil
     }

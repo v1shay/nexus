@@ -194,15 +194,39 @@ enum ModelBrandArtwork {
     static func icon(for identity: ModelProviderIdentity, size: CGFloat) -> NSImage? {
         guard let source = image(for: identity) else { return nil }
         let target = NSSize(width: size, height: size)
-        let rendered = NSImage(size: target)
-        rendered.lockFocus()
-        source.draw(in: NSRect(origin: .zero, size: target),
-                    from: NSRect(origin: .zero, size: source.size),
+        let pixelSize = max(1, Int((size * 3).rounded(.up)))
+        guard let bitmap = NSBitmapImageRep(
+            bitmapDataPlanes: nil,
+            pixelsWide: pixelSize,
+            pixelsHigh: pixelSize,
+            bitsPerSample: 8,
+            samplesPerPixel: 4,
+            hasAlpha: true,
+            isPlanar: false,
+            colorSpaceName: .deviceRGB,
+            bytesPerRow: 0,
+            bitsPerPixel: 0
+        ), let context = NSGraphicsContext(bitmapImageRep: bitmap) else { return nil }
+
+        // The downloaded SVG declares `width` and `height` as `1em`.
+        // AppKit otherwise rasterizes it at 1 × 1 before SwiftUI ever sees it.
+        // Render its vector representation into a real 3× bitmap first.
+        bitmap.size = target
+        let vector = (source.copy() as? NSImage) ?? source
+        vector.size = target
+        NSGraphicsContext.saveGraphicsState()
+        NSGraphicsContext.current = context
+        context.imageInterpolation = .high
+        vector.draw(in: NSRect(origin: .zero, size: target),
+                    from: NSRect(origin: .zero, size: target),
                     operation: .sourceOver,
                     fraction: 1,
                     respectFlipped: true,
                     hints: [.interpolation: NSImageInterpolation.high])
-        rendered.unlockFocus()
+        NSGraphicsContext.restoreGraphicsState()
+
+        let rendered = NSImage(size: target)
+        rendered.addRepresentation(bitmap)
         rendered.isTemplate = false
         return rendered
     }

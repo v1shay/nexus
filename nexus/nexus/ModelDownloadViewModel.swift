@@ -323,6 +323,9 @@ final class ModelDownloadViewModel: ObservableObject {
         onDelta: @escaping @Sendable (_ delta: String, _ accumulated: String) async -> Void
     ) async throws -> String {
         cloudFallbackMessage = nil
+        // Prevent the previous managed-provider badge from winning the model
+        // label after the user has selected Gemini or NVIDIA NIM.
+        activeCloudProvider = nil
 
         // The provider selected in the API sheet is an explicit user choice,
         // so it must run before Nexus's managed fallback chain. Previously
@@ -445,12 +448,14 @@ final class ModelDownloadViewModel: ObservableObject {
         messages: [NexusChatMessage],
         registeredTools: [NexRegisteredTool]
     ) async throws -> NexPrimaryToolPlan {
-        guard let activeModel else {
+        let selectedAPIProvider = apiProvider.enabled
+        guard selectedAPIProvider || activeModel != nil else {
             throw LocalModelError.invalidResponse("Choose an installed model in the model window first")
         }
         let cloudConfigured = (try? managedCloud.configurations().isEmpty == false) ?? false
         if !cloudConfigured,
-           !apiProvider.enabled,
+           !selectedAPIProvider,
+           let activeModel,
            activeModel.backend == .ollama,
            (connect == nil || connect?.modelRoute == .thisMac) {
             return try await ollama.planTools(

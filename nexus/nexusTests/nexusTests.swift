@@ -366,6 +366,27 @@ final class NexusGeometryTests: XCTestCase {
         XCTAssertNil(try standardSecrets.data(for: "nvidia.nim.v1"))
     }
 
+    @MainActor
+    func testSelectingPresetWithSavedCredentialImmediatelyActivatesIt() throws {
+        let suite = "nexus-api-provider-autoselect-test-\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let normalSecrets = NexusMemorySecretStore()
+        let nvidiaSecrets = NexusMemorySecretStore()
+        try nvidiaSecrets.set(Data("saved-nvidia-key".utf8), for: "nvidia.nim.v1")
+        let store = NexusAPIProviderStore(
+            defaults: defaults,
+            secretStore: normalSecrets,
+            managedSecretStore: nvidiaSecrets
+        )
+
+        store.selectKind(.nvidiaNIM, replacing: .gemini)
+
+        XCTAssertTrue(store.savedKey)
+        XCTAssertTrue(store.enabled)
+        XCTAssertEqual(try store.configuration().kind, .nvidiaNIM)
+    }
+
     func testRequestedModelAndConnectCameraSizing() {
         XCTAssertEqual(Nexus3DLayout.computerCameraDistance, 2.55)
         XCTAssertEqual(Nexus3DLayout.globeCameraDistance, 2.70)
@@ -1104,6 +1125,12 @@ final class NexusGeometryTests: XCTestCase {
         XCTAssertEqual(data.count, 1_696)
         XCTAssertEqual(image.size, CGSize(width: 48, height: 48))
         XCTAssertEqual(ModelBrandArtwork.fallbackSystemName, "cpu")
+
+        let geminiIcon = try XCTUnwrap(ModelBrandArtwork.icon(for: .gemini, size: 14))
+        XCTAssertEqual(geminiIcon.size, NSSize(width: 14, height: 14))
+        let representation = try XCTUnwrap(geminiIcon.representations.first as? NSBitmapImageRep)
+        XCTAssertEqual(representation.pixelsWide, 42)
+        XCTAssertEqual(representation.pixelsHigh, 42)
     }
 
     func testPetActivitiesUseTheSuppliedTaskSpecificRows() {
