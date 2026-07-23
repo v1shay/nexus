@@ -549,18 +549,6 @@ final class NotchController: ObservableObject {
                     if let screen = self.screen { self.resize(to: self.listeningSize(for: screen), animated: true) }
                 }
                 defer { presentationTask.cancel() }
-                let speculativeBuffer = NexSpeculativePrimaryBuffer()
-                let speculativeTask = Task {
-                    try await self.modelDownloadViewModel.response(
-                        messages: baseMessages,
-                        onThinkingDelta: { delta, _ in
-                            await self.receiveThinkingDelta(delta, generation: generation)
-                        }
-                    ) { delta, accumulated in
-                        await speculativeBuffer.append(delta: delta, accumulated: accumulated)
-                    }
-                }
-
                 await memory.prepareToolRegistry()
                 try? await webSearch.registerIfNeeded()
                 try? await youtubeTools.registerIfNeeded()
@@ -603,11 +591,10 @@ final class NotchController: ObservableObject {
                 )
                 var plannerAdvisory = plan.memoryWrite
                 let toolResult: NexToolOrchestrationResult?
-                // Keep the acknowledgement readable, then deliberately enter the
-                // compact working state.  The primary request is already running
-                // in `speculativeTask`; this only controls the presentation.  Do
-                // not flush buffered answer tokens directly from the status view,
-                // otherwise the pet/thinking transition is never visible.
+                // Keep the acknowledgement readable, then deliberately enter
+                // the compact working state. Planning completes before the
+                // answer starts so an internal “I should search” thought can
+                // never be exposed as the user-facing answer.
                 try? await Task.sleep(for: .milliseconds(280))
                 guard !Task.isCancelled, responseGeneration == generation else { return }
                 if !isThinking && !isUsingTool {
@@ -616,21 +603,11 @@ final class NotchController: ObservableObject {
                 }
 
                 if plan.actions.isEmpty {
-                    // Make the compact pet-thinking animation perceptible even
-                    // when the primary model has already produced speculative
-                    // tokens while the acknowledgement was on screen.
-                    try? await Task.sleep(for: .milliseconds(300))
-                    guard !Task.isCancelled, responseGeneration == generation else { return }
-                    await speculativeBuffer.activate { delta, accumulated in
-                        await self.receiveResponseDelta(delta, accumulated: accumulated, generation: generation)
-                    }
-                    let answer = try await speculativeTask.value
+                    let answer = try await streamModelResponse(messages: baseMessages, generation: generation)
                     let finalDelta = responseSpeechCursor.consume(delta: "", accumulated: answer)
                     if !finalDelta.isEmpty { responseSpeaker.append(finalDelta) }
                     toolResult = nil
                 } else {
-                    await speculativeBuffer.discard()
-                    speculativeTask.cancel()
                     var result = NexToolOrchestrationResult(context: nil, webResponses: [], failures: [])
                     var pendingPlan = plan
                     var executedActions: [NexPrimaryToolPlan.Action] = []

@@ -105,9 +105,19 @@ enum NexPrimaryToolPlanner {
         _ response: String,
         registeredTools: [NexRegisteredTool]
     ) -> NexPrimaryToolPlan {
+        parseStrict(response, registeredTools: registeredTools) ?? .fallback
+    }
+
+    /// Returns nil when the model answered in prose instead of returning the
+    /// required machine-readable plan. Callers must never mistake that prose
+    /// for a deliberate no-tool decision.
+    static func parseStrict(
+        _ response: String,
+        registeredTools: [NexRegisteredTool]
+    ) -> NexPrimaryToolPlan? {
         guard let data = jsonObject(in: response)?.data(using: .utf8),
               let decoded = try? JSONDecoder().decode(NexPrimaryToolPlan.self, from: data) else {
-            return .fallback
+            return nil
         }
         let knownTools = Dictionary(
             uniqueKeysWithValues: registeredTools
@@ -306,45 +316,5 @@ actor NexToolOrchestrator {
             lines.append("Evidence \(lines.count - 1): \(excerpt)")
         }
         return lines.count > 2 ? lines.joined(separator: "\n") : nil
-    }
-}
-
-/// Holds the primary response while the same selected model completes its
-/// small planning pass. If no tool is needed, the already-running response is
-/// revealed; otherwise it is discarded and restarted with grounded evidence.
-actor NexSpeculativePrimaryBuffer {
-    typealias Sink = @Sendable (String, String) async -> Void
-
-    private enum State { case pending, active, discarded }
-    private var state = State.pending
-    private var buffered: [(String, String)] = []
-    private var sink: Sink?
-
-    func append(delta: String, accumulated: String) async {
-        switch state {
-        case .pending:
-            buffered.append((delta, accumulated))
-        case .active:
-            await sink?(delta, accumulated)
-        case .discarded:
-            break
-        }
-    }
-
-    func activate(sink: @escaping Sink) async {
-        guard case .pending = state else { return }
-        self.sink = sink
-        state = .active
-        let pending = buffered
-        buffered.removeAll(keepingCapacity: false)
-        for (delta, accumulated) in pending {
-            await sink(delta, accumulated)
-        }
-    }
-
-    func discard() {
-        state = .discarded
-        buffered.removeAll(keepingCapacity: false)
-        sink = nil
     }
 }

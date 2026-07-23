@@ -97,6 +97,33 @@ final class NexPrimaryToolPlannerTests: XCTestCase {
         }
     }
 
+    func testLiveCloudPlannerProducesWebSearchForCurrentComparisonWhenEnabled() async throws {
+        guard ProcessInfo.processInfo.environment["NEXUS_LIVE_CLOUD_TEST"] == "1" else {
+            throw XCTSkip("Set NEXUS_LIVE_CLOUD_TEST=1 to run the provider-backed routing test.")
+        }
+        let attempts = try NexusManagedCloudInferenceStore().configurations()
+        guard attempts.count == 2 else {
+            throw XCTSkip("Both managed cloud credentials are required for this live routing test.")
+        }
+        let prompt = "Compare the free tiers of NVIDIA, IMAPI, and Google AI Studio API"
+        let messages = NexPrimaryToolPlanner.planningMessages(
+            context: [.init(role: "user", content: prompt)],
+            tools: tools()
+        )
+        let response = try await NexusManagedCloudInferenceClient.streamChat(
+            attempts: attempts,
+            messages: messages,
+            temperature: 0,
+            maximumTokens: 360,
+            onDelta: { _, _ in }
+        )
+        let plan = try XCTUnwrap(NexPrimaryToolPlanner.parseStrict(response.text, registeredTools: tools()))
+        let query = try XCTUnwrap(plan.actions.first(where: { $0.tool == "web_search" })?.arguments["query"]?.string)
+
+        XCTAssertGreaterThanOrEqual(query.split(separator: " ").count, 4)
+        XCTAssertFalse(query.localizedCaseInsensitiveContains("let's search"))
+    }
+
     func testStressParsesVagueMemoryAndWebPlansWithSeparateEvidenceQueries() {
         let plan = parse("""
         {"status":"Checking your project fit…","actions":[
@@ -142,6 +169,7 @@ final class NexPrimaryToolPlannerTests: XCTestCase {
 
         let malformed = parse("not JSON")
         XCTAssertEqual(malformed, .fallback)
+        XCTAssertNil(NexPrimaryToolPlanner.parseStrict("not JSON", registeredTools: tools()))
 
         let templateStatus = parse("""
         {"status":"natural work-starting status","actions":[],"memory_write":null}
