@@ -51,6 +51,7 @@
 		A2C0002C30075C29006660E4 /* NexManagedBrowser.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2C0002D30075C29006660E4 /* NexManagedBrowser.swift */; };
 		A2C0002F30075C29006660E4 /* NexConnectorSystem.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2C0003030075C29006660E4 /* NexConnectorSystem.swift */; };
 		A2C0003230075C29006660E4 /* NexConnectorAuth.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2C0003330075C29006660E4 /* NexConnectorAuth.swift */; };
+		A2C0004030075C29006660E4 /* NexOfficialConnectorExecutor.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2C0004130075C29006660E4 /* NexOfficialConnectorExecutor.swift */; };
 		A2C0003430075C29006660E4 /* NexComputerCLI.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2C0003530075C29006660E4 /* NexComputerCLI.swift */; };
 		A2C0003730075C29006660E4 /* NexProviderIconCatalog.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2C0003830075C29006660E4 /* NexProviderIconCatalog.swift */; };
 		A2C0003930075C29006660E4 /* NexTaskPreview.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2C0003A30075C29006660E4 /* NexTaskPreview.swift */; };
@@ -161,6 +162,7 @@
 		A2C0002D30075C29006660E4 /* NexManagedBrowser.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NexManagedBrowser.swift; sourceTree = "<group>"; };
 		A2C0003030075C29006660E4 /* NexConnectorSystem.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NexConnectorSystem.swift; sourceTree = "<group>"; };
 		A2C0003330075C29006660E4 /* NexConnectorAuth.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NexConnectorAuth.swift; sourceTree = "<group>"; };
+		A2C0004130075C29006660E4 /* NexOfficialConnectorExecutor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NexOfficialConnectorExecutor.swift; sourceTree = "<group>"; };
 		A2C0003530075C29006660E4 /* NexComputerCLI.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NexComputerCLI.swift; sourceTree = "<group>"; };
 		A2C0003830075C29006660E4 /* NexProviderIconCatalog.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NexProviderIconCatalog.swift; sourceTree = "<group>"; };
 		A2C0003A30075C29006660E4 /* NexTaskPreview.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NexTaskPreview.swift; sourceTree = "<group>"; };
@@ -329,6 +331,7 @@
 			isa = PBXGroup;
 			children = (
 				A2C0003330075C29006660E4 /* NexConnectorAuth.swift */,
+				A2C0004130075C29006660E4 /* NexOfficialConnectorExecutor.swift */,
 				A2C0003030075C29006660E4 /* NexConnectorSystem.swift */,
 			);
 			path = Connectors;
@@ -643,6 +646,7 @@
 				A2C0002C30075C29006660E4 /* NexManagedBrowser.swift in Sources */,
 				A2C0002F30075C29006660E4 /* NexConnectorSystem.swift in Sources */,
 				A2C0003230075C29006660E4 /* NexConnectorAuth.swift in Sources */,
+				A2C0004030075C29006660E4 /* NexOfficialConnectorExecutor.swift in Sources */,
 				A2C0003430075C29006660E4 /* NexComputerCLI.swift in Sources */,
 				A2C0003730075C29006660E4 /* NexProviderIconCatalog.swift in Sources */,
 				A2C0003930075C29006660E4 /* NexTaskPreview.swift in Sources */,

@@ -645,7 +645,10 @@ struct NexObsidianNoteMatch: Equatable, Sendable { let relativePath: String; let
 
 actor NexObsidianFileProvider {
     let root: URL
-    init(root: URL = NexVaultLocation.defaultURL()) { self.root = root.standardizedFileURL.resolvingSymlinksInPath() }
+    init(root: URL = NexVaultLocation.defaultURL()) {
+        let standardized = root.standardizedFileURL
+        self.root = standardized.deletingLastPathComponent().resolvingSymlinksInPath().appendingPathComponent(standardized.lastPathComponent, isDirectory: true)
+    }
     func prepare() throws { try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true) }
     func open() async throws {
         guard let app = NSWorkspace.shared.urlForApplication(withBundleIdentifier: "md.obsidian") else { throw NexToolError.executionFailed(code: "obsidian_unavailable", message: "Obsidian is not installed.") }
@@ -659,7 +662,7 @@ actor NexObsidianFileProvider {
     }
     func read(relativePath: String) throws -> String { try String(contentsOf: resolve(relativePath), encoding: .utf8) }
     func search(query: String?, folder: String?, tag: String?, frontmatterKey: String?, frontmatterValue: String?, createdAfter: Date?, modifiedAfter: Date?, limit: Int) throws -> [NexObsidianNoteMatch] {
-        let base = try folder.map(resolve) ?? root
+        let base = try folder.map(resolveDirectory) ?? root
         guard let enumerator = FileManager.default.enumerator(at: base, includingPropertiesForKeys: [.contentModificationDateKey, .creationDateKey, .isRegularFileKey], options: [.skipsHiddenFiles]) else { return [] }
         var results: [NexObsidianNoteMatch] = []
         for case let file as URL in enumerator where file.pathExtension.lowercased() == "md" {
@@ -669,7 +672,7 @@ actor NexObsidianFileProvider {
                   let text = try? String(contentsOf: file, encoding: .utf8) else { continue }
             let title = text.split(separator: "\n").first(where: { $0.hasPrefix("# ") }).map { String($0.dropFirst(2)) } ?? file.deletingPathExtension().lastPathComponent
             if let query, !query.isEmpty, !title.localizedCaseInsensitiveContains(query), !text.localizedCaseInsensitiveContains(query) { continue }
-            if let tag, !tag.isEmpty, !text.localizedCaseInsensitiveContains("#\(tag.trimmingCharacters(in: CharacterSet(charactersIn: "#")))") { continue }
+            if let tag, !tag.isEmpty, !Self.matchesTag(tag, in: text) { continue }
             if let key = frontmatterKey, !key.isEmpty {
                 let needle = "\n\(key):"; guard text.hasPrefix("\(key):") || text.localizedCaseInsensitiveContains(needle) else { continue }
                 if let value = frontmatterValue, !value.isEmpty, !text.localizedCaseInsensitiveContains("\(key): \(value)") { continue }
@@ -693,10 +696,44 @@ actor NexObsidianFileProvider {
     private func resolve(_ relativePath: String) throws -> URL {
         var path = relativePath.trimmingCharacters(in: .whitespacesAndNewlines); if !path.lowercased().hasSuffix(".md") { path += ".md" }
         guard !path.hasPrefix("/"), !path.split(separator: "/").contains("..") else { throw NexObsidianVaultError.unsafePath }
-        let candidate = root.appendingPathComponent(path).standardizedFileURL.resolvingSymlinksInPath(); guard candidate.path.hasPrefix(root.path + "/") else { throw NexObsidianVaultError.unsafePath }; return candidate
+        let canonicalRoot = root.standardizedFileURL.resolvingSymlinksInPath()
+        let candidate = canonicalRoot.appendingPathComponent(path).standardizedFileURL.resolvingSymlinksInPath()
+        guard candidate.path.hasPrefix(canonicalRoot.path + "/") else { throw NexObsidianVaultError.unsafePath }
+        return candidate
     }
-    private func canonicalRelative(_ file: URL) throws -> String { guard file.path.hasPrefix(root.path + "/") else { throw NexObsidianVaultError.unsafePath }; return String(file.path.dropFirst(root.path.count + 1)) }
+    private func resolveDirectory(_ relativePath: String) throws -> URL {
+        let path = relativePath.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !path.isEmpty, !path.hasPrefix("/"), !path.split(separator: "/").contains("..") else { throw NexObsidianVaultError.unsafePath }
+        let canonicalRoot = root.standardizedFileURL.resolvingSymlinksInPath()
+        let candidate = canonicalRoot.appendingPathComponent(path, isDirectory: true).standardizedFileURL.resolvingSymlinksInPath()
+        guard candidate.path == canonicalRoot.path || candidate.path.hasPrefix(canonicalRoot.path + "/") else { throw NexObsidianVaultError.unsafePath }
+        return candidate
+    }
+    private func canonicalRelative(_ file: URL) throws -> String {
+        let canonicalRoot = root.standardizedFileURL.resolvingSymlinksInPath()
+        let canonicalFile = file.standardizedFileURL.resolvingSymlinksInPath()
+        guard canonicalFile.path.hasPrefix(canonicalRoot.path + "/") else { throw NexObsidianVaultError.unsafePath }
+        return String(canonicalFile.path.dropFirst(canonicalRoot.path.count + 1))
+    }
     private func atomicWrite(_ text: String, to file: URL) throws { guard let data = text.data(using: .utf8) else { throw NexToolError.executionFailed(code: "encoding_failed", message: "Note is not valid UTF-8.") }; try data.write(to: file, options: .atomic) }
+    private nonisolated static func matchesTag(_ requested: String, in text: String) -> Bool {
+        let normalized = requested.trimmingCharacters(in: CharacterSet(charactersIn: "# ")).lowercased()
+        guard !normalized.isEmpty else { return true }
+        if text.localizedCaseInsensitiveContains("#\(normalized)") { return true }
+        let lines = text.components(separatedBy: .newlines)
+        for line in lines {
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            if trimmed.lowercased().hasPrefix("tags:") {
+                let value = String(trimmed.dropFirst(5))
+                let tags = value.trimmingCharacters(in: CharacterSet(charactersIn: "[] "))
+                    .split(separator: ",")
+                    .map { $0.trimmingCharacters(in: CharacterSet(charactersIn: "# ")).lowercased() }
+                if tags.contains(normalized) { return true }
+            }
+            if trimmed.hasPrefix("- "), trimmed.dropFirst(2).trimmingCharacters(in: CharacterSet(charactersIn: "# ")).lowercased() == normalized { return true }
+        }
+        return false
+    }
 }
 
 extension NexVSCodeCLIProvider {

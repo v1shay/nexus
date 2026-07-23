@@ -26,11 +26,7 @@ struct NexComputerCLIEnvironment: Sendable {
         try await NexApplicationActionCatalog().register(on: registry)
         try await NexBrowserActionCatalog().register(on: registry)
         try await NexChromeTabActionCatalog().register(on: registry)
-        for provider in NexConnectorProvider.allCases {
-            let name = provider.rawValue
-            let capabilities = NexConnectorManager.specs.filter { $0.provider == name }.map { NexConnectorCapability(action: $0.action, available: false, missingScope: $0.scope, providerLimitation: "Not connected") }
-            try await connectors.apply(.init(provider: name, account: "", connected: false, grantedScopes: [], capabilities: capabilities), to: registry)
-        }
+        try await connectors.reloadStoredConnections(registry: registry)
         let search = NexToolSearchService(registry: tools, computerRegistry: registry)
         try await search.registerIfNeeded()
         return .init(tools: tools, registry: registry, runtime: NexComputerRuntime(registry: registry), search: search, connectors: connectors)

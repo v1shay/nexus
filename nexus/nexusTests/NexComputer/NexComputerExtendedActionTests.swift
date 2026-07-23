@@ -103,11 +103,26 @@ final class NexComputerExtendedActionTests: XCTestCase {
 
     func testPreviewCombinesPDFsInOrder() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString); try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true); defer { try? FileManager.default.removeItem(at: root) }
-        let first = PDFDocument(), second = PDFDocument(); first.insert(PDFPage(image: NSImage(size: .init(width: 10, height: 10)))!, at: 0); second.insert(PDFPage(image: NSImage(size: .init(width: 20, height: 20)))!, at: 0); let a = root.appendingPathComponent("a.pdf"), b = root.appendingPathComponent("b.pdf"); XCTAssertTrue(first.write(to: a)); XCTAssertTrue(second.write(to: b)); let output = root.appendingPathComponent("combined.pdf"); let result = try await NexPreviewProvider().combine(inputs: [a, b], output: output, overwrite: false); XCTAssertEqual(result.1, 2); XCTAssertEqual(PDFDocument(url: output)?.pageCount, 2)
+        let first = PDFDocument(), second = PDFDocument(); first.insert(try fixturePDFPage(size: 10), at: 0); second.insert(try fixturePDFPage(size: 20), at: 0); let a = root.appendingPathComponent("a.pdf"), b = root.appendingPathComponent("b.pdf"); XCTAssertTrue(first.write(to: a)); XCTAssertTrue(second.write(to: b)); let output = root.appendingPathComponent("combined.pdf"); let result = try await NexPreviewProvider().combine(inputs: [a, b], output: output, overwrite: false); XCTAssertEqual(result.1, 2); XCTAssertEqual(PDFDocument(url: output)?.pageCount, 2)
     }
 
     func testApplicationCatalogProvidesDeterministicOpenOnly() async throws { let tools = NexToolRegistry(), computer = NexComputerRegistry(toolRegistry: tools, permissionManager: NexComputerPermissionManager(backend: AuthorizedPermissions())); try await NexApplicationActionCatalog().register(on: computer); let names = Set(await tools.definitions().map(\.name)); XCTAssertEqual(names.intersection(["applications.list", "applications.open"]), ["applications.list", "applications.open"]) }
     func testManagedBrowserRejectsInvalidStepPayloadBeforeProvisioning() async throws { do { _ = try await NexManagedBrowserProvider(root: FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)).run(goal: "test", stepsJSON: "{}") { _ in }; XCTFail("Expected invalid steps") } catch let error as NexToolError { XCTAssertEqual(error.code, "invalid_browser_steps") } }
+    func testBrowserProfileImportCopiesOnlySafeState() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let chrome = root.appendingPathComponent("Chrome"), destination = root.appendingPathComponent("Nexus")
+        let profile = chrome.appendingPathComponent("Default")
+        try FileManager.default.createDirectory(at: profile, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        for name in ["Bookmarks", "History", "Preferences", "Cookies", "Login Data"] {
+            try name.write(to: profile.appendingPathComponent(name), atomically: true, encoding: .utf8)
+        }
+        let provider = NexManagedBrowserProvider(root: destination, chromeIsRunning: { false })
+        let copied = try await provider.importProfile(chromeRoot: chrome)
+        XCTAssertEqual(Set(copied), Set(["Bookmarks", "History", "Preferences"]))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: destination.appendingPathComponent("Profile/Default/Cookies").path))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: destination.appendingPathComponent("Profile/Default/Login Data").path))
+    }
     func testConnectorCapabilityRegistrationHonorsScopesAndAvailability() async throws {
         let tools = NexToolRegistry(), computer = NexComputerRegistry(toolRegistry: tools, permissionManager: NexComputerPermissionManager(backend: AuthorizedPermissions())), manager = NexConnectorManager(executor: MockConnectorExecutor())
         let doc = NexConnectorCapabilityDocument(provider: "google", account: "test@example.com", connected: true, grantedScopes: ["openid", "gmail.readonly"], capabilities: [.init(action: "google.account_info", available: true, missingScope: nil, providerLimitation: nil), .init(action: "gmail.search", available: true, missingScope: nil, providerLimitation: nil), .init(action: "gmail.send_draft", available: false, missingScope: "gmail.send", providerLimitation: nil)])
@@ -115,6 +130,34 @@ final class NexComputerExtendedActionTests: XCTestCase {
         let unavailableResult = try await tools.execute(name: "gmail.read_thread", arguments: ["id": .string("thread-1")])
         guard case .object(let object) = unavailableResult else { return XCTFail("Expected connection request") }
         XCTAssertEqual(object["status"], .string("connection_required"))
+    }
+
+    func testOfficialConnectorExecutorUsesAccountBoundCredentialAndStructuredResult() async throws {
+        let memory = NexusMemorySecretStore(), store = NexKeychainConnectorCredentialStore(secrets: memory)
+        try store.save(.init(provider: .notion, account: "Nexus Workspace", accessToken: "notion-secret", refreshToken: nil, tokenType: "Bearer", scopes: ["notion.content.read"], expiresAt: .distantFuture, connectedAt: .now, lastSuccessfulUse: nil))
+        let session = NexAuthenticatedConnectorSession(store: store, transport: MockOAuthTransport()) { provider in
+            NexOAuthConfiguration(provider: provider, clientID: "fixture", authorizationURL: URL(string: "https://example.com/auth")!, tokenURL: URL(string: "https://example.com/token")!, verificationURL: URL(string: "https://example.com/me")!, callbackScheme: "na.nexus.oauth", scopeSeparator: " ", extraAuthorizationItems: [], extraTokenFields: [:])
+        }
+        let transport = MockConnectorAPITransport()
+        let executor = NexOfficialConnectorExecutor(session: session, transport: transport)
+        let value = try await executor.execute(provider: "notion", account: "Nexus Workspace", action: "notion.search", arguments: ["query": .string("Nexus"), "limit": .number(5)])
+        let capturedRequest = await transport.lastRequest()
+        let request = try XCTUnwrap(capturedRequest)
+        XCTAssertEqual(request.httpMethod, "POST")
+        XCTAssertEqual(request.url?.absoluteString, "https://api.notion.com/v1/search")
+        XCTAssertEqual(request.value(forHTTPHeaderField: "Authorization"), "Bearer notion-secret")
+        XCTAssertEqual(value.object?["status"], .string("completed"))
+        XCTAssertFalse(String(describing: value).contains("notion-secret"))
+    }
+
+    func testStoredProviderScopesResolveToExactConnectorCapabilities() {
+        let credential = NexConnectorCredential(provider: .google, account: "test@example.com", accessToken: "secret", refreshToken: nil, tokenType: "Bearer", scopes: ["openid", "https://www.googleapis.com/auth/gmail.modify"], expiresAt: .distantFuture, connectedAt: .now, lastSuccessfulUse: nil)
+        let document = NexConnectorCapabilityDocument.connected(credential)
+        XCTAssertTrue(document.grantedScopes.contains("gmail.readonly"))
+        XCTAssertTrue(document.grantedScopes.contains("gmail.modify"))
+        XCTAssertEqual(document.capabilities.first(where: { $0.action == "gmail.search" })?.available, true)
+        XCTAssertEqual(document.capabilities.first(where: { $0.action == "calendar.list_events" })?.missingScope, "calendar.readonly")
+        XCTAssertEqual(document.capabilities.first(where: { $0.action == "google.disconnect" })?.providerLimitation, "No safe official-API executor is available for this action.")
     }
 
     func testConnectorPendingRequestBindsArgumentsAndExpires() async throws {
@@ -263,6 +306,16 @@ final class NexComputerExtendedActionTests: XCTestCase {
     private func temporaryFile(_ name: String) -> URL {
         FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString).appendingPathComponent(name)
     }
+
+    private func fixturePDFPage(size: CGFloat) throws -> PDFPage {
+        let image = NSImage(size: NSSize(width: size, height: size))
+        image.lockFocus()
+        NSColor.white.setFill()
+        NSBezierPath(rect: NSRect(x: 0, y: 0, width: size, height: size)).fill()
+        image.unlockFocus()
+        guard let page = PDFPage(image: image) else { throw NSError(domain: "NexTests", code: 1) }
+        return page
+    }
 }
 
 private actor MockCodexProvider: NexCodexProviding {
@@ -273,6 +326,15 @@ private actor MockCodexProvider: NexCodexProviding {
     func openSession(sessionID: String) async throws {}
 }
 private struct MockConnectorExecutor: NexConnectorExecuting { func execute(provider: String, account: String, action: String, arguments: [String: NexJSONValue]) async throws -> NexJSONValue { .object(["display": .string("Executed \(action)"), "status": .string("completed"), "provider": .string(provider), "action": .string(action), "id": .string("fixture"), "items": .array([]), "error": .string("")]) } }
+private actor MockConnectorAPITransport: NexConnectorAPITransporting {
+    private var request: URLRequest?
+    func send(_ request: URLRequest) async throws -> (Data, HTTPURLResponse) {
+        self.request = request
+        let data = #"{"results":[{"id":"page-1","object":"page"}]}"#.data(using: .utf8)!
+        return (data, HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!)
+    }
+    func lastRequest() -> URLRequest? { request }
+}
 private struct MockOAuthTransport: NexOAuthTransporting {
     func exchange(configuration: NexOAuthConfiguration, code: String, verifier: String, callbackURL: URL, scopes: [String]) async throws -> NexConnectorCredential { .init(provider: configuration.provider, account: "test@example.com", accessToken: "access", refreshToken: "refresh", tokenType: "Bearer", scopes: scopes, expiresAt: .distantFuture, connectedAt: .now, lastSuccessfulUse: nil) }
     func verify(configuration: NexOAuthConfiguration, credential: NexConnectorCredential) async throws -> String { credential.account }

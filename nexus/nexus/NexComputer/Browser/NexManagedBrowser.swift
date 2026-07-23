@@ -14,13 +14,19 @@ struct NexBrowserTaskResult: Sendable {
 
 actor NexManagedBrowserProvider {
     private let root: URL
+    private let chromeIsRunning: @Sendable () -> Bool
     private var processes: [String: Process] = [:]
     private var results: [String: NexBrowserTaskResult] = [:]
-    init(root: URL? = nil) { self.root = root ?? FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0].appendingPathComponent("Nexus/Browser", isDirectory: true) }
+    init(root: URL? = nil, chromeIsRunning: @escaping @Sendable () -> Bool = {
+        NSWorkspace.shared.runningApplications.contains { $0.bundleIdentifier == "com.google.Chrome" }
+    }) {
+        self.root = root ?? FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0].appendingPathComponent("Nexus/Browser", isDirectory: true)
+        self.chromeIsRunning = chromeIsRunning
+    }
 
     func run(goal: String, stepsJSON: String, progress: @escaping @Sendable (String) async -> Void) async throws -> NexBrowserTaskResult {
-        let taskID = UUID().uuidString.lowercased(), runtime = try await ensureRuntime(), taskRoot = root.appendingPathComponent("tasks/\(taskID)", isDirectory: true); try FileManager.default.createDirectory(at: taskRoot, withIntermediateDirectories: true)
         guard let stepsData = stepsJSON.data(using: .utf8), (try? JSONSerialization.jsonObject(with: stepsData)) is [Any] else { throw NexToolError.executionFailed(code: "invalid_browser_steps", message: "steps_json must be a JSON array of browser steps.") }
+        let taskID = UUID().uuidString.lowercased(), runtime = try await ensureRuntime(), taskRoot = root.appendingPathComponent("tasks/\(taskID)", isDirectory: true); try FileManager.default.createDirectory(at: taskRoot, withIntermediateDirectories: true)
         let request: [String: Any] = ["taskID": taskID, "goal": goal, "steps": try JSONSerialization.jsonObject(with: stepsData), "profile": root.appendingPathComponent("Profile").path, "taskRoot": taskRoot.path, "chrome": "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"]
         let input = try JSONSerialization.data(withJSONObject: request)
         let process = Process(), stdin = Pipe(), stdout = Pipe(); process.executableURL = URL(fileURLWithPath: "/opt/homebrew/bin/node"); process.arguments = [runtime.appendingPathComponent("agent.mjs").path]; process.standardInput = stdin; process.standardOutput = stdout; process.standardError = stdout; processes[taskID] = process; try process.run(); try stdin.fileHandleForWriting.write(contentsOf: input); try stdin.fileHandleForWriting.close()
@@ -31,7 +37,7 @@ actor NexManagedBrowserProvider {
     func status(_ id: String) -> NexBrowserTaskResult? { results[id] ?? (processes[id] != nil ? .init(taskID: id, status: "running", text: "", tabs: [], downloads: [], screenshots: [], error: "") : nil) }
     func cancel(_ id: String) throws { guard let process = processes[id] else { throw NexToolError.executionFailed(code: "browser_task_missing", message: "Browser task is not running.") }; process.terminate(); processes[id] = nil; results[id] = .init(taskID: id, status: "cancelled", text: "", tabs: [], downloads: [], screenshots: [], error: "") }
     func importProfile(chromeRoot: URL) throws -> [String] {
-        guard !NSWorkspace.shared.runningApplications.contains(where: { $0.bundleIdentifier == "com.google.Chrome" }) else { throw NexToolError.executionFailed(code: "chrome_must_close", message: "Quit Chrome before importing browser state.") }
+        guard !chromeIsRunning() else { throw NexToolError.executionFailed(code: "chrome_must_close", message: "Quit Chrome before importing browser state.") }
         let source = chromeRoot.appendingPathComponent("Default"), destination = root.appendingPathComponent("Profile/Default"); try FileManager.default.createDirectory(at: destination, withIntermediateDirectories: true); var copied: [String] = []
         for name in ["Bookmarks", "History", "Preferences"] { let from = source.appendingPathComponent(name), to = destination.appendingPathComponent(name); guard FileManager.default.fileExists(atPath: from.path) else { continue }; try? FileManager.default.removeItem(at: to); try FileManager.default.copyItem(at: from, to: to); copied.append(name) }
         return copied
@@ -80,17 +86,6 @@ try {
 } catch(error) { emit({event:'completed',status:'failed',text:extracted.join('\n\n'),tabs:context?.pages().map(p=>p.url()) || [],downloads,screenshots,error:String(error?.message || error)}); process.exitCode=1; }
 finally { await context?.close(); }
 """#
-}
-
-actor NexChromeLocalProvider {
-    func list() throws -> [[String: NexJSONValue]] { let output = try script(#"tell application "Google Chrome" to set rows to {}\n tell application "Google Chrome"\n repeat with w from 1 to count windows\n repeat with t from 1 to count tabs of window w\n set end of rows to {(w as text), (t as text), title of tab t of window w, URL of tab t of window w, (t is active tab index of window w)}\n end repeat\n end repeat\n return rows\n end tell"#); return parseRows(output) }
-    func active() throws -> [[String: NexJSONValue]] { try list().filter { $0["active"] == .bool(true) } }
-    func activate(window: Int, tab: Int) throws { _ = try script("tell application \"Google Chrome\" to set active tab index of window \(window) to \(tab)\ntell application \"Google Chrome\" to set index of window \(window) to 1\ntell application \"Google Chrome\" to activate") }
-    func openURL(_ url: URL) throws { guard ["http", "https"].contains(url.scheme?.lowercased() ?? "") else { throw NexToolError.executionFailed(code: "unsafe_url", message: "Chrome only accepts HTTP(S) URLs.") }; _ = try script("tell application \"Google Chrome\" to open location \"\(url.absoluteString.replacingOccurrences(of: "\"", with: "%22"))\"") }
-    func close(window: Int, tab: Int) throws { _ = try script("tell application \"Google Chrome\" to close tab \(tab) of window \(window)") }
-    func open() throws { guard let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: "com.google.Chrome") else { throw BrowserTabProviderError.chromeUnavailable }; NSWorkspace.shared.openApplication(at: url, configuration: .init()) }
-    private func script(_ source: String) throws -> String { var error: NSDictionary?; let result = NSAppleScript(source: source)?.executeAndReturnError(&error); if let error { throw BrowserTabProviderError.scriptFailed(error.description) }; return result?.description ?? "" }
-    private func parseRows(_ ignored: String) -> [[String: NexJSONValue]] { [] } // list_tabs uses the proven BrowserTab provider in the UI process; retained for non-row commands.
 }
 
 actor NexBrowserActionCatalog {

@@ -16,6 +16,84 @@ struct NexConnectorCapabilityDocument: Codable, Equatable, Sendable {
     let capabilities: [NexConnectorCapability]
 }
 
+extension NexConnectorCapabilityDocument {
+    static func disconnected(_ provider: NexConnectorProvider) -> Self {
+        let capabilities = NexConnectorManager.specs
+            .filter { $0.provider == provider.rawValue }
+            .map {
+                NexConnectorCapability(
+                    action: $0.action,
+                    available: false,
+                    missingScope: $0.scope,
+                    providerLimitation: "Not connected"
+                )
+            }
+        return .init(
+            provider: provider.rawValue,
+            account: "",
+            connected: false,
+            grantedScopes: [],
+            capabilities: capabilities
+        )
+    }
+
+    static func connected(_ credential: NexConnectorCredential) -> Self {
+        let granted = NexConnectorScopeResolver.logicalScopes(
+            for: credential.provider,
+            granted: Set(credential.scopes)
+        )
+        let capabilities = NexConnectorManager.specs
+            .filter { $0.provider == credential.provider.rawValue }
+            .map { spec -> NexConnectorCapability in
+                let supported = NexOfficialConnectorExecutor.supports(action: spec.action)
+                let hasScope = spec.scope.isEmpty || granted.contains(spec.scope)
+                return .init(
+                    action: spec.action,
+                    available: supported && hasScope,
+                    missingScope: hasScope ? nil : spec.scope,
+                    providerLimitation: supported ? nil : "No safe official-API executor is available for this action."
+                )
+            }
+        return .init(
+            provider: credential.provider.rawValue,
+            account: credential.account,
+            connected: true,
+            grantedScopes: granted.sorted(),
+            capabilities: capabilities
+        )
+    }
+}
+
+enum NexConnectorScopeResolver {
+    static func logicalScopes(for provider: NexConnectorProvider, granted: Set<String>) -> Set<String> {
+        var output = granted
+        switch provider {
+        case .google:
+            if granted.contains("openid") { output.insert("openid") }
+            if granted.contains("https://www.googleapis.com/auth/gmail.readonly") || granted.contains("https://www.googleapis.com/auth/gmail.modify") { output.insert("gmail.readonly") }
+            if granted.contains("https://www.googleapis.com/auth/gmail.modify") { output.insert("gmail.modify") }
+            if granted.contains("https://www.googleapis.com/auth/calendar.readonly") || granted.contains("https://www.googleapis.com/auth/calendar.events") { output.insert("calendar.readonly") }
+            if granted.contains("https://www.googleapis.com/auth/calendar.events") { output.insert("calendar.events") }
+            if granted.contains("https://www.googleapis.com/auth/contacts.readonly") { output.insert("contacts.readonly") }
+        case .slack:
+            if !granted.isDisjoint(with: ["channels:history", "groups:history", "im:history", "mpim:history", "search:read", "channels:read", "users:read"]) { output.insert("slack.history") }
+            if !granted.isDisjoint(with: ["chat:write", "reactions:write", "files:write"]) { output.insert("slack.write") }
+        case .github:
+            if !granted.isDisjoint(with: ["repo", "public_repo", "read:org", "notifications"]) { output.insert("repo.read") }
+            if !granted.isDisjoint(with: ["repo", "public_repo"]) { output.insert("repo.write") }
+        case .notion:
+            // Notion grants capabilities to the integration rather than
+            // returning a conventional OAuth scope list. Preserve the scopes
+            // selected during authorization as the local least-privilege policy.
+            if granted.contains("notion.content.read") { output.insert("notion.content.read") }
+            if granted.contains("notion.content.write") { output.insert("notion.content.write") }
+        case .discord:
+            if granted.contains("guilds") || granted.contains("bot.guilds") { output.insert("bot.guilds") }
+        }
+        return output
+    }
+}
+
 struct NexConnectorActionSpec: Sendable {
     let action: String
     let provider: String
@@ -40,7 +118,7 @@ actor NexConnectorManager {
     private let pendingStore: NexConnectorPendingRequestStore
     private var documents: [String: NexConnectorCapabilityDocument] = [:]
     private var registeredActions: Set<String> = []
-    init(executor: any NexConnectorExecuting = NexDisconnectedConnectorExecutor(), pendingStore: NexConnectorPendingRequestStore = NexConnectorPendingRequestStore()) {
+    init(executor: any NexConnectorExecuting = NexOfficialConnectorExecutor(), pendingStore: NexConnectorPendingRequestStore = NexConnectorPendingRequestStore()) {
         self.executor = executor
         self.pendingStore = pendingStore
     }
@@ -65,6 +143,21 @@ actor NexConnectorManager {
     func capabilityDocument(provider: String) -> NexConnectorCapabilityDocument? { documents[provider] }
     func unavailableCapabilities(provider: String) -> [NexConnectorCapability] { documents[provider]?.capabilities.filter { !$0.available } ?? [] }
     func allDocuments() -> [NexConnectorCapabilityDocument] { documents.values.sorted { $0.provider < $1.provider } }
+
+    func reloadStoredConnections(
+        store: any NexConnectorCredentialStoring = NexKeychainConnectorCredentialStore(),
+        registry: NexComputerRegistry
+    ) async throws {
+        for provider in NexConnectorProvider.allCases {
+            let document: NexConnectorCapabilityDocument
+            if let credential = try store.credential(for: provider) {
+                document = .connected(credential)
+            } else {
+                document = .disconnected(provider)
+            }
+            try await apply(document, to: registry)
+        }
+    }
 
     func pendingRequest(id: UUID) async -> NexConnectorPendingRequest? { await pendingStore.request(id: id) }
 
@@ -124,7 +217,7 @@ actor NexConnectorManager {
     }
 
     private static let input = NexToolInputSchema(fields: [
-        "query": .init(.string), "id": .init(.string), "parent_id": .init(.string), "database_id": .init(.string), "channel_id": .init(.string), "thread_id": .init(.string), "message_id": .init(.string), "user_id": .init(.string), "draft_id": .init(.string), "repository": .init(.string), "number": .init(.integer, minimum: 1), "title": .init(.string), "content": .init(.string), "body": .init(.string), "email": .init(.string), "start": .init(.string), "end": .init(.string), "timezone": .init(.string), "location": .init(.string), "description": .init(.string), "attendees": .init(.stringArray), "labels": .init(.stringArray), "recurrence": .init(.stringArray), "file_path": .init(.string), "emoji": .init(.string), "limit": .init(.integer, minimum: 1, maximum: 250), "filter": .init(.string), "sort": .init(.string), "response": .init(.string), "calendar_id": .init(.string)
+        "query": .init(.string), "id": .init(.string), "parent_id": .init(.string), "database_id": .init(.string), "channel_id": .init(.string), "thread_id": .init(.string), "message_id": .init(.string), "user_id": .init(.string), "draft_id": .init(.string), "repository": .init(.string), "number": .init(.integer, minimum: 1), "title": .init(.string), "content": .init(.string), "body": .init(.string), "email": .init(.string), "start": .init(.string), "end": .init(.string), "timezone": .init(.string), "location": .init(.string), "description": .init(.string), "attendees": .init(.stringArray), "labels": .init(.stringArray), "recurrence": .init(.stringArray), "calendars": .init(.stringArray), "file_path": .init(.string), "emoji": .init(.string), "limit": .init(.integer, minimum: 1, maximum: 250), "filter": .init(.string), "sort": .init(.string), "response": .init(.string), "calendar_id": .init(.string), "head": .init(.string), "base": .init(.string), "unread": .init(.boolean)
     ])
     private static let output = NexToolInputSchema(fields: ["display": .init(.string, required: true), "status": .init(.string, required: true), "provider": .init(.string, required: true), "action": .init(.string, required: true), "id": .init(.string, required: true), "items": .init(.array, required: true), "error": .init(.string, required: true)])
     private static func manifest(_ spec: NexConnectorActionSpec) -> NexComputerActionManifest {

@@ -54,7 +54,7 @@ final class NexComputerFoundationTests: XCTestCase {
         }
 
         let registeredNames = await core.definitions().map(\.name)
-        XCTAssertEqual(registeredNames, ["fixture.open"])
+        XCTAssertEqual(Set(registeredNames), Set(["confirm_action", "cancel_action", "fixture.open"]))
         let result = await runtime.execute(
             actionID: "fixture.open",
             arguments: ["query": .string("private value")],
@@ -223,6 +223,36 @@ final class NexComputerFoundationTests: XCTestCase {
         XCTAssertEqual(entries[0].argumentKeys, ["query"])
         let encoded = String(data: try JSONEncoder().encode(entries), encoding: .utf8) ?? ""
         XCTAssertFalse(encoded.contains("super-secret-value"))
+    }
+
+    func testCLIExecutesInjectedEnvironmentAndRejectsInvalidJSON() async throws {
+        let tools = NexToolRegistry()
+        let registry = NexComputerRegistry(toolRegistry: tools)
+        let counter = Counter()
+        try await registry.register(manifest: makeManifest()) { _, _ in
+            _ = await counter.increment()
+            return .object(["display": .string("Opened")])
+        }
+        let runtime = NexComputerRuntime(registry: registry)
+        let environment = NexComputerCLIEnvironment(
+            tools: tools,
+            registry: registry,
+            runtime: runtime,
+            search: NexToolSearchService(registry: tools, computerRegistry: registry),
+            connectors: NexConnectorManager()
+        )
+        let dryRun = await NexComputerCLI.run(
+            arguments: ["dry-run", "fixture.open", "--json", #"{"query":"fixture"}"#],
+            environment: environment
+        )
+        XCTAssertEqual(dryRun, 0)
+        let executions = await counter.current()
+        XCTAssertEqual(executions, 0)
+        let invalid = await NexComputerCLI.run(
+            arguments: ["execute", "fixture.open", "--json", "not-json"],
+            environment: environment
+        )
+        XCTAssertEqual(invalid, 2)
     }
 
     private func makeManifest(
