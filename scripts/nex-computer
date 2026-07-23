@@ -1,0 +1,13 @@
+#!/bin/zsh
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+APP="${NEXUS_APP:-$ROOT/.build/Build/Products/Debug/nexus.app}"
+EXECUTABLE="$APP/Contents/MacOS/nexus"
+
+if [[ ! -x "$EXECUTABLE" ]]; then
+  echo "Nexus is not built at $APP. Run ./scripts/build-nexus.sh first." >&2
+  exit 1
+fi
+
+exec "$EXECUTABLE" --nex-computer "$@"

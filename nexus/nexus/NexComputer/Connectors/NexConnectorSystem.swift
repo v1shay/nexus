@@ -50,8 +50,13 @@ actor NexConnectorManager {
         let declared = Dictionary(uniqueKeysWithValues: Self.specs.filter { $0.provider == document.provider }.map { ($0.action, $0) })
         for spec in declared.values where !registeredActions.contains(spec.action) {
             let manager = self
-            try await registry.register(manifest: Self.manifest(spec)) { arguments, _ in
-                try await manager.executeOrRequest(spec: spec, arguments: arguments)
+            do {
+                try await registry.register(manifest: Self.manifest(spec)) { arguments, _ in
+                    try await manager.executeOrRequest(spec: spec, arguments: arguments)
+                }
+            } catch NexToolError.duplicateRegistration {
+                // A first-party local executor (for example authenticated `gh`)
+                // remains authoritative over an equivalent connector action.
             }
             registeredActions.insert(spec.action)
         }

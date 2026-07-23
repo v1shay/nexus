@@ -28,6 +28,15 @@ final class NexusAppDelegate: NSObject, NSApplicationDelegate {
         // controller explicitly and must not initialize the real Keychain,
         // global hotkey, notch panel, or LaunchAgent as a side effect.
         if NSClassFromString("XCTestCase") != nil { return }
+        if let index = CommandLine.arguments.firstIndex(of: "--nex-computer") {
+            NSApp.setActivationPolicy(.prohibited)
+            let arguments = Array(CommandLine.arguments.dropFirst(index + 1))
+            launchTask = Task {
+                let status = await NexComputerCLI.run(arguments: arguments)
+                Foundation.exit(status)
+            }
+            return
+        }
         if NexusConnectHostProcess.isCurrentProcess {
             NSApp.setActivationPolicy(.prohibited)
             let host = NexusConnectHostDaemon()
