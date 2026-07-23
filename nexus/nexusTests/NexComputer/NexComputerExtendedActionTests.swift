@@ -139,6 +139,27 @@ final class NexComputerExtendedActionTests: XCTestCase {
         XCTAssertFalse(try management.status(provider: .notion).first?.connected == true)
     }
 
+    func testConnectorSecurityRejectsWrongOriginAndRedactsSecrets() throws {
+        XCTAssertNoThrow(try NexConnectorSecurityPolicy.validateCallback(URL(string: "na.nexus.oauth://oauth/callback?code=abc")!, expectedScheme: "na.nexus.oauth"))
+        XCTAssertThrowsError(try NexConnectorSecurityPolicy.validateCallback(URL(string: "na.nexus.oauth://evil/callback?code=abc")!, expectedScheme: "na.nexus.oauth"))
+        let credential = NexConnectorCredential(provider: .github, account: "vishay", accessToken: "access-secret", refreshToken: "refresh-secret", tokenType: "Bearer", scopes: ["repo"], expiresAt: nil, connectedAt: .now, lastSuccessfulUse: nil)
+        let redacted = NexConnectorSecurityPolicy.redacted("Authorization: Bearer access-secret refresh_token=refresh-secret", credentials: [credential])
+        XCTAssertFalse(redacted.contains("access-secret")); XCTAssertFalse(redacted.contains("refresh-secret"))
+    }
+
+    func testConnectorSessionRefreshesRotatesAndRemovesRevokedCredentials() async throws {
+        let memory = NexusMemorySecretStore(), store = NexKeychainConnectorCredentialStore(secrets: memory)
+        try store.save(.init(provider: .google, account: "test@example.com", accessToken: "old", refreshToken: "refresh", tokenType: "Bearer", scopes: ["openid"], expiresAt: .distantPast, connectedAt: .now, lastSuccessfulUse: nil))
+        let session = NexAuthenticatedConnectorSession(store: store, transport: MockOAuthTransport()) { provider in
+            NexOAuthConfiguration(provider: provider, clientID: "fixture", authorizationURL: URL(string: "https://example.com/auth")!, tokenURL: URL(string: "https://example.com/token")!, verificationURL: URL(string: "https://example.com/me")!, callbackScheme: "na.nexus.oauth", scopeSeparator: " ", extraAuthorizationItems: [], extraTokenFields: [:])
+        }
+        let refreshed = try await session.validCredential(for: .google)
+        XCTAssertEqual(refreshed.accessToken, "refreshed-access")
+        XCTAssertEqual(try store.credential(for: .google)?.accessToken, "refreshed-access")
+        try await session.markRevoked(.google)
+        XCTAssertNil(try store.credential(for: .google))
+    }
+
     @MainActor
     func testConnectorCredentialsPersistOnlyThroughSecretStore() throws {
         let memory = NexusMemorySecretStore()
@@ -180,6 +201,7 @@ private struct MockConnectorExecutor: NexConnectorExecuting { func execute(provi
 private struct MockOAuthTransport: NexOAuthTransporting {
     func exchange(configuration: NexOAuthConfiguration, code: String, verifier: String, callbackURL: URL, scopes: [String]) async throws -> NexConnectorCredential { .init(provider: configuration.provider, account: "test@example.com", accessToken: "access", refreshToken: "refresh", tokenType: "Bearer", scopes: scopes, expiresAt: .distantFuture, connectedAt: .now, lastSuccessfulUse: nil) }
     func verify(configuration: NexOAuthConfiguration, credential: NexConnectorCredential) async throws -> String { credential.account }
+    func refresh(configuration: NexOAuthConfiguration, credential: NexConnectorCredential) async throws -> NexConnectorCredential { .init(provider: credential.provider, account: credential.account, accessToken: "refreshed-access", refreshToken: "rotated-refresh", tokenType: credential.tokenType, scopes: credential.scopes, expiresAt: .distantFuture, connectedAt: credential.connectedAt, lastSuccessfulUse: credential.lastSuccessfulUse) }
     func revoke(configuration: NexOAuthConfiguration, credential: NexConnectorCredential) async throws { }
 }
 

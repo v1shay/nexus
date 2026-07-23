@@ -114,6 +114,7 @@ struct NexKeychainConnectorCredentialStore: NexConnectorCredentialStoring, Senda
 protocol NexOAuthTransporting: Sendable {
     func exchange(configuration: NexOAuthConfiguration, code: String, verifier: String, callbackURL: URL, scopes: [String]) async throws -> NexConnectorCredential
     func verify(configuration: NexOAuthConfiguration, credential: NexConnectorCredential) async throws -> String
+    func refresh(configuration: NexOAuthConfiguration, credential: NexConnectorCredential) async throws -> NexConnectorCredential
     func revoke(configuration: NexOAuthConfiguration, credential: NexConnectorCredential) async throws
 }
 
@@ -150,6 +151,19 @@ struct NexOAuthURLSessionTransport: NexOAuthTransporting {
             throw NexConnectorAuthError.verificationFailed(Self.safeProviderError(data))
         }
         return (json["email"] as? String) ?? (json["login"] as? String) ?? (json["name"] as? String) ?? (json["user"] as? String) ?? "Connected account"
+    }
+
+    func refresh(configuration: NexOAuthConfiguration, credential: NexConnectorCredential) async throws -> NexConnectorCredential {
+        guard let refreshToken = credential.refreshToken else { throw NexConnectorAuthError.credentialUnavailable(configuration.provider) }
+        var request = URLRequest(url: configuration.tokenURL)
+        request.httpMethod = "POST"
+        request.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
+        request.setValue("application/json", forHTTPHeaderField: "Accept")
+        let fields = ["grant_type": "refresh_token", "client_id": configuration.clientID, "refresh_token": refreshToken]
+        request.httpBody = fields.sorted { $0.key < $1.key }.map { "\($0.key.urlFormEncoded)=\($0.value.urlFormEncoded)" }.joined(separator: "&").data(using: .utf8)
+        let (data, response) = try await session.data(for: request)
+        guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode), let json = try JSONSerialization.jsonObject(with: data) as? [String: Any], let access = json["access_token"] as? String else { throw NexConnectorAuthError.exchangeFailed(Self.safeProviderError(data)) }
+        return .init(provider: credential.provider, account: credential.account, accessToken: access, refreshToken: (json["refresh_token"] as? String) ?? refreshToken, tokenType: (json["token_type"] as? String) ?? credential.tokenType, scopes: credential.scopes, expiresAt: (json["expires_in"] as? NSNumber).map { Date().addingTimeInterval($0.doubleValue) }, connectedAt: credential.connectedAt, lastSuccessfulUse: credential.lastSuccessfulUse)
     }
 
     func revoke(configuration: NexOAuthConfiguration, credential: NexConnectorCredential) async throws {
@@ -207,6 +221,7 @@ final class NexConnectorAuthController: NSObject, ObservableObject, ASWebAuthent
                 activeProvider = provider
                 message = "Opening \(provider.title)…"
                 let callbackURL = try await authenticate(url: authorizationURL, scheme: configuration.callbackScheme)
+                try NexConnectorSecurityPolicy.validateCallback(callbackURL, expectedScheme: configuration.callbackScheme)
                 let query = URLComponents(url: callbackURL, resolvingAgainstBaseURL: false)?.queryItems ?? []
                 guard query.first(where: { $0.name == "state" })?.value == state else { throw NexConnectorAuthError.stateMismatch }
                 guard let code = query.first(where: { $0.name == "code" })?.value, !code.isEmpty else { throw NexConnectorAuthError.invalidCallback }
@@ -296,6 +311,48 @@ final class NexConnectorAuthController: NSObject, ObservableObject, ASWebAuthent
     }
 
     private static func randomURLSafe(bytes: Int) -> String { Data((0..<bytes).map { _ in UInt8.random(in: .min ... .max) }).base64URLEncoded }
+}
+
+actor NexAuthenticatedConnectorSession {
+    private let store: any NexConnectorCredentialStoring
+    private let transport: any NexOAuthTransporting
+    private let configuration: @Sendable (NexConnectorProvider) throws -> NexOAuthConfiguration
+    init(store: any NexConnectorCredentialStoring = NexKeychainConnectorCredentialStore(), transport: any NexOAuthTransporting = NexOAuthURLSessionTransport(), configuration: @escaping @Sendable (NexConnectorProvider) throws -> NexOAuthConfiguration = { try NexOAuthConfiguration.configured($0) }) { self.store = store; self.transport = transport; self.configuration = configuration }
+
+    func validCredential(for provider: NexConnectorProvider, now: Date = .now) async throws -> NexConnectorCredential {
+        guard var credential = try store.credential(for: provider) else { throw NexConnectorAuthError.credentialUnavailable(provider) }
+        if let expiry = credential.expiresAt, expiry <= now.addingTimeInterval(60) {
+            guard credential.refreshToken != nil else { try store.remove(provider); throw NexConnectorAuthError.credentialUnavailable(provider) }
+            do {
+                credential = try await transport.refresh(configuration: try configuration(provider), credential: credential)
+                try store.save(credential)
+            } catch {
+                try? store.remove(provider)
+                throw error
+            }
+        }
+        return credential
+    }
+
+    func markSuccessful(_ credential: NexConnectorCredential, at date: Date = .now) throws {
+        try store.save(.init(provider: credential.provider, account: credential.account, accessToken: credential.accessToken, refreshToken: credential.refreshToken, tokenType: credential.tokenType, scopes: credential.scopes, expiresAt: credential.expiresAt, connectedAt: credential.connectedAt, lastSuccessfulUse: date))
+    }
+
+    func markRevoked(_ provider: NexConnectorProvider) throws { try store.remove(provider) }
+}
+
+enum NexConnectorSecurityPolicy {
+    static func validateCallback(_ url: URL, expectedScheme: String) throws {
+        guard url.scheme == expectedScheme, url.host == "oauth", url.path == "/callback", url.user == nil, url.password == nil else { throw NexConnectorAuthError.invalidCallback }
+    }
+
+    static func redacted(_ value: String, credentials: [NexConnectorCredential] = []) -> String {
+        var output = value
+        for secret in credentials.flatMap({ [$0.accessToken, $0.refreshToken].compactMap { $0 } }) where !secret.isEmpty { output = output.replacingOccurrences(of: secret, with: "<redacted>") }
+        let patterns = [#"(?i)(access_token|refresh_token|authorization_code|client_secret|code)=([^&\s]+)"#, #"(?i)Bearer\s+[A-Za-z0-9._~+/-]+=*"#]
+        for pattern in patterns { output = output.replacingOccurrences(of: pattern, with: "$1=<redacted>", options: .regularExpression) }
+        return output
+    }
 }
 
 struct NexConnectionsSettingsView: View {
