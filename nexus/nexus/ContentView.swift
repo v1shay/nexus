@@ -359,6 +359,24 @@ private struct ToolActivityIndicator: View {
     private var usesTextReveal: Bool { activity.requiresCompactTextReveal }
 
     var body: some View {
+        Group {
+            if activity.requiresExpandedPreview {
+                NexTaskPreviewCard(
+                    model: .make(activity: activity),
+                    confirm: notch.confirmTaskPreview,
+                    cancel: notch.cancelTaskPreview,
+                    connect: { notch.connectProvider($0) },
+                    open: notch.openTaskPreviewTarget
+                )
+            } else {
+                compactBody
+            }
+        }
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("\(activity.toolName). \(liveLine)")
+    }
+
+    private var compactBody: some View {
         GeometryReader { proxy in
             let rowHeight = usesTextReveal
                 ? max(0, proxy.size.height - NotchGeometry.compactTextReveal)
@@ -379,8 +397,6 @@ private struct ToolActivityIndicator: View {
                 }
             }
         }
-        .accessibilityElement(children: .combine)
-        .accessibilityLabel("\(activity.toolName). \(liveLine)")
     }
 
     private var activityRow: some View {
@@ -663,7 +679,7 @@ private struct AnimatedToolIcon: View {
     }
 }
 
-private struct ToolIconView: View {
+struct ToolIconView: View {
     let source: ToolIconSource
     var size: CGFloat = 24
 
@@ -681,6 +697,12 @@ private struct ToolIconView: View {
             case .svg(let data, let fallback):
                 if let image = NSImage(data: data) {
                     Image(nsImage: image).resizable().scaledToFit()
+                } else {
+                    Image(systemName: fallback).resizable().scaledToFit()
+                }
+            case .image(let data, let fallback):
+                if let image = NSImage(data: data) {
+                    Image(nsImage: image).resizable().interpolation(.high).scaledToFit()
                 } else {
                     Image(systemName: fallback).resizable().scaledToFit()
                 }

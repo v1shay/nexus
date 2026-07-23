@@ -945,6 +945,19 @@ final class NotchController: ObservableObject {
         if let screen { resize(to: listeningSize(for: screen), animated: true) }
     }
 
+    func confirmTaskPreview(_ id: UUID) {
+        Task { _ = try? await memory.registry.execute(name: "nex.confirm_action", arguments: ["actionId": .string(id.uuidString)], invocation: .app) }
+    }
+
+    func cancelTaskPreview(_ id: UUID?) {
+        if let id { Task { _ = try? await memory.registry.execute(name: "nex.cancel_action", arguments: ["actionId": .string(id.uuidString)], invocation: .app) } }
+        interaction.dismiss()
+        if let screen { resize(to: idleSize(for: screen), animated: true) }
+    }
+
+    func connectProvider(_ provider: NexConnectorProvider) { connectorAuth.connectWithEnabledScopes(provider) }
+    func openTaskPreviewTarget(_ url: URL) { NSWorkspace.shared.open(url) }
+
     /// The selected model appears for a beat at the exact compact-orb location,
     /// then contracts away as the established thinking orb takes over.  It gives
     /// each request an honest visual handoff without increasing notch height.
@@ -1338,6 +1351,9 @@ final class NotchController: ObservableObject {
 
     private func toolActivitySize(for screen: NSScreen) -> CGSize {
         let physical = closedSize(for: screen)
+        if interaction.toolActivity?.requiresExpandedPreview == true {
+            return CGSize(width: min(650, screen.frame.width * 0.58), height: min(500, screen.frame.height * 0.62))
+        }
         let streamsText = interaction.toolActivity?.requiresCompactTextReveal ?? false
         return CGSize(
             width: min(500, screen.frame.width * 0.42),

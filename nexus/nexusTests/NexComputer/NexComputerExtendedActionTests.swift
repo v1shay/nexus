@@ -185,6 +185,81 @@ final class NexComputerExtendedActionTests: XCTestCase {
         XCTAssertFalse(NexConnectorAuthController.scopeOptions(.google).map(\.id).contains("https://mail.google.com/"))
     }
 
+    func testProviderIconsUseRawUserAssetBytesWithoutATile() {
+        guard case .image(let data, let fallback) = NexProviderIconCatalog.icon(for: "terminal.run") else {
+            return XCTFail("Terminal should use the embedded user-supplied mark")
+        }
+        XCTAssertFalse(data.isEmpty)
+        XCTAssertEqual(fallback, "terminal")
+        XCTAssertEqual(NexProviderIconCatalog.icon(for: "unregistered.tool"), .systemSymbol("wrench.and.screwdriver"))
+    }
+
+    func testCompletedEmailActivityBuildsStructuredConfirmablePreview() throws {
+        let confirmationID = UUID()
+        let activity = ToolActivity(
+            actionID: "gmail.send_draft",
+            toolName: "Gmail",
+            status: "Ready to send",
+            spokenStatus: "",
+            icon: NexProviderIconCatalog.icon(for: "gmail.send_draft"),
+            phase: .completed,
+            arguments: [
+                "email": .string("sam@example.com"),
+                "title": .string("OpenAI credits"),
+                "body": .string("Hi Sam, could we get more credits?")
+            ],
+            result: .object([
+                "status": .string("confirmation_required"),
+                "actionId": .string(confirmationID.uuidString),
+                "display": .string("Review this message before sending")
+            ])
+        )
+        XCTAssertTrue(activity.requiresExpandedPreview)
+        let preview = NexTaskPreviewModel.make(activity: activity)
+        XCTAssertEqual(preview.kind, .email)
+        XCTAssertEqual(preview.confirmationID, confirmationID)
+        XCTAssertEqual(preview.fields.first, .init(label: "To", value: "sam@example.com"))
+        XCTAssertTrue(preview.fields.contains(.init(label: "Subject", value: "OpenAI credits")))
+    }
+
+    func testConnectionActivityBuildsConnectorPreview() throws {
+        let connectionID = UUID()
+        let activity = ToolActivity(
+            actionID: "notion.search",
+            toolName: "Notion",
+            status: "Connect Notion",
+            spokenStatus: "",
+            icon: NexProviderIconCatalog.icon(for: "notion.search"),
+            phase: .completed,
+            arguments: ["query": .string("Nexus")],
+            result: .object([
+                "status": .string("connection_required"),
+                "connectionId": .string(connectionID.uuidString),
+                "display": .string("Connect Notion to continue")
+            ])
+        )
+        let preview = NexTaskPreviewModel.make(activity: activity)
+        XCTAssertEqual(preview.kind, .connector)
+        XCTAssertEqual(preview.connectionID, connectionID)
+    }
+
+    func testCodexAndNexCLIPreserveSpecializedCompactLayouts() {
+        let completed = NexToolLifecycleEvent(
+            executionID: UUID(),
+            toolName: "nex_cli_task",
+            phase: .completed,
+            message: "Done",
+            progress: 1,
+            errorCode: nil,
+            occurredAt: .now,
+            arguments: [:],
+            result: .object(["status": .string("completed")])
+        )
+        XCTAssertFalse(ToolActivity.lifecycle(completed).requiresExpandedPreview)
+        let codex = ToolActivity(toolName: "Codex", status: "Done", spokenStatus: "", icon: .systemSymbol("checkmark"), phase: .completed, result: .object(["status": .string("completed")]))
+        XCTAssertFalse(codex.requiresExpandedPreview)
+    }
+
     private func temporaryFile(_ name: String) -> URL {
         FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString).appendingPathComponent(name)
     }

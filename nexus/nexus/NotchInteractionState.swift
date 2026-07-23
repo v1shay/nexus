@@ -12,6 +12,7 @@ enum ToolIconSource: Equatable, Sendable {
     case systemSymbol(String)
     case asset(name: String, fallbackSystemName: String)
     case svg(data: Data, fallbackSystemName: String)
+    case image(data: Data, fallbackSystemName: String)
 }
 
 struct ToolReceiptSource: Equatable, Identifiable, Sendable {
@@ -22,6 +23,7 @@ struct ToolReceiptSource: Equatable, Identifiable, Sendable {
 }
 
 struct ToolActivity: Equatable, Sendable {
+    var actionID: String? = nil
     let toolName: String
     let status: String
     let spokenStatus: String
@@ -39,6 +41,16 @@ struct ToolActivity: Equatable, Sendable {
     /// The exact validated query sent to a retrieval tool.
     var query: String?
     var sources: [ToolReceiptSource] = []
+    var arguments: [String: NexJSONValue] = [:]
+    var result: NexJSONValue? = nil
+
+    var requiresExpandedPreview: Bool {
+        guard toolName != "Codex", toolName != "Nex CLI" else { return false }
+        if phase == .failed { return true }
+        guard phase == .completed else { return false }
+        if case .object(let object) = result, ["confirmation_required", "connection_required", "completed", "failed"].contains(object["status"]?.string ?? "") { return true }
+        return false
+    }
 
     /// Generic activity text stays in the compact row. Reserve a second line
     /// only for real streamed worker output or retrieved search results.
@@ -70,18 +82,7 @@ struct ToolActivity: Equatable, Sendable {
         let title = isMemory
             ? "Nex Memory"
             : (isWebSearch ? "Web Search" : (isNexCLI ? "Nex CLI" : (isYouTube ? "YouTube" : event.toolName.replacingOccurrences(of: "_", with: " ").capitalized)))
-        let icon: ToolIconSource
-        if isMemory {
-            icon = .asset(name: "Obsidian", fallbackSystemName: "diamond.fill")
-        } else if isWebSearch {
-            icon = .asset(name: "Chrome", fallbackSystemName: "globe")
-        } else if isNexCLI {
-            icon = .systemSymbol("terminal")
-        } else if isYouTube {
-            icon = .asset(name: "YouTube", fallbackSystemName: "play.rectangle.fill")
-        } else {
-            icon = .systemSymbol("wrench.and.screwdriver")
-        }
+        let icon = NexProviderIconCatalog.icon(for: event.toolName)
         let query: String?
         if let submitted = event.arguments["query"]?.string {
             query = submitted
@@ -91,6 +92,7 @@ struct ToolActivity: Equatable, Sendable {
             query = nil
         }
         return ToolActivity(
+            actionID: event.toolName,
             toolName: title,
             status: event.message,
             spokenStatus: isMemory ? "Checking memory." : (isWebSearch ? "Searching the web." : (isYouTube ? "Checking YouTube." : event.message)),
@@ -99,7 +101,9 @@ struct ToolActivity: Equatable, Sendable {
             progress: event.progress,
             detail: isNexCLI ? "NEX > \(event.message)" : nil,
             query: query,
-            sources: isMemory ? memorySources(from: event.result) : ((isWebSearch || isYouTube) ? webSources(from: event.result) : [])
+            sources: isMemory ? memorySources(from: event.result) : ((isWebSearch || isYouTube) ? webSources(from: event.result) : []),
+            arguments: event.arguments,
+            result: event.result
         )
     }
 
