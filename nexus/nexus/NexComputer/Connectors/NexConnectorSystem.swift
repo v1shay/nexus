@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 
 struct NexConnectorCapability: Codable, Equatable, Sendable {
@@ -36,19 +37,21 @@ struct NexDisconnectedConnectorExecutor: NexConnectorExecuting {
 
 actor NexConnectorManager {
     private let executor: any NexConnectorExecuting
+    private let pendingStore: NexConnectorPendingRequestStore
     private var documents: [String: NexConnectorCapabilityDocument] = [:]
     private var registeredActions: Set<String> = []
-    init(executor: any NexConnectorExecuting = NexDisconnectedConnectorExecutor()) { self.executor = executor }
+    init(executor: any NexConnectorExecuting = NexDisconnectedConnectorExecutor(), pendingStore: NexConnectorPendingRequestStore = NexConnectorPendingRequestStore()) {
+        self.executor = executor
+        self.pendingStore = pendingStore
+    }
 
     func apply(_ document: NexConnectorCapabilityDocument, to registry: NexComputerRegistry) async throws {
-        guard document.connected else { documents[document.provider] = document; return }
         documents[document.provider] = document
         let declared = Dictionary(uniqueKeysWithValues: Self.specs.filter { $0.provider == document.provider }.map { ($0.action, $0) })
-        for capability in document.capabilities where capability.available && !registeredActions.contains(capability.action) {
-            guard let spec = declared[capability.action], document.grantedScopes.contains(spec.scope) || spec.scope.isEmpty else { continue }
-            let executor = executor, account = document.account
+        for spec in declared.values where !registeredActions.contains(spec.action) {
+            let manager = self
             try await registry.register(manifest: Self.manifest(spec)) { arguments, _ in
-                try await executor.execute(provider: spec.provider, account: account, action: spec.action, arguments: arguments)
+                try await manager.executeOrRequest(spec: spec, arguments: arguments)
             }
             registeredActions.insert(spec.action)
         }
@@ -57,6 +60,41 @@ actor NexConnectorManager {
     func capabilityDocument(provider: String) -> NexConnectorCapabilityDocument? { documents[provider] }
     func unavailableCapabilities(provider: String) -> [NexConnectorCapability] { documents[provider]?.capabilities.filter { !$0.available } ?? [] }
     func allDocuments() -> [NexConnectorCapabilityDocument] { documents.values.sorted { $0.provider < $1.provider } }
+
+    func pendingRequest(id: UUID) async -> NexConnectorPendingRequest? { await pendingStore.request(id: id) }
+
+    /// Returns the exact saved action and arguments. The caller must feed this
+    /// back through `NexComputerRegistry.execute`, which preserves permission
+    /// checks and confirmation binding for consequential resumed operations.
+    func resumeRequest(id: UUID, expectedArguments: [String: NexJSONValue]? = nil) async throws -> (String, [String: NexJSONValue]) {
+        let request = try await pendingStore.consume(id: id, expectedArguments: expectedArguments)
+        guard let document = documents[request.provider], document.connected,
+              let spec = Self.specs.first(where: { $0.action == request.action }),
+              Self.isAvailable(spec: spec, document: document) else {
+            throw NexToolError.executionFailed(code: "connector_still_unavailable", message: "\(request.provider.capitalized) is not connected with the required permission.")
+        }
+        return (request.action, request.arguments)
+    }
+
+    private func executeOrRequest(spec: NexConnectorActionSpec, arguments: [String: NexJSONValue]) async throws -> NexJSONValue {
+        guard let document = documents[spec.provider], Self.isAvailable(spec: spec, document: document) else {
+            let pending = try await pendingStore.create(provider: spec.provider, action: spec.action, arguments: arguments)
+            return .object([
+                "ok": .bool(false), "status": .string("connection_required"), "provider": .string(spec.provider),
+                "requestedAction": .string(spec.action), "connectionId": .string(pending.id.uuidString),
+                "display": .string("Connect \(spec.provider.capitalized) to \(Self.humanPurpose(spec.action)).")
+            ])
+        }
+        return try await executor.execute(provider: spec.provider, account: document.account, action: spec.action, arguments: arguments)
+    }
+
+    private static func isAvailable(spec: NexConnectorActionSpec, document: NexConnectorCapabilityDocument) -> Bool {
+        document.connected && (spec.scope.isEmpty || document.grantedScopes.contains(spec.scope)) && document.capabilities.contains { $0.action == spec.action && $0.available }
+    }
+
+    private static func humanPurpose(_ action: String) -> String {
+        action.split(separator: ".").last.map(String.init)?.replacingOccurrences(of: "_", with: " ") ?? "continue"
+    }
 
     static let specs: [NexConnectorActionSpec] = {
         var result: [NexConnectorActionSpec] = []
@@ -86,5 +124,76 @@ actor NexConnectorManager {
     private static let output = NexToolInputSchema(fields: ["display": .init(.string, required: true), "status": .init(.string, required: true), "provider": .init(.string, required: true), "action": .init(.string, required: true), "id": .init(.string, required: true), "items": .init(.array, required: true), "error": .init(.string, required: true)])
     private static func manifest(_ spec: NexConnectorActionSpec) -> NexComputerActionManifest {
         .init(actionID: spec.action, application: spec.provider.capitalized, provider: "\(spec.provider.capitalized) Connector", description: spec.description, examples: [spec.action.replacingOccurrences(of: ".", with: " ")], aliases: [spec.action.replacingOccurrences(of: ".", with: " ").replacingOccurrences(of: "_", with: " ")], tags: [spec.provider, "connector", spec.action.split(separator: ".").first.map(String.init) ?? spec.provider], inputSchema: input, outputSchema: output, implementationMethod: .connector, requiredPermissions: [.init(id: "oauth.\(spec.provider).\(spec.scope)", permission: .network)], registryPermission: .network, riskClass: spec.risk, confirmationPolicy: spec.confirmation, availabilityCheck: .always, timeoutSeconds: 60, supportsCancellation: true, dryRunBehavior: .supported("Would call \(spec.action) with account-bound OAuth and semantic arguments."), previewRenderer: "connector.\(spec.provider)", tests: ["NexConnectorTests"])
+    }
+}
+
+struct NexConnectorPendingRequest: Codable, Equatable, Identifiable, Sendable {
+    static let schemaVersion = 1
+    let version: Int
+    let id: UUID
+    let provider: String
+    let action: String
+    let arguments: [String: NexJSONValue]
+    let argumentsDigest: String
+    let createdAt: Date
+    let expiresAt: Date
+    var consumedAt: Date?
+}
+
+actor NexConnectorPendingRequestStore {
+    private struct Snapshot: Codable { let version: Int; let requests: [NexConnectorPendingRequest] }
+    private let fileURL: URL
+    private let lifetime: TimeInterval
+    private var requests: [UUID: NexConnectorPendingRequest]
+
+    init(fileURL: URL? = nil, lifetime: TimeInterval = 15 * 60) {
+        let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first ?? FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support")
+        self.fileURL = fileURL ?? support.appendingPathComponent("Nexus/NexComputer/pending-connections.json")
+        self.lifetime = lifetime
+        self.requests = Self.load(fileURL ?? support.appendingPathComponent("Nexus/NexComputer/pending-connections.json"))
+    }
+
+    func create(provider: String, action: String, arguments: [String: NexJSONValue], now: Date = .now) throws -> NexConnectorPendingRequest {
+        let digest = try Self.digest(arguments)
+        if let existing = requests.values.first(where: { $0.action == action && $0.argumentsDigest == digest && $0.consumedAt == nil && $0.expiresAt > now }) { return existing }
+        let request = NexConnectorPendingRequest(version: NexConnectorPendingRequest.schemaVersion, id: UUID(), provider: provider, action: action, arguments: arguments, argumentsDigest: digest, createdAt: now, expiresAt: now.addingTimeInterval(lifetime), consumedAt: nil)
+        requests[request.id] = request
+        try persist()
+        return request
+    }
+
+    func request(id: UUID, now: Date = .now) -> NexConnectorPendingRequest? {
+        guard let value = requests[id], value.consumedAt == nil, value.expiresAt > now else { return nil }
+        return value
+    }
+
+    func consume(id: UUID, expectedArguments: [String: NexJSONValue]?, now: Date = .now) throws -> NexConnectorPendingRequest {
+        guard var value = requests[id] else { throw NexToolError.notFound(id.uuidString) }
+        guard value.consumedAt == nil else { throw NexToolError.executionFailed(code: "connection_request_consumed", message: "That connection request was already resumed.") }
+        guard value.expiresAt > now else { throw NexToolError.executionFailed(code: "connection_request_expired", message: "That connection request expired.") }
+        if let expectedArguments, try Self.digest(expectedArguments) != value.argumentsDigest { throw NexToolError.executionFailed(code: "connection_arguments_changed", message: "The original connector arguments changed; Nexus will not resume them.") }
+        value.consumedAt = now
+        requests[id] = value
+        try persist()
+        return value
+    }
+
+    private func persist() throws {
+        try FileManager.default.createDirectory(at: fileURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+        let snapshot = Snapshot(version: NexConnectorPendingRequest.schemaVersion, requests: requests.values.sorted { $0.createdAt < $1.createdAt })
+        let encoder = JSONEncoder(); encoder.dateEncodingStrategy = .iso8601; encoder.outputFormatting = [.sortedKeys]
+        try encoder.encode(snapshot).write(to: fileURL, options: .atomic)
+    }
+
+    private static func load(_ url: URL) -> [UUID: NexConnectorPendingRequest] {
+        guard let data = try? Data(contentsOf: url) else { return [:] }
+        let decoder = JSONDecoder(); decoder.dateDecodingStrategy = .iso8601
+        guard let snapshot = try? decoder.decode(Snapshot.self, from: data), snapshot.version == NexConnectorPendingRequest.schemaVersion else { return [:] }
+        return Dictionary(uniqueKeysWithValues: snapshot.requests.map { ($0.id, $0) })
+    }
+
+    private static func digest(_ arguments: [String: NexJSONValue]) throws -> String {
+        let encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys]
+        return SHA256.hash(data: try encoder.encode(arguments)).map { String(format: "%02x", $0) }.joined()
     }
 }

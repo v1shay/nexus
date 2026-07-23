@@ -111,7 +111,21 @@ final class NexComputerExtendedActionTests: XCTestCase {
     func testConnectorCapabilityRegistrationHonorsScopesAndAvailability() async throws {
         let tools = NexToolRegistry(), computer = NexComputerRegistry(toolRegistry: tools, permissionManager: NexComputerPermissionManager(backend: AuthorizedPermissions())), manager = NexConnectorManager(executor: MockConnectorExecutor())
         let doc = NexConnectorCapabilityDocument(provider: "google", account: "test@example.com", connected: true, grantedScopes: ["openid", "gmail.readonly"], capabilities: [.init(action: "google.account_info", available: true, missingScope: nil, providerLimitation: nil), .init(action: "gmail.search", available: true, missingScope: nil, providerLimitation: nil), .init(action: "gmail.send_draft", available: false, missingScope: "gmail.send", providerLimitation: nil)])
-        try await manager.apply(doc, to: computer); let names = Set(await tools.definitions().map(\.name)); XCTAssertTrue(names.contains("google.account_info")); XCTAssertTrue(names.contains("gmail.search")); XCTAssertFalse(names.contains("gmail.send_draft")); let unavailable = await manager.unavailableCapabilities(provider: "google"); XCTAssertEqual(unavailable.first?.missingScope, "gmail.send")
+        try await manager.apply(doc, to: computer); let names = Set(await tools.definitions().map(\.name)); XCTAssertTrue(names.contains("google.account_info")); XCTAssertTrue(names.contains("gmail.search")); XCTAssertTrue(names.contains("gmail.send_draft")); let unavailable = await manager.unavailableCapabilities(provider: "google"); XCTAssertEqual(unavailable.first?.missingScope, "gmail.send")
+        let unavailableResult = try await tools.execute(name: "gmail.read_thread", arguments: ["id": .string("thread-1")])
+        guard case .object(let object) = unavailableResult else { return XCTFail("Expected connection request") }
+        XCTAssertEqual(object["status"], .string("connection_required"))
+    }
+
+    func testConnectorPendingRequestBindsArgumentsAndExpires() async throws {
+        let file = temporaryFile("pending-connectors.json")
+        let store = NexConnectorPendingRequestStore(fileURL: file, lifetime: 60)
+        let request = try await store.create(provider: "notion", action: "notion.search", arguments: ["query": .string("Nexus")], now: Date(timeIntervalSince1970: 100))
+        do { _ = try await store.consume(id: request.id, expectedArguments: ["query": .string("Other")], now: Date(timeIntervalSince1970: 110)); XCTFail("Expected changed argument rejection") } catch let error as NexToolError { XCTAssertEqual(error.code, "connection_arguments_changed") }
+        let consumed = try await store.consume(id: request.id, expectedArguments: ["query": .string("Nexus")], now: Date(timeIntervalSince1970: 110))
+        XCTAssertEqual(consumed.action, "notion.search")
+        let expired = try await store.create(provider: "slack", action: "slack.search", arguments: ["query": .string("launch")], now: Date(timeIntervalSince1970: 200))
+        do { _ = try await store.consume(id: expired.id, expectedArguments: nil, now: Date(timeIntervalSince1970: 300)); XCTFail("Expected expiry") } catch let error as NexToolError { XCTAssertEqual(error.code, "connection_request_expired") }
     }
 
     @MainActor

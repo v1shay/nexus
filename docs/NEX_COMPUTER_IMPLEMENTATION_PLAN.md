@@ -238,3 +238,4 @@ The subsystem is complete only when `docs/NEX_COMPUTER_VALIDATION.md` records ac
 ## Phase checkpoints
 
 - Phase 20: native Connections settings, system-browser OAuth authorization, PKCE/state, registered callback URL, least-privilege scopes, harmless identity verification, and Keychain-only credential persistence are implemented. Release OAuth client registrations remain an honest build-time requirement.
+- Phase 21: disconnected connector calls return native `connection_required` envelopes, persist exact action/argument digests, deduplicate requests, expire safely, reject changed arguments, and hand resumed calls back through the standard registry/confirmation gateway.
