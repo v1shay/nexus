@@ -105,6 +105,7 @@ enum NexusManagedCloudInferenceClient {
         messages: [NexusChatMessage],
         temperature: Double?,
         maximumTokens: Int?,
+        onProviderAttempt: @escaping @Sendable (NexusManagedCloudProvider) async -> Void = { _ in },
         onDelta: @escaping @Sendable (String, String) async -> Void
     ) async throws -> NexusManagedCloudInferenceResponse {
         var failures: [String] = []
@@ -112,6 +113,9 @@ enum NexusManagedCloudInferenceClient {
         for attempt in attempts {
             let streamStart = NexusCloudStreamStart()
             do {
+                // The UI must describe the provider actually receiving this
+                // request, rather than merely the first configured provider.
+                await onProviderAttempt(attempt.provider)
                 let text = try await NexusAPIProviderClient.streamChat(
                     configuration: attempt.configuration,
                     messages: messages,

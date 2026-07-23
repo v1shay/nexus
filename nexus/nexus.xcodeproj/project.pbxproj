@@ -70,6 +70,7 @@
 		C0D3A00130075C29006660E4 /* CodexProgressMonitor.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0D3A00230075C29006660E4 /* CodexProgressMonitor.swift */; };
 		X100000130075C29006660E4 /* NexusAPIProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = X100000230075C29006660E4 /* NexusAPIProvider.swift */; };
 		X100000530075C29006660E4 /* NexusManagedCloudInference.swift in Sources */ = {isa = PBXBuildFile; fileRef = X100000630075C29006660E4 /* NexusManagedCloudInference.swift */; };
+		X100000730075C29006660E4 /* NexusInferenceFallbackError.swift in Sources */ = {isa = PBXBuildFile; fileRef = X100000830075C29006660E4 /* NexusInferenceFallbackError.swift */; };
 		Y100000130075C29006660E4 /* NexusSettings.swift in Sources */ = {isa = PBXBuildFile; fileRef = Y100000230075C29006660E4 /* NexusSettings.swift */; };
 		G100000330075C29006660E4 /* NexusConnectFraming.swift in Sources */ = {isa = PBXBuildFile; fileRef = G100000430075C29006660E4 /* NexusConnectFraming.swift */; };
 		G100000530075C29006660E4 /* NexusConnectSecurity.swift in Sources */ = {isa = PBXBuildFile; fileRef = G100000630075C29006660E4 /* NexusConnectSecurity.swift */; };
@@ -182,6 +183,7 @@
 		C0D3A00230075C29006660E4 /* CodexProgressMonitor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CodexProgressMonitor.swift; sourceTree = "<group>"; };
 		X100000230075C29006660E4 /* NexusAPIProvider.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NexusAPIProvider.swift; sourceTree = "<group>"; };
 		X100000630075C29006660E4 /* NexusManagedCloudInference.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NexusManagedCloudInference.swift; sourceTree = "<group>"; };
+		X100000830075C29006660E4 /* NexusInferenceFallbackError.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NexusInferenceFallbackError.swift; sourceTree = "<group>"; };
 		Y100000230075C29006660E4 /* NexusSettings.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NexusSettings.swift; sourceTree = "<group>"; };
 		G100000430075C29006660E4 /* NexusConnectFraming.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NexusConnectFraming.swift; sourceTree = "<group>"; };
 		G100000630075C29006660E4 /* NexusConnectSecurity.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NexusConnectSecurity.swift; sourceTree = "<group>"; };
@@ -400,6 +402,7 @@
 				C0D3A00230075C29006660E4 /* CodexProgressMonitor.swift */,
 				X100000230075C29006660E4 /* NexusAPIProvider.swift */,
 				X100000630075C29006660E4 /* NexusManagedCloudInference.swift */,
+				X100000830075C29006660E4 /* NexusInferenceFallbackError.swift */,
 				Y100000230075C29006660E4 /* NexusSettings.swift */,
 				G100000430075C29006660E4 /* NexusConnectFraming.swift */,
 				G100000630075C29006660E4 /* NexusConnectSecurity.swift */,
@@ -668,6 +671,7 @@
 				C0D3A00130075C29006660E4 /* CodexProgressMonitor.swift in Sources */,
 				X100000130075C29006660E4 /* NexusAPIProvider.swift in Sources */,
 				X100000530075C29006660E4 /* NexusManagedCloudInference.swift in Sources */,
+				X100000730075C29006660E4 /* NexusInferenceFallbackError.swift in Sources */,
 				Y100000130075C29006660E4 /* NexusSettings.swift in Sources */,
 				G100000330075C29006660E4 /* NexusConnectFraming.swift in Sources */,
 				G100000530075C29006660E4 /* NexusConnectSecurity.swift in Sources */,

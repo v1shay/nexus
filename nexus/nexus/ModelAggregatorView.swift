@@ -359,7 +359,7 @@ private struct NexusModelsPage: View {
 
     @ViewBuilder
     private var activeModelLabel: some View {
-        if let cloud = viewModel.activeCloudProvider ?? (try? NexusManagedCloudInferenceStore().configurations().first?.provider) {
+        if let cloud = viewModel.activeCloudProvider {
             HStack(spacing: 6) {
                 Circle().fill(.green).frame(width: 6, height: 6)
                 Image(systemName: cloud == .cerebras ? "bolt.fill" : "sparkles")

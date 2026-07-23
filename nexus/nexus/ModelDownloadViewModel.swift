@@ -1,6 +1,19 @@
 import Foundation
 import Combine
 
+@MainActor
+private final class NexusCloudAttemptReporter {
+    weak var viewModel: ModelDownloadViewModel?
+
+    init(viewModel: ModelDownloadViewModel) {
+        self.viewModel = viewModel
+    }
+
+    func report(_ provider: NexusManagedCloudProvider) {
+        viewModel?.activeCloudProvider = provider
+    }
+}
+
 struct RemoteRuntimeInstallRequest: Identifiable, Equatable {
     let id = UUID()
     let model: LocalModel
@@ -22,7 +35,8 @@ final class ModelDownloadViewModel: ObservableObject {
     @Published var pendingRemoteRuntimeInstall: RemoteRuntimeInstallRequest?
     @Published private(set) var activeModel: LocalModel?
     @Published private(set) var activeModelSupportsThinking = false
-    @Published private(set) var activeCloudProvider: NexusManagedCloudProvider?
+    @Published fileprivate(set) var activeCloudProvider: NexusManagedCloudProvider?
+    @Published private(set) var cloudFallbackMessage: String?
     @Published var thinkingModeEnabled: Bool { didSet { persistThinkingMode() } }
     let apiProvider = NexusAPIProviderStore()
 
@@ -308,6 +322,7 @@ final class ModelDownloadViewModel: ObservableObject {
         onThinkingDelta: (@Sendable (_ delta: String, _ accumulated: String) async -> Void)? = nil,
         onDelta: @escaping @Sendable (_ delta: String, _ accumulated: String) async -> Void
     ) async throws -> String {
+        cloudFallbackMessage = nil
         let cloudAttempts: [(provider: NexusManagedCloudProvider, configuration: NexusAPIProviderConfiguration)]
         do {
             cloudAttempts = try managedCloud.configurations()
@@ -318,12 +333,16 @@ final class ModelDownloadViewModel: ObservableObject {
 
         if !cloudAttempts.isEmpty {
             do {
-                activeCloudProvider = cloudAttempts.first?.provider
+                activeCloudProvider = nil
+                let attemptReporter = NexusCloudAttemptReporter(viewModel: self)
                 let result = try await NexusManagedCloudInferenceClient.streamChat(
                     attempts: cloudAttempts,
                     messages: messages,
                     temperature: temperature,
                     maximumTokens: maximumTokens,
+                    onProviderAttempt: { provider in
+                        await attemptReporter.report(provider)
+                    },
                     onDelta: onDelta
                 )
                 activeCloudProvider = result.provider
@@ -336,12 +355,14 @@ final class ModelDownloadViewModel: ObservableObject {
                 // eligible for the local fallback below.
                 if case .interruptedStream = error { throw error }
                 activeCloudProvider = nil
+                cloudFallbackMessage = error.localizedDescription
                 apiProvider.recordError(error)
             } catch {
                 // Both cloud providers failed before an answer began. The
                 // existing local model path remains the final, offline-safe
                 // fallback exactly as before.
                 activeCloudProvider = nil
+                cloudFallbackMessage = error.localizedDescription
                 apiProvider.recordError(error)
             }
         }
@@ -357,7 +378,7 @@ final class ModelDownloadViewModel: ObservableObject {
                 )
             } catch {
                 apiProvider.recordError(error)
-                throw error
+                throw surfacedFallbackError(localError: error)
             }
         }
         activeCloudProvider = nil
@@ -375,24 +396,37 @@ final class ModelDownloadViewModel: ObservableObject {
         }
         switch activeModel.backend {
         case .ollama:
-            return try await ollama.streamChat(
-                model: activeModel.identifier,
-                messages: messages,
-                temperature: temperature,
-                maximumTokens: maximumTokens,
-                includeThinking: thinkingModeEnabled && activeModelSupportsThinking,
-                onThinkingDelta: onThinkingDelta,
-                onDelta: onDelta
-            )
+            do {
+                return try await ollama.streamChat(
+                    model: activeModel.identifier,
+                    messages: messages,
+                    temperature: temperature,
+                    maximumTokens: maximumTokens,
+                    includeThinking: thinkingModeEnabled && activeModelSupportsThinking,
+                    onThinkingDelta: onThinkingDelta,
+                    onDelta: onDelta
+                )
+            } catch {
+                throw surfacedFallbackError(localError: error)
+            }
         case .lmStudio:
-            return try await lmStudio.streamChat(
-                model: activeModel.identifier,
-                messages: messages,
-                temperature: temperature,
-                maximumTokens: maximumTokens,
-                onDelta: onDelta
-            )
+            do {
+                return try await lmStudio.streamChat(
+                    model: activeModel.identifier,
+                    messages: messages,
+                    temperature: temperature,
+                    maximumTokens: maximumTokens,
+                    onDelta: onDelta
+                )
+            } catch {
+                throw surfacedFallbackError(localError: error)
+            }
         }
+    }
+
+    private func surfacedFallbackError(localError: Error) -> Error {
+        guard let cloudFallbackMessage, !cloudFallbackMessage.isEmpty else { return localError }
+        return NexusInferenceFallbackError(cloudMessage: cloudFallbackMessage, localError: localError)
     }
 
     /// Planning is routed through native Ollama tools when the active local

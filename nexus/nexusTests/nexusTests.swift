@@ -3,6 +3,40 @@ import WebKit
 @testable import nexus
 
 final class NexusGeometryTests: XCTestCase {
+    func testManagedCloudConfigurationOrderIsCerebrasThenInception() throws {
+        let store = NexusManagedCloudInferenceStore(secrets: NexusMemorySecretStore())
+        XCTAssertTrue(try store.configurations().isEmpty)
+
+        let secrets = NexusMemorySecretStore()
+        try secrets.set(Data("cerebras-test".utf8), for: NexusManagedCloudProvider.cerebras.keyAccount)
+        try secrets.set(Data("inception-test".utf8), for: NexusManagedCloudProvider.inception.keyAccount)
+        let configured = try NexusManagedCloudInferenceStore(secrets: secrets).configurations()
+
+        XCTAssertEqual(configured.map(\.provider), [.cerebras, .inception])
+        XCTAssertEqual(configured.map { $0.configuration.model }, ["gpt-oss-120b", "mercury-2"])
+    }
+
+    func testLiveManagedCloudChainFallsBackToInceptionWhenEnabled() async throws {
+        guard ProcessInfo.processInfo.environment["NEXUS_LIVE_CLOUD_TEST"] == "1" else {
+            throw XCTSkip("Set NEXUS_LIVE_CLOUD_TEST=1 to make this opt-in provider integration test.")
+        }
+        let attempts = try NexusManagedCloudInferenceStore().configurations()
+        guard attempts.count == 2 else {
+            throw XCTSkip("Both managed cloud credentials are required for this live fallback test.")
+        }
+
+        let result = try await NexusManagedCloudInferenceClient.streamChat(
+            attempts: attempts,
+            messages: [.init(role: "user", content: "Reply with exactly: cloud fallback verified")],
+            temperature: 0,
+            maximumTokens: 128,
+            onDelta: { _, _ in }
+        )
+
+        XCTAssertEqual(result.provider, .inception)
+        XCTAssertFalse(result.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+    }
+
     func testChromeMediaClassificationBuildsStableYouTubeThumbnail() throws {
         let url = try XCTUnwrap(URL(string: "https://www.youtube.com/watch?v=abc123&feature=share"))
         let tab = BrowserTab(
