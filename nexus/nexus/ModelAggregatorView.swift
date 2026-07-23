@@ -359,7 +359,17 @@ private struct NexusModelsPage: View {
 
     @ViewBuilder
     private var activeModelLabel: some View {
-        if viewModel.apiProvider.enabled {
+        if let cloud = viewModel.activeCloudProvider ?? (try? NexusManagedCloudInferenceStore().configurations().first?.provider) {
+            HStack(spacing: 6) {
+                Circle().fill(.green).frame(width: 6, height: 6)
+                Image(systemName: cloud == .cerebras ? "bolt.fill" : "sparkles")
+                    .font(.caption)
+                Text("Using \(cloud.model)").lineLimit(1)
+                Text(cloud.title).foregroundStyle(.secondary)
+            }
+                .foregroundStyle(.green)
+                .help("Managed cloud inference falls back to the next provider, then your local model")
+        } else if viewModel.apiProvider.enabled {
             HStack(spacing: 6) {
                 Circle().fill(.green).frame(width: 6, height: 6)
                 ModelProviderIcon(

@@ -22,6 +22,7 @@ final class ModelDownloadViewModel: ObservableObject {
     @Published var pendingRemoteRuntimeInstall: RemoteRuntimeInstallRequest?
     @Published private(set) var activeModel: LocalModel?
     @Published private(set) var activeModelSupportsThinking = false
+    @Published private(set) var activeCloudProvider: NexusManagedCloudProvider?
     @Published var thinkingModeEnabled: Bool { didSet { persistThinkingMode() } }
     let apiProvider = NexusAPIProviderStore()
 
@@ -35,6 +36,7 @@ final class ModelDownloadViewModel: ObservableObject {
     private let lmStudio: LMStudioManager
     private let catalogService: ModelCatalogService
     private let connect: NexusConnectController?
+    private let managedCloud = NexusManagedCloudInferenceStore()
     private var downloadTasks: [String: Task<Void, Never>] = [:]
     private var cancellables: Set<AnyCancellable> = []
     private var installedModelRecords: [String: LocalModel] = [:]
@@ -306,6 +308,44 @@ final class ModelDownloadViewModel: ObservableObject {
         onThinkingDelta: (@Sendable (_ delta: String, _ accumulated: String) async -> Void)? = nil,
         onDelta: @escaping @Sendable (_ delta: String, _ accumulated: String) async -> Void
     ) async throws -> String {
+        let cloudAttempts: [(provider: NexusManagedCloudProvider, configuration: NexusAPIProviderConfiguration)]
+        do {
+            cloudAttempts = try managedCloud.configurations()
+        } catch {
+            cloudAttempts = []
+            apiProvider.recordError(error)
+        }
+
+        if !cloudAttempts.isEmpty {
+            do {
+                activeCloudProvider = cloudAttempts.first?.provider
+                let result = try await NexusManagedCloudInferenceClient.streamChat(
+                    attempts: cloudAttempts,
+                    messages: messages,
+                    temperature: temperature,
+                    maximumTokens: maximumTokens,
+                    onDelta: onDelta
+                )
+                activeCloudProvider = result.provider
+                return result.text
+            } catch is CancellationError {
+                throw CancellationError()
+            } catch let error as NexusManagedCloudInferenceError {
+                // A response that visibly began must not be followed by a
+                // second model's answer. Only pre-stream provider failures are
+                // eligible for the local fallback below.
+                if case .interruptedStream = error { throw error }
+                activeCloudProvider = nil
+                apiProvider.recordError(error)
+            } catch {
+                // Both cloud providers failed before an answer began. The
+                // existing local model path remains the final, offline-safe
+                // fallback exactly as before.
+                activeCloudProvider = nil
+                apiProvider.recordError(error)
+            }
+        }
+
         if apiProvider.enabled {
             do {
                 return try await NexusAPIProviderClient.streamChat(
@@ -320,6 +360,7 @@ final class ModelDownloadViewModel: ObservableObject {
                 throw error
             }
         }
+        activeCloudProvider = nil
         guard let activeModel else {
             throw LocalModelError.invalidResponse("Choose an installed model in the model window first")
         }
@@ -364,7 +405,9 @@ final class ModelDownloadViewModel: ObservableObject {
         guard let activeModel else {
             throw LocalModelError.invalidResponse("Choose an installed model in the model window first")
         }
-        if !apiProvider.enabled,
+        let cloudConfigured = (try? managedCloud.configurations().isEmpty == false) ?? false
+        if !cloudConfigured,
+           !apiProvider.enabled,
            activeModel.backend == .ollama,
            (connect == nil || connect?.modelRoute == .thisMac) {
             return try await ollama.planTools(

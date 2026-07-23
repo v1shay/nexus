@@ -287,6 +287,22 @@ final class NexusGeometryTests: XCTestCase {
         XCTAssertEqual(store.baseURL, NexusAPIProviderKind.gemini.defaultBaseURL)
     }
 
+    func testManagedCloudInferenceUsesCerebrasThenInceptionWithKeysOutsideDefaults() throws {
+        let secrets = NexusMemorySecretStore()
+        let store = NexusManagedCloudInferenceStore(secrets: secrets)
+        try secrets.set(Data("cerebras-key".utf8), for: NexusManagedCloudProvider.cerebras.keyAccount)
+        try secrets.set(Data("inception-key".utf8), for: NexusManagedCloudProvider.inception.keyAccount)
+
+        let attempts = try store.configurations()
+        XCTAssertEqual(attempts.map(\.provider), [.cerebras, .inception])
+        XCTAssertEqual(attempts.map { $0.configuration.model }, ["gpt-oss-120b", "mercury-2"])
+        XCTAssertEqual(attempts.map { $0.configuration.baseURL.absoluteString }, [
+            "https://api.cerebras.ai/v1",
+            "https://api.inceptionlabs.ai/v1"
+        ])
+        XCTAssertEqual(attempts[1].configuration.apiKey, "inception-key")
+    }
+
     func testRequestedModelAndConnectCameraSizing() {
         XCTAssertEqual(Nexus3DLayout.computerCameraDistance, 2.55)
         XCTAssertEqual(Nexus3DLayout.globeCameraDistance, 2.70)
