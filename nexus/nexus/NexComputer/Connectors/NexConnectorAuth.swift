@@ -170,6 +170,7 @@ final class NexConnectorAuthController: NSObject, ObservableObject, ASWebAuthent
     @Published private(set) var statuses: [NexConnectorProvider: NexConnectorPublicStatus] = [:]
     @Published private(set) var activeProvider: NexConnectorProvider?
     @Published private(set) var message: String?
+    @Published private(set) var enabledScopes: [NexConnectorProvider: Set<String>] = [:]
 
     private let store: any NexConnectorCredentialStoring
     private let transport: any NexOAuthTransporting
@@ -233,9 +234,24 @@ final class NexConnectorAuthController: NSObject, ObservableObject, ASWebAuthent
         }
     }
 
+    func setScope(_ scope: String, enabled: Bool, for provider: NexConnectorProvider) {
+        var selected = enabledScopes[provider] ?? Set(Self.minimumScopes(provider))
+        if enabled { selected.insert(scope) } else if !Self.minimumScopes(provider).contains(scope) { selected.remove(scope) }
+        enabledScopes[provider] = selected
+        UserDefaults.standard.set(Array(selected).sorted(), forKey: "nex.connector.scopes.\(provider.rawValue)")
+    }
+
+    func connectWithEnabledScopes(_ provider: NexConnectorProvider) {
+        connect(provider, scopes: Array(enabledScopes[provider] ?? Set(Self.minimumScopes(provider))).sorted())
+    }
+
     func credential(for provider: NexConnectorProvider) throws -> NexConnectorCredential? { try store.credential(for: provider) }
 
     func reload() {
+        for provider in NexConnectorProvider.allCases where enabledScopes[provider] == nil {
+            let saved = UserDefaults.standard.stringArray(forKey: "nex.connector.scopes.\(provider.rawValue)") ?? []
+            enabledScopes[provider] = Set(saved.isEmpty ? Self.minimumScopes(provider) : saved)
+        }
         statuses = Dictionary(uniqueKeysWithValues: NexConnectorProvider.allCases.map { provider in
             let credential: NexConnectorCredential?
             do { credential = try store.credential(for: provider) } catch { credential = nil }
@@ -285,32 +301,68 @@ final class NexConnectorAuthController: NSObject, ObservableObject, ASWebAuthent
 struct NexConnectionsSettingsView: View {
     @ObservedObject var controller: NexConnectorAuthController
     var body: some View {
-        Form {
-            Section("Connections") {
-                ForEach(NexConnectorProvider.allCases) { provider in
-                    let status = controller.statuses[provider]
+        Section("Connections") {
+            ForEach(NexConnectorProvider.allCases) { provider in
+                let status = controller.statuses[provider]
+                DisclosureGroup {
                     VStack(alignment: .leading, spacing: 8) {
-                        HStack {
-                            Image(systemName: status?.connected == true ? "checkmark.circle.fill" : "circle")
-                                .foregroundStyle(status?.connected == true ? .green : .secondary)
-                            Text(provider.title).font(.headline)
-                            Spacer()
-                            if controller.activeProvider == provider { ProgressView().controlSize(.small) }
-                            else if status?.connected == true {
-                                Button("Reconnect") { controller.connect(provider, scopes: status?.scopes) }
-                                Button("Disconnect") { controller.disconnect(provider) }
-                            } else { Button("Connect") { controller.connect(provider) } }
+                        ForEach(NexConnectorAuthController.scopeOptions(provider)) { option in
+                            Toggle(isOn: Binding(
+                                get: { controller.enabledScopes[provider]?.contains(option.id) == true },
+                                set: { controller.setScope(option.id, enabled: $0, for: provider) }
+                            )) {
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(option.title)
+                                    Text(option.detail).font(.caption2).foregroundStyle(.secondary)
+                                }
+                            }
+                            .disabled(NexConnectorAuthController.minimumScopes(provider).contains(option.id))
                         }
-                        Text(status?.account ?? "One-time authorization through your browser.")
-                            .font(.caption).foregroundStyle(.secondary)
-                        if let status, !status.scopes.isEmpty { Text(status.scopes.joined(separator: " · ")).font(.caption2).foregroundStyle(.tertiary) }
+                        HStack {
+                            if status?.connected == true {
+                                Button("Reconnect") { controller.connectWithEnabledScopes(provider) }
+                                Button("Disconnect") { controller.disconnect(provider) }
+                                Button("Revoke Access", role: .destructive) { controller.disconnect(provider, revoke: true) }
+                            } else { Button("Connect \(provider.title)") { controller.connectWithEnabledScopes(provider) } }
+                        }
                     }
-                    .padding(.vertical, 4)
+                    .padding(.top, 6)
+                } label: {
+                    HStack {
+                        Image(systemName: status?.connected == true ? (status?.healthy == true ? "checkmark.circle.fill" : "exclamationmark.circle.fill") : "circle")
+                            .foregroundStyle(status?.connected == true ? (status?.healthy == true ? .green : .orange) : .secondary)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(provider.title).font(.headline)
+                            Text(status?.account ?? "Not connected").font(.caption).foregroundStyle(.secondary)
+                            if let date = status?.lastSuccessfulUse { Text("Last used \(date.formatted(.relative(presentation: .named)))").font(.caption2).foregroundStyle(.tertiary) }
+                        }
+                        Spacer()
+                        if controller.activeProvider == provider { ProgressView().controlSize(.small) }
+                    }
                 }
+                .padding(.vertical, 4)
             }
-            if let message = controller.message { Section { Text(message).font(.caption).textSelection(.enabled) } }
         }
-        .formStyle(.grouped)
+        if let message = controller.message { Section { Text(message).font(.caption).textSelection(.enabled) } }
+    }
+}
+
+struct NexConnectorManagementService: Sendable {
+    let store: any NexConnectorCredentialStoring
+    init(store: any NexConnectorCredentialStoring = NexKeychainConnectorCredentialStore()) { self.store = store }
+
+    func status(provider: NexConnectorProvider? = nil) throws -> [NexConnectorPublicStatus] {
+        let providers = provider.map { [$0] } ?? NexConnectorProvider.allCases
+        return try providers.map { item in
+            let credential = try store.credential(for: item)
+            return .init(id: item, account: credential?.account, scopes: credential?.scopes ?? [], connected: credential != nil, healthy: credential?.expiresAt.map { $0 > .now } ?? (credential != nil), lastSuccessfulUse: credential?.lastSuccessfulUse, detail: credential == nil ? "Not connected" : "Connected")
+        }
+    }
+
+    func disconnect(_ provider: NexConnectorProvider) throws { try store.remove(provider) }
+
+    func doctor() throws -> [String] {
+        try status().map { "\($0.id.title): \($0.connected ? ($0.healthy ? "healthy" : "reconnect required") : "not connected")" }
     }
 }
 

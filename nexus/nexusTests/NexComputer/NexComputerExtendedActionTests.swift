@@ -128,6 +128,17 @@ final class NexComputerExtendedActionTests: XCTestCase {
         do { _ = try await store.consume(id: expired.id, expectedArguments: nil, now: Date(timeIntervalSince1970: 300)); XCTFail("Expected expiry") } catch let error as NexToolError { XCTAssertEqual(error.code, "connection_request_expired") }
     }
 
+    func testConnectorManagementReportsAndDisconnectsAccounts() throws {
+        let memory = NexusMemorySecretStore(), store = NexKeychainConnectorCredentialStore(secrets: memory)
+        try store.save(.init(provider: .notion, account: "Nexus Workspace", accessToken: "secret", refreshToken: nil, tokenType: "Bearer", scopes: ["notion.content.read"], expiresAt: nil, connectedAt: .now, lastSuccessfulUse: .now))
+        let management = NexConnectorManagementService(store: store)
+        let status = try management.status(provider: .notion)
+        XCTAssertEqual(status.first?.account, "Nexus Workspace")
+        XCTAssertTrue(status.first?.healthy == true)
+        try management.disconnect(.notion)
+        XCTAssertFalse(try management.status(provider: .notion).first?.connected == true)
+    }
+
     @MainActor
     func testConnectorCredentialsPersistOnlyThroughSecretStore() throws {
         let memory = NexusMemorySecretStore()
