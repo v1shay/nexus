@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="referrer" content="no-referrer">
+  <title>Nexus connection</title>
+  <style>
+    :root { color-scheme: dark; font-family: -apple-system, BlinkMacSystemFont, sans-serif; }
+    body { align-items: center; background: #090909; color: #f4f4f5; display: flex; justify-content: center; min-height: 100vh; margin: 0; }
+    main { max-width: 30rem; padding: 2rem; text-align: center; }
+    p { color: #a1a1aa; line-height: 1.5; }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>Returning to Nexus…</h1>
+    <p id="message">If Nexus does not open, return to the app and try connecting again.</p>
+  </main>
+  <script>
+    (() => {
+      const input = new URLSearchParams(window.location.search);
+      const output = new URLSearchParams();
+      for (const key of ["code", "state", "error", "error_description"]) {
+        const value = input.get(key);
+        if (value) output.set(key, value);
+      }
+      // The native app validates the exact scheme, host, path, state and code.
+      if (output.has("state") && (output.has("code") || output.has("error"))) {
+        window.location.replace(`na.nexus.oauth://oauth/callback?${output.toString()}`);
+      } else {
+        document.getElementById("message").textContent = "This authorization response was incomplete. Return to Nexus and try again.";
+      }
+    })();
+  </script>
+</body>
+</html>

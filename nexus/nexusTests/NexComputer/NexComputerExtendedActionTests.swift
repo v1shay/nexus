@@ -263,6 +263,28 @@ final class NexComputerExtendedActionTests: XCTestCase {
         controller.disconnect(.google)
     }
 
+    func testConnectorRegistrationSecretsAreSeparateFromAccountCredentials() throws {
+        let memory = NexusMemorySecretStore()
+        let registrations = NexConnectorRegistrationStore(secrets: memory)
+        try memory.set(Data("notion-client-secret".utf8), for: "oauth.notion.client-secret.v1")
+        try memory.set(Data("github-pem".utf8), for: "github.app.private-key.v1")
+        try memory.set(Data("4371707".utf8), for: "github.app.id.v1")
+
+        XCTAssertEqual(try registrations.clientSecret(for: .notion), "notion-client-secret")
+        XCTAssertEqual(try registrations.githubAppPrivateKey(), Data("github-pem".utf8))
+        XCTAssertEqual(try registrations.githubAppID(), "4371707")
+
+        let credentials = NexKeychainConnectorCredentialStore(secrets: memory)
+        XCTAssertNil(try credentials.credential(for: .notion))
+    }
+
+    func testDiscordIsNotAConnectableNexusAccount() throws {
+        XCTAssertFalse(NexConnectorProvider.discord.supportsUserConnection)
+        XCTAssertThrowsError(try NexOAuthConfiguration.configured(.discord)) { error in
+            XCTAssertEqual(error as? NexConnectorAuthError, .providerUnavailable(.discord))
+        }
+    }
+
     @MainActor
     func testConnectorScopesBeginLeastPrivilege() {
         XCTAssertEqual(NexConnectorAuthController.minimumScopes(.google), ["openid"])

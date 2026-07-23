@@ -148,7 +148,7 @@ actor NexConnectorManager {
         store: any NexConnectorCredentialStoring = NexKeychainConnectorCredentialStore(),
         registry: NexComputerRegistry
     ) async throws {
-        for provider in NexConnectorProvider.allCases {
+        for provider in NexConnectorProvider.allCases where provider.supportsUserConnection {
             let document: NexConnectorCapabilityDocument
             if let credential = try store.credential(for: provider) {
                 document = .connected(credential)

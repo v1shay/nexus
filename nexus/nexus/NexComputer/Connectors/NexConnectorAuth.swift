@@ -8,6 +8,39 @@ enum NexConnectorProvider: String, CaseIterable, Codable, Identifiable, Sendable
     case google, notion, slack, github, discord
     var id: String { rawValue }
     var title: String { rawValue == "github" ? "GitHub" : rawValue.capitalized }
+    /// Discord is intentionally browser-only. Nexus never stores a Discord
+    /// user credential or presents it as a connectable provider.
+    var supportsUserConnection: Bool { self != .discord }
+}
+
+enum NexOAuthTokenAuthentication: Sendable, Equatable {
+    case none
+    case formClientSecret
+    case basicClientSecret
+}
+
+/// App-registration secrets are deliberately separate from account tokens.
+/// They are device-local Keychain entries, never plist values or UserDefaults.
+struct NexConnectorRegistrationStore: Sendable {
+    private let secrets: NexusSecretStore
+
+    init(secrets: NexusSecretStore = NexusKeychainSecretStore(service: "na.nexus.connectors.registration")) {
+        self.secrets = secrets
+    }
+
+    func clientSecret(for provider: NexConnectorProvider) throws -> String? {
+        guard let data = try secrets.data(for: "oauth.\(provider.rawValue).client-secret.v1") else { return nil }
+        return String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    func githubAppPrivateKey() throws -> Data? {
+        try secrets.data(for: "github.app.private-key.v1")
+    }
+
+    func githubAppID() throws -> String? {
+        guard let data = try secrets.data(for: "github.app.id.v1") else { return nil }
+        return String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
 }
 
 struct NexConnectorScopeOption: Identifiable, Equatable, Sendable {
@@ -48,24 +81,102 @@ struct NexOAuthConfiguration: Sendable {
     let scopeSeparator: String
     let extraAuthorizationItems: [URLQueryItem]
     let extraTokenFields: [String: String]
+    let redirectURL: URL?
+    let clientSecret: String?
+    let tokenAuthentication: NexOAuthTokenAuthentication
+    let usesPKCE: Bool
 
-    static func configured(_ provider: NexConnectorProvider, bundle: Bundle = .main) throws -> Self {
+    init(
+        provider: NexConnectorProvider,
+        clientID: String,
+        authorizationURL: URL,
+        tokenURL: URL,
+        verificationURL: URL,
+        callbackScheme: String,
+        scopeSeparator: String,
+        extraAuthorizationItems: [URLQueryItem],
+        extraTokenFields: [String: String],
+        redirectURL: URL? = nil,
+        clientSecret: String? = nil,
+        tokenAuthentication: NexOAuthTokenAuthentication = .none,
+        usesPKCE: Bool = true
+    ) {
+        self.provider = provider
+        self.clientID = clientID
+        self.authorizationURL = authorizationURL
+        self.tokenURL = tokenURL
+        self.verificationURL = verificationURL
+        self.callbackScheme = callbackScheme
+        self.scopeSeparator = scopeSeparator
+        self.extraAuthorizationItems = extraAuthorizationItems
+        self.extraTokenFields = extraTokenFields
+        self.redirectURL = redirectURL
+        self.clientSecret = clientSecret
+        self.tokenAuthentication = tokenAuthentication
+        self.usesPKCE = usesPKCE
+    }
+
+    static func configured(
+        _ provider: NexConnectorProvider,
+        bundle: Bundle = .main,
+        registrations: NexConnectorRegistrationStore = .init()
+    ) throws -> Self {
+        guard provider.supportsUserConnection else { throw NexConnectorAuthError.providerUnavailable(provider) }
         let key = "NEX" + provider.title.replacingOccurrences(of: "GitHub", with: "Github") + "ClientID"
         guard let clientID = bundle.object(forInfoDictionaryKey: key) as? String,
               !clientID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             throw NexConnectorAuthError.clientRegistrationMissing(provider)
         }
+        let redirectURL: URL?
+        switch provider {
+        case .notion, .slack, .github:
+            redirectURL = (bundle.object(forInfoDictionaryKey: "NEXOAuthWebRedirectURL") as? String).flatMap(URL.init(string:))
+        case .google, .discord:
+            // Google uses the native desktop custom scheme registered by this
+            // app; routing it through a static web page would break its
+            // installed-app redirect policy.
+            redirectURL = nil
+        }
+        let secret = try registrations.clientSecret(for: provider)
+        func configuration(
+            authorizationURL: String,
+            tokenURL: String,
+            verificationURL: String,
+            separator: String,
+            authorizationItems: [URLQueryItem] = [],
+            tokenAuthentication: NexOAuthTokenAuthentication = .none,
+            usesPKCE: Bool = true
+        ) throws -> Self {
+            if tokenAuthentication != .none, secret?.isEmpty != false {
+                throw NexConnectorAuthError.clientSecretMissing(provider)
+            }
+            return .init(
+                provider: provider,
+                clientID: clientID,
+                authorizationURL: URL(string: authorizationURL)!,
+                tokenURL: URL(string: tokenURL)!,
+                verificationURL: URL(string: verificationURL)!,
+                callbackScheme: "na.nexus.oauth",
+                scopeSeparator: separator,
+                extraAuthorizationItems: authorizationItems,
+                extraTokenFields: [:],
+                redirectURL: redirectURL,
+                clientSecret: secret,
+                tokenAuthentication: tokenAuthentication,
+                usesPKCE: usesPKCE
+            )
+        }
         switch provider {
         case .google:
-            return .init(provider: provider, clientID: clientID, authorizationURL: URL(string: "https://accounts.google.com/o/oauth2/v2/auth")!, tokenURL: URL(string: "https://oauth2.googleapis.com/token")!, verificationURL: URL(string: "https://openidconnect.googleapis.com/v1/userinfo")!, callbackScheme: "na.nexus.oauth", scopeSeparator: " ", extraAuthorizationItems: [.init(name: "access_type", value: "offline"), .init(name: "prompt", value: "consent")], extraTokenFields: [:])
+            return try configuration(authorizationURL: "https://accounts.google.com/o/oauth2/v2/auth", tokenURL: "https://oauth2.googleapis.com/token", verificationURL: "https://openidconnect.googleapis.com/v1/userinfo", separator: " ", authorizationItems: [.init(name: "access_type", value: "offline"), .init(name: "prompt", value: "consent")])
         case .notion:
-            return .init(provider: provider, clientID: clientID, authorizationURL: URL(string: "https://api.notion.com/v1/oauth/authorize")!, tokenURL: URL(string: "https://api.notion.com/v1/oauth/token")!, verificationURL: URL(string: "https://api.notion.com/v1/users/me")!, callbackScheme: "na.nexus.oauth", scopeSeparator: " ", extraAuthorizationItems: [.init(name: "owner", value: "user")], extraTokenFields: [:])
+            return try configuration(authorizationURL: "https://api.notion.com/v1/oauth/authorize", tokenURL: "https://api.notion.com/v1/oauth/token", verificationURL: "https://api.notion.com/v1/users/me", separator: " ", authorizationItems: [.init(name: "owner", value: "user")], tokenAuthentication: .basicClientSecret, usesPKCE: false)
         case .slack:
-            return .init(provider: provider, clientID: clientID, authorizationURL: URL(string: "https://slack.com/oauth/v2/authorize")!, tokenURL: URL(string: "https://slack.com/api/oauth.v2.access")!, verificationURL: URL(string: "https://slack.com/api/auth.test")!, callbackScheme: "na.nexus.oauth", scopeSeparator: ",", extraAuthorizationItems: [], extraTokenFields: [:])
+            return try configuration(authorizationURL: "https://slack.com/oauth/v2/authorize", tokenURL: "https://slack.com/api/oauth.v2.access", verificationURL: "https://slack.com/api/auth.test", separator: ",", tokenAuthentication: .formClientSecret, usesPKCE: false)
         case .github:
-            return .init(provider: provider, clientID: clientID, authorizationURL: URL(string: "https://github.com/login/oauth/authorize")!, tokenURL: URL(string: "https://github.com/login/oauth/access_token")!, verificationURL: URL(string: "https://api.github.com/user")!, callbackScheme: "na.nexus.oauth", scopeSeparator: " ", extraAuthorizationItems: [], extraTokenFields: [:])
+            return try configuration(authorizationURL: "https://github.com/login/oauth/authorize", tokenURL: "https://github.com/login/oauth/access_token", verificationURL: "https://api.github.com/user", separator: " ", tokenAuthentication: .formClientSecret)
         case .discord:
-            return .init(provider: provider, clientID: clientID, authorizationURL: URL(string: "https://discord.com/oauth2/authorize")!, tokenURL: URL(string: "https://discord.com/api/oauth2/token")!, verificationURL: URL(string: "https://discord.com/api/users/@me")!, callbackScheme: "na.nexus.oauth", scopeSeparator: " ", extraAuthorizationItems: [.init(name: "response_type", value: "code")], extraTokenFields: [:])
+            throw NexConnectorAuthError.providerUnavailable(provider)
         }
     }
 }
@@ -75,6 +186,8 @@ enum NexConnectorAuthError: LocalizedError, Equatable {
     case invalidCallback
     case stateMismatch
     case cancelled
+    case clientSecretMissing(NexConnectorProvider)
+    case providerUnavailable(NexConnectorProvider)
     case exchangeFailed(String)
     case verificationFailed(String)
     case credentialUnavailable(NexConnectorProvider)
@@ -85,6 +198,8 @@ enum NexConnectorAuthError: LocalizedError, Equatable {
         case .invalidCallback: "The authorization callback was invalid."
         case .stateMismatch: "The authorization state did not match, so Nexus rejected the callback."
         case .cancelled: "Connection cancelled."
+        case .clientSecretMissing(let provider): "The \(provider.title) OAuth client secret is missing from this Mac's Keychain."
+        case .providerUnavailable(let provider): "\(provider.title) is intentionally browser-only and cannot be connected as a Nexus account."
         case .exchangeFailed(let detail): "The provider rejected the authorization exchange: \(detail)"
         case .verificationFailed(let detail): "Nexus could not verify the connection: \(detail)"
         case .credentialUnavailable(let provider): "\(provider.title) is not connected."
@@ -125,11 +240,21 @@ struct NexOAuthURLSessionTransport: NexOAuthTransporting {
     func exchange(configuration: NexOAuthConfiguration, code: String, verifier: String, callbackURL: URL, scopes: [String]) async throws -> NexConnectorCredential {
         var request = URLRequest(url: configuration.tokenURL)
         request.httpMethod = "POST"
-        request.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
         request.setValue("application/json", forHTTPHeaderField: "Accept")
-        var fields = configuration.extraTokenFields
-        fields.merge(["grant_type": "authorization_code", "client_id": configuration.clientID, "code": code, "code_verifier": verifier, "redirect_uri": callbackURL.absoluteString]) { _, new in new }
-        request.httpBody = fields.sorted { $0.key < $1.key }.map { "\($0.key.urlFormEncoded)=\($0.value.urlFormEncoded)" }.joined(separator: "&").data(using: .utf8)
+        switch configuration.tokenAuthentication {
+        case .basicClientSecret:
+            guard let secret = configuration.clientSecret else { throw NexConnectorAuthError.clientSecretMissing(configuration.provider) }
+            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            request.setValue("Basic \(Data("\(configuration.clientID):\(secret)".utf8).base64EncodedString())", forHTTPHeaderField: "Authorization")
+            request.httpBody = try JSONSerialization.data(withJSONObject: ["grant_type": "authorization_code", "code": code, "redirect_uri": callbackURL.absoluteString])
+        case .none, .formClientSecret:
+            request.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
+            var fields = configuration.extraTokenFields
+            fields.merge(["grant_type": "authorization_code", "client_id": configuration.clientID, "code": code, "redirect_uri": callbackURL.absoluteString]) { _, new in new }
+            if configuration.usesPKCE { fields["code_verifier"] = verifier }
+            if case .formClientSecret = configuration.tokenAuthentication, let secret = configuration.clientSecret { fields["client_secret"] = secret }
+            request.httpBody = fields.sorted { $0.key < $1.key }.map { "\($0.key.urlFormEncoded)=\($0.value.urlFormEncoded)" }.joined(separator: "&").data(using: .utf8)
+        }
         let (data, response) = try await session.data(for: request)
         guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode),
               let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
@@ -157,10 +282,19 @@ struct NexOAuthURLSessionTransport: NexOAuthTransporting {
         guard let refreshToken = credential.refreshToken else { throw NexConnectorAuthError.credentialUnavailable(configuration.provider) }
         var request = URLRequest(url: configuration.tokenURL)
         request.httpMethod = "POST"
-        request.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
         request.setValue("application/json", forHTTPHeaderField: "Accept")
-        let fields = ["grant_type": "refresh_token", "client_id": configuration.clientID, "refresh_token": refreshToken]
-        request.httpBody = fields.sorted { $0.key < $1.key }.map { "\($0.key.urlFormEncoded)=\($0.value.urlFormEncoded)" }.joined(separator: "&").data(using: .utf8)
+        switch configuration.tokenAuthentication {
+        case .basicClientSecret:
+            guard let secret = configuration.clientSecret else { throw NexConnectorAuthError.clientSecretMissing(configuration.provider) }
+            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            request.setValue("Basic \(Data("\(configuration.clientID):\(secret)".utf8).base64EncodedString())", forHTTPHeaderField: "Authorization")
+            request.httpBody = try JSONSerialization.data(withJSONObject: ["grant_type": "refresh_token", "refresh_token": refreshToken])
+        case .none, .formClientSecret:
+            request.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
+            var fields = ["grant_type": "refresh_token", "client_id": configuration.clientID, "refresh_token": refreshToken]
+            if case .formClientSecret = configuration.tokenAuthentication, let secret = configuration.clientSecret { fields["client_secret"] = secret }
+            request.httpBody = fields.sorted { $0.key < $1.key }.map { "\($0.key.urlFormEncoded)=\($0.value.urlFormEncoded)" }.joined(separator: "&").data(using: .utf8)
+        }
         let (data, response) = try await session.data(for: request)
         guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode), let json = try JSONSerialization.jsonObject(with: data) as? [String: Any], let access = json["access_token"] as? String else { throw NexConnectorAuthError.exchangeFailed(Self.safeProviderError(data)) }
         return .init(provider: credential.provider, account: credential.account, accessToken: access, refreshToken: (json["refresh_token"] as? String) ?? refreshToken, tokenType: (json["token_type"] as? String) ?? credential.tokenType, scopes: credential.scopes, expiresAt: (json["expires_in"] as? NSNumber).map { Date().addingTimeInterval($0.doubleValue) }, connectedAt: credential.connectedAt, lastSuccessfulUse: credential.lastSuccessfulUse)
@@ -210,13 +344,17 @@ final class NexConnectorAuthController: NSObject, ObservableObject, ASWebAuthent
                 let state = Self.randomURLSafe(bytes: 32)
                 let verifier = Self.randomURLSafe(bytes: 48)
                 let challenge = Data(SHA256.hash(data: Data(verifier.utf8))).base64URLEncoded
-                let callback = URL(string: "\(configuration.callbackScheme)://oauth/callback")!
+                let appCallback = URL(string: "\(configuration.callbackScheme)://oauth/callback")!
+                let redirect = configuration.redirectURL ?? appCallback
                 var components = URLComponents(url: configuration.authorizationURL, resolvingAgainstBaseURL: false)!
                 components.queryItems = [
-                    .init(name: "client_id", value: configuration.clientID), .init(name: "redirect_uri", value: callback.absoluteString),
+                    .init(name: "client_id", value: configuration.clientID), .init(name: "redirect_uri", value: redirect.absoluteString),
                     .init(name: "response_type", value: "code"), .init(name: "scope", value: selectedScopes.joined(separator: configuration.scopeSeparator)),
-                    .init(name: "state", value: state), .init(name: "code_challenge", value: challenge), .init(name: "code_challenge_method", value: "S256")
+                    .init(name: "state", value: state)
                 ] + configuration.extraAuthorizationItems
+                if configuration.usesPKCE {
+                    components.queryItems?.append(contentsOf: [.init(name: "code_challenge", value: challenge), .init(name: "code_challenge_method", value: "S256")])
+                }
                 guard let authorizationURL = components.url else { throw NexConnectorAuthError.invalidCallback }
                 activeProvider = provider
                 message = "Opening \(provider.title)…"
@@ -225,7 +363,7 @@ final class NexConnectorAuthController: NSObject, ObservableObject, ASWebAuthent
                 let query = URLComponents(url: callbackURL, resolvingAgainstBaseURL: false)?.queryItems ?? []
                 guard query.first(where: { $0.name == "state" })?.value == state else { throw NexConnectorAuthError.stateMismatch }
                 guard let code = query.first(where: { $0.name == "code" })?.value, !code.isEmpty else { throw NexConnectorAuthError.invalidCallback }
-                var credential = try await transport.exchange(configuration: configuration, code: code, verifier: verifier, callbackURL: callback, scopes: selectedScopes)
+                var credential = try await transport.exchange(configuration: configuration, code: code, verifier: verifier, callbackURL: redirect, scopes: selectedScopes)
                 let account = try await transport.verify(configuration: configuration, credential: credential)
                 credential = .init(provider: credential.provider, account: account, accessToken: credential.accessToken, refreshToken: credential.refreshToken, tokenType: credential.tokenType, scopes: credential.scopes, expiresAt: credential.expiresAt, connectedAt: credential.connectedAt, lastSuccessfulUse: .now)
                 try store.save(credential)
@@ -263,11 +401,11 @@ final class NexConnectorAuthController: NSObject, ObservableObject, ASWebAuthent
     func credential(for provider: NexConnectorProvider) throws -> NexConnectorCredential? { try store.credential(for: provider) }
 
     func reload() {
-        for provider in NexConnectorProvider.allCases where enabledScopes[provider] == nil {
+        for provider in NexConnectorProvider.allCases where provider.supportsUserConnection && enabledScopes[provider] == nil {
             let saved = UserDefaults.standard.stringArray(forKey: "nex.connector.scopes.\(provider.rawValue)") ?? []
             enabledScopes[provider] = Set(saved.isEmpty ? Self.minimumScopes(provider) : saved)
         }
-        statuses = Dictionary(uniqueKeysWithValues: NexConnectorProvider.allCases.map { provider in
+        statuses = Dictionary(uniqueKeysWithValues: NexConnectorProvider.allCases.filter(\.supportsUserConnection).map { provider in
             let credential: NexConnectorCredential?
             do { credential = try store.credential(for: provider) } catch { credential = nil }
             let healthy = credential.map { $0.expiresAt.map { $0 > .now } ?? true } ?? false
@@ -359,7 +497,7 @@ struct NexConnectionsSettingsView: View {
     @ObservedObject var controller: NexConnectorAuthController
     var body: some View {
         Section("Connections") {
-            ForEach(NexConnectorProvider.allCases) { provider in
+            ForEach(NexConnectorProvider.allCases.filter(\.supportsUserConnection)) { provider in
                 let status = controller.statuses[provider]
                 DisclosureGroup {
                     VStack(alignment: .leading, spacing: 8) {
@@ -409,7 +547,7 @@ struct NexConnectorManagementService: Sendable {
     init(store: any NexConnectorCredentialStoring = NexKeychainConnectorCredentialStore()) { self.store = store }
 
     func status(provider: NexConnectorProvider? = nil) throws -> [NexConnectorPublicStatus] {
-        let providers = provider.map { [$0] } ?? NexConnectorProvider.allCases
+        let providers = provider.map { [$0] } ?? NexConnectorProvider.allCases.filter(\.supportsUserConnection)
         return try providers.map { item in
             let credential = try store.credential(for: item)
             return .init(id: item, account: credential?.account, scopes: credential?.scopes ?? [], connected: credential != nil, healthy: credential?.expiresAt.map { $0 > .now } ?? (credential != nil), lastSuccessfulUse: credential?.lastSuccessfulUse, detail: credential == nil ? "Not connected" : "Connected")
