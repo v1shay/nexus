@@ -260,6 +260,11 @@ final class NexComputerExtendedActionTests: XCTestCase {
         let controller = NexConnectorAuthController(store: store, transport: MockOAuthTransport())
         XCTAssertEqual(controller.statuses[.google]?.account, "test@example.com")
         XCTAssertTrue(controller.statuses[.google]?.healthy == true)
+        // A new controller represents an Xcode rebuild/relaunch.  It must
+        // hydrate the same Keychain-backed record without starting OAuth.
+        let relaunchedController = NexConnectorAuthController(store: store, transport: MockOAuthTransport())
+        XCTAssertEqual(relaunchedController.statuses[.google]?.account, "test@example.com")
+        XCTAssertTrue(relaunchedController.statuses[.google]?.connected == true)
         controller.disconnect(.google)
     }
 

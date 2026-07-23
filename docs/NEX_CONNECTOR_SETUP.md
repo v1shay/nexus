@@ -34,12 +34,28 @@ Configure the following before pressing **Connect** in Nexus:
 | GitHub App | `https://v1shay.github.io/nexus/callback.html` | Enable user authorization for the app and keep its installation permissions least-privilege. |
 | Google desktop | `na.nexus.oauth://oauth/callback` | Enable Gmail, Calendar, and People APIs individually in Google Cloud. |
 
-The GitHub Pages endpoint must actually be deployed before web OAuth is used.
-The GitHub API currently reports no Pages site for either `v1shay/nexus` or
-`v1shay/nexusV2`, so this repository cannot honestly claim that the URI is
-live yet. Publish the `docs/` folder from the repository that owns the
-`v1shay.github.io/nexus` site, then open the callback URL once and verify it
-loads before connecting a provider.
+The GitHub Pages site is published from the `gh-pages` branch root. Verify
+the two public endpoints before configuring a provider:
+
+```text
+https://v1shay.github.io/nexus/
+https://v1shay.github.io/nexus/callback.html
+```
+
+Both pages are intentionally black and minimal. The callback forwards the
+OAuth response to the native app; it is not a token server.
+
+## Restart and Xcode-build behavior
+
+After OAuth completes, Nexus stores each provider's account credential in the
+macOS Keychain under `na.nexus.connectors.oauth`. A new Nexus process reads
+that record during initialization and rebuilds the connector capability
+documents; an Xcode rebuild does not create a new connection. The build
+script and project use the persistent `system local code signing` identity so
+the Keychain ACL remains stable. If macOS shows the Keychain dialog, choose
+**Always Allow** once for Nexus. A provider is only removed by **Disconnect**/
+**Revoke Access**; a transient token-refresh or network failure is retained
+and retried later instead of forcing OAuth again.
 
 ## Local registration state
 

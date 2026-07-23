@@ -465,7 +465,12 @@ actor NexAuthenticatedConnectorSession {
                 credential = try await transport.refresh(configuration: try configuration(provider), credential: credential)
                 try store.save(credential)
             } catch {
-                try? store.remove(provider)
+                // A transient provider/network failure must not erase the
+                // durable OAuth record.  Removing it here forced a fresh
+                // browser authorization after every restart whenever a
+                // refresh happened to race a provider outage.  Keep the
+                // credential so the next request can retry; explicit
+                // Disconnect/Revoke is the only path that removes it.
                 throw error
             }
         }
