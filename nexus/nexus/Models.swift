@@ -139,9 +139,9 @@ enum ModelProviderResolver {
     }
 }
 
-/// Resolves only the model artwork the user supplied. The ChatGPT PNG is
-/// embedded byte-for-byte so installed builds do not depend on Downloads.
-/// Artwork is rendered directly with no app-created tile or background.
+/// Resolves only the model artwork the user supplied. OpenAI/ChatGPT models
+/// use the supplied `openai.webp` directly, with no app-created tile or
+/// background.
 enum ModelBrandArtwork {
     private static let downloadsDirectory = URL(fileURLWithPath: "/Users/vishayagarwal/Downloads", isDirectory: true)
 
@@ -155,7 +155,7 @@ enum ModelBrandArtwork {
 
     static func assetName(for identity: ModelProviderIdentity) -> String {
         switch identity {
-        case .openAI: "icons-8-chatgpt-48.png"
+        case .openAI: "openai.webp"
         case .gemini: "gemini-color.svg"
         case .qwen: "qwen-color.svg"
         case .mistral: "mistral-color.svg"
@@ -175,10 +175,13 @@ enum ModelBrandArtwork {
     }
 
     static func image(for identity: ModelProviderIdentity) -> NSImage? {
+        if let suppliedArtwork = NSImage(contentsOf: downloadsDirectory.appendingPathComponent(assetName(for: identity))) {
+            return suppliedArtwork
+        }
         if identity == .openAI, let data = embeddedChatGPTPNGData {
             return NSImage(data: data)
         }
-        return NSImage(contentsOf: downloadsDirectory.appendingPathComponent(assetName(for: identity)))
+        return nil
     }
 }
 
