@@ -179,7 +179,9 @@ actor NexConnectorManager {
             let pending = try await pendingStore.create(provider: spec.provider, action: spec.action, arguments: arguments)
             return .object([
                 "ok": .bool(false), "status": .string("connection_required"), "provider": .string(spec.provider),
-                "requestedAction": .string(spec.action), "connectionId": .string(pending.id.uuidString),
+                "action": .string(spec.action), "requestedAction": .string(spec.action),
+                "connectionId": .string(pending.id.uuidString), "id": .string(""),
+                "items": .array([]), "error": .string("not_connected"),
                 "display": .string("Connect \(spec.provider.capitalized) to \(Self.humanPurpose(spec.action)).")
             ])
         }
@@ -219,7 +221,13 @@ actor NexConnectorManager {
     private static let input = NexToolInputSchema(fields: [
         "query": .init(.string), "id": .init(.string), "parent_id": .init(.string), "database_id": .init(.string), "channel_id": .init(.string), "thread_id": .init(.string), "message_id": .init(.string), "user_id": .init(.string), "draft_id": .init(.string), "repository": .init(.string), "number": .init(.integer, minimum: 1), "title": .init(.string), "content": .init(.string), "body": .init(.string), "email": .init(.string), "start": .init(.string), "end": .init(.string), "timezone": .init(.string), "location": .init(.string), "description": .init(.string), "attendees": .init(.stringArray), "labels": .init(.stringArray), "recurrence": .init(.stringArray), "calendars": .init(.stringArray), "file_path": .init(.string), "emoji": .init(.string), "limit": .init(.integer, minimum: 1, maximum: 250), "filter": .init(.string), "sort": .init(.string), "response": .init(.string), "calendar_id": .init(.string), "head": .init(.string), "base": .init(.string), "unread": .init(.boolean)
     ])
-    private static let output = NexToolInputSchema(fields: ["display": .init(.string, required: true), "status": .init(.string, required: true), "provider": .init(.string, required: true), "action": .init(.string, required: true), "id": .init(.string, required: true), "items": .init(.array, required: true), "error": .init(.string, required: true)])
+    private static let output = NexToolInputSchema(fields: [
+        "display": .init(.string, required: true), "status": .init(.string, required: true),
+        "provider": .init(.string, required: true), "action": .init(.string, required: true),
+        "id": .init(.string, required: true), "items": .init(.array, required: true),
+        "error": .init(.string, required: true), "ok": .init(.boolean),
+        "requestedAction": .init(.string), "connectionId": .init(.string)
+    ])
     private static func manifest(_ spec: NexConnectorActionSpec) -> NexComputerActionManifest {
         .init(actionID: spec.action, application: spec.provider.capitalized, provider: "\(spec.provider.capitalized) Connector", description: spec.description, examples: [spec.action.replacingOccurrences(of: ".", with: " ")], aliases: [spec.action.replacingOccurrences(of: ".", with: " ").replacingOccurrences(of: "_", with: " ")], tags: [spec.provider, "connector", spec.action.split(separator: ".").first.map(String.init) ?? spec.provider], inputSchema: input, outputSchema: output, implementationMethod: .connector, requiredPermissions: [.init(id: "oauth.\(spec.provider).\(spec.scope)", permission: .network)], registryPermission: .network, riskClass: spec.risk, confirmationPolicy: spec.confirmation, availabilityCheck: .always, timeoutSeconds: 60, supportsCancellation: true, dryRunBehavior: .supported("Would call \(spec.action) with account-bound OAuth and semantic arguments."), previewRenderer: "connector.\(spec.provider)", tests: ["NexConnectorTests"])
     }

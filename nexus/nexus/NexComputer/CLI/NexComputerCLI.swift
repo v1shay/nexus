@@ -66,7 +66,7 @@ enum NexComputerCLI {
                 output = manifests.flatMap { manifest in manifest.requiredPermissions.map { ["action": manifest.actionID, "permission": $0.id, "recovery": $0.recovery ?? ""] } }
             case "confirm", "cancel":
                 guard let actionID = arguments.dropFirst().first else { throw CLIError.missing("action_id") }
-                let tool = command == "confirm" ? "nex.confirm_action" : "nex.cancel_action"
+                let tool = command == "confirm" ? "confirm_action" : "cancel_action"
                 output = Self.foundationJSON(try await env.tools.execute(name: tool, arguments: ["actionId": .string(actionID)], invocation: .app))
             case "connectors":
                 output = try await connectorCommand(Array(arguments.dropFirst()))
@@ -122,7 +122,22 @@ enum NexComputerCLI {
     private static func value(after option: String, in arguments: [String]) -> String? { guard let index = arguments.firstIndex(of: option), arguments.indices.contains(index + 1) else { return nil }; return arguments[index + 1] }
     private static func object(_ data: Data) throws -> Any { try JSONSerialization.jsonObject(with: data) }
     private static func foundationJSON(_ value: NexJSONValue) -> Any { (try? object(JSONEncoder.cli.encode(value))) ?? NSNull() }
-    private static func nexJSON(_ value: Any) throws -> NexJSONValue { switch value { case let value as String: .string(value); case let value as Bool: .bool(value); case let value as NSNumber: .number(value.doubleValue); case let value as [Any]: .array(try value.map(nexJSON)); case let value as [String: Any]: .object(try value.mapValues(nexJSON)); case is NSNull: .null; default: throw CLIError.invalidJSON } }
+    private static func nexJSON(_ value: Any) throws -> NexJSONValue {
+        switch value {
+        case let value as String:
+            .string(value)
+        case let value as NSNumber:
+            CFGetTypeID(value) == CFBooleanGetTypeID() ? .bool(value.boolValue) : .number(value.doubleValue)
+        case let value as [Any]:
+            .array(try value.map(nexJSON))
+        case let value as [String: Any]:
+            .object(try value.mapValues(nexJSON))
+        case is NSNull:
+            .null
+        default:
+            throw CLIError.invalidJSON
+        }
+    }
     private static func printJSON(_ value: Any) { guard JSONSerialization.isValidJSONObject(value), let data = try? JSONSerialization.data(withJSONObject: value, options: [.prettyPrinted, .sortedKeys]), let text = String(data: data, encoding: .utf8) else { print("{\"ok\":false,\"error\":\"output encoding failed\"}"); return }; print(text) }
 }
 

@@ -130,6 +130,13 @@ final class NexComputerExtendedActionTests: XCTestCase {
         let unavailableResult = try await tools.execute(name: "gmail.read_thread", arguments: ["id": .string("thread-1")])
         guard case .object(let object) = unavailableResult else { return XCTFail("Expected connection request") }
         XCTAssertEqual(object["status"], .string("connection_required"))
+        let envelope = await NexComputerRuntime(registry: computer).execute(
+            actionID: "gmail.read_thread",
+            arguments: ["id": .string("thread-1")]
+        )
+        XCTAssertTrue(envelope.ok)
+        XCTAssertEqual(envelope.data.object?["status"], .string("connection_required"))
+        XCTAssertNotNil(envelope.data.object?["connectionId"]?.string)
     }
 
     func testOfficialConnectorExecutorUsesAccountBoundCredentialAndStructuredResult() async throws {
@@ -169,6 +176,41 @@ final class NexComputerExtendedActionTests: XCTestCase {
         XCTAssertEqual(consumed.action, "notion.search")
         let expired = try await store.create(provider: "slack", action: "slack.search", arguments: ["query": .string("launch")], now: Date(timeIntervalSince1970: 200))
         do { _ = try await store.consume(id: expired.id, expectedArguments: nil, now: Date(timeIntervalSince1970: 300)); XCTFail("Expected expiry") } catch let error as NexToolError { XCTAssertEqual(error.code, "connection_request_expired") }
+    }
+
+    func testConnectorRequestResumesAfterTheExactProviderConnects() async throws {
+        let tools = NexToolRegistry()
+        let registry = NexComputerRegistry(
+            toolRegistry: tools,
+            permissionManager: NexComputerPermissionManager(backend: AuthorizedPermissions())
+        )
+        let store = NexConnectorPendingRequestStore(fileURL: temporaryFile("resume-connectors.json"), lifetime: 60)
+        let manager = NexConnectorManager(executor: MockConnectorExecutor(), pendingStore: store)
+        try await manager.apply(.disconnected(.slack), to: registry)
+
+        let pending = await NexComputerRuntime(registry: registry).execute(
+            actionID: "slack.list_channels",
+            arguments: ["limit": .number(1)]
+        )
+        let connectionRaw = try XCTUnwrap(pending.data.object?["connectionId"]?.string)
+        let connectionID = try XCTUnwrap(UUID(uuidString: connectionRaw))
+        let connected = NexConnectorCapabilityDocument(
+            provider: "slack",
+            account: "fixture-workspace",
+            connected: true,
+            grantedScopes: ["slack.history"],
+            capabilities: [
+                .init(action: "slack.list_channels", available: true, missingScope: nil, providerLimitation: nil)
+            ]
+        )
+        try await manager.apply(connected, to: registry)
+
+        let resumed = try await manager.resumeRequest(
+            id: connectionID,
+            expectedArguments: ["limit": .number(1)]
+        )
+        XCTAssertEqual(resumed.0, "slack.list_channels")
+        XCTAssertEqual(resumed.1["limit"], .number(1))
     }
 
     func testConnectorManagementReportsAndDisconnectsAccounts() throws {

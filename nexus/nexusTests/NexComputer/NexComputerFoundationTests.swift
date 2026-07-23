@@ -255,6 +255,54 @@ final class NexComputerFoundationTests: XCTestCase {
         XCTAssertEqual(invalid, 2)
     }
 
+    func testCLIJSONKeepsIntegersAndBooleansDistinct() async throws {
+        let tools = NexToolRegistry()
+        let registry = NexComputerRegistry(toolRegistry: tools)
+        let manifest = NexComputerActionManifest(
+            actionID: "fixture.types",
+            application: "Fixture",
+            provider: "Nexus Tests",
+            description: "Validate CLI JSON primitive types.",
+            examples: ["Validate primitive types"],
+            aliases: [],
+            tags: ["fixture"],
+            inputSchema: .init(fields: [
+                "limit": .init(.integer, required: true),
+                "enabled": .init(.boolean, required: true)
+            ]),
+            outputSchema: .init(fields: ["display": .init(.string, required: true)]),
+            implementationMethod: .nativeAPI,
+            registryPermission: .files,
+            riskClass: .low,
+            confirmationPolicy: .never,
+            availabilityCheck: .always,
+            timeoutSeconds: 1,
+            supportsCancellation: false,
+            dryRunBehavior: .supported("Would validate types."),
+            previewRenderer: "fixture",
+            tests: ["NexComputerFoundationTests"]
+        )
+        try await registry.register(manifest: manifest) { arguments, _ in
+            guard arguments["limit"]?.integer == 1, arguments["enabled"]?.bool == true else {
+                throw NexToolError.executionFailed(code: "wrong_types", message: "CLI changed JSON primitive types.")
+            }
+            return .object(["display": .string("Types preserved")])
+        }
+        let environment = NexComputerCLIEnvironment(
+            tools: tools,
+            registry: registry,
+            runtime: NexComputerRuntime(registry: registry),
+            search: NexToolSearchService(registry: tools, computerRegistry: registry),
+            connectors: NexConnectorManager()
+        )
+
+        let result = await NexComputerCLI.run(
+            arguments: ["execute", "fixture.types", "--json", #"{"limit":1,"enabled":true}"#],
+            environment: environment
+        )
+        XCTAssertEqual(result, 0)
+    }
+
     private func makeManifest(
         actionID: String = "fixture.open",
         implementationMethod: NexComputerImplementationMethod = .nativeAPI,
