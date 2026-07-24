@@ -2,6 +2,7 @@ import AppKit
 import AuthenticationServices
 import CryptoKit
 import Foundation
+import Network
 import SwiftUI
 
 enum NexConnectorProvider: String, CaseIterable, Codable, Identifiable, Sendable {
@@ -85,6 +86,9 @@ struct NexOAuthConfiguration: Sendable {
     let clientSecret: String?
     let tokenAuthentication: NexOAuthTokenAuthentication
     let usesPKCE: Bool
+    /// Native Google desktop clients must use an ephemeral loopback callback,
+    /// not a hosted web redirect or a custom URI scheme.
+    let usesLoopbackRedirect: Bool
 
     init(
         provider: NexConnectorProvider,
@@ -99,7 +103,8 @@ struct NexOAuthConfiguration: Sendable {
         redirectURL: URL? = nil,
         clientSecret: String? = nil,
         tokenAuthentication: NexOAuthTokenAuthentication = .none,
-        usesPKCE: Bool = true
+        usesPKCE: Bool = true,
+        usesLoopbackRedirect: Bool = false
     ) {
         self.provider = provider
         self.clientID = clientID
@@ -114,6 +119,7 @@ struct NexOAuthConfiguration: Sendable {
         self.clientSecret = clientSecret
         self.tokenAuthentication = tokenAuthentication
         self.usesPKCE = usesPKCE
+        self.usesLoopbackRedirect = usesLoopbackRedirect
     }
 
     static func configured(
@@ -129,9 +135,9 @@ struct NexOAuthConfiguration: Sendable {
         }
         let redirectURL: URL?
         switch provider {
-        case .google, .notion, .slack, .github:
+        case .notion, .slack, .github:
             redirectURL = (bundle.object(forInfoDictionaryKey: "NEXOAuthWebRedirectURL") as? String).flatMap(URL.init(string:))
-        case .discord:
+        case .google, .discord:
             redirectURL = nil
         }
         let secret = try registrations.clientSecret(for: provider)
@@ -142,7 +148,8 @@ struct NexOAuthConfiguration: Sendable {
             separator: String,
             authorizationItems: [URLQueryItem] = [],
             tokenAuthentication: NexOAuthTokenAuthentication = .none,
-            usesPKCE: Bool = true
+            usesPKCE: Bool = true,
+            usesLoopbackRedirect: Bool = false
         ) throws -> Self {
             if tokenAuthentication != .none, secret?.isEmpty != false {
                 throw NexConnectorAuthError.clientSecretMissing(provider)
@@ -160,12 +167,13 @@ struct NexOAuthConfiguration: Sendable {
                 redirectURL: redirectURL,
                 clientSecret: secret,
                 tokenAuthentication: tokenAuthentication,
-                usesPKCE: usesPKCE
+                usesPKCE: usesPKCE,
+                usesLoopbackRedirect: usesLoopbackRedirect
             )
         }
         switch provider {
         case .google:
-            return try configuration(authorizationURL: "https://accounts.google.com/o/oauth2/v2/auth", tokenURL: "https://oauth2.googleapis.com/token", verificationURL: "https://openidconnect.googleapis.com/v1/userinfo", separator: " ", authorizationItems: [.init(name: "access_type", value: "offline"), .init(name: "prompt", value: "consent")])
+            return try configuration(authorizationURL: "https://accounts.google.com/o/oauth2/v2/auth", tokenURL: "https://oauth2.googleapis.com/token", verificationURL: "https://openidconnect.googleapis.com/v1/userinfo", separator: " ", authorizationItems: [.init(name: "access_type", value: "offline"), .init(name: "prompt", value: "consent")], usesLoopbackRedirect: true)
         case .notion:
             return try configuration(authorizationURL: "https://api.notion.com/v1/oauth/authorize", tokenURL: "https://api.notion.com/v1/oauth/token", verificationURL: "https://api.notion.com/v1/users/me", separator: " ", authorizationItems: [.init(name: "owner", value: "user")], tokenAuthentication: .basicClientSecret, usesPKCE: false)
         case .slack:
@@ -259,7 +267,17 @@ struct NexOAuthURLSessionTransport: NexOAuthTransporting {
             throw NexConnectorAuthError.exchangeFailed(Self.safeProviderError(data))
         }
         let expires = (json["expires_in"] as? NSNumber).map { Date().addingTimeInterval($0.doubleValue) }
-        return .init(provider: configuration.provider, account: "Connected account", accessToken: access, refreshToken: json["refresh_token"] as? String, tokenType: (json["token_type"] as? String) ?? "Bearer", scopes: scopes, expiresAt: expires, connectedAt: .now, lastSuccessfulUse: nil)
+        let account: String
+        if configuration.provider == .notion {
+            // Notion's successful OAuth exchange is itself the authoritative
+            // proof of access and returns the connected workspace identity.
+            // Calling /v1/users/me afterward is unnecessary and can reject a
+            // valid workspace-scoped OAuth token.
+            account = (json["workspace_name"] as? String) ?? "Notion workspace"
+        } else {
+            account = "Connected account"
+        }
+        return .init(provider: configuration.provider, account: account, accessToken: access, refreshToken: json["refresh_token"] as? String, tokenType: (json["token_type"] as? String) ?? "Bearer", scopes: scopes, expiresAt: expires, connectedAt: .now, lastSuccessfulUse: nil)
     }
 
     func verify(configuration: NexOAuthConfiguration, credential: NexConnectorCredential) async throws -> String {
@@ -309,6 +327,147 @@ struct NexOAuthURLSessionTransport: NexOAuthTransporting {
     }
 }
 
+/// A one-shot, loopback-only OAuth receiver for native desktop clients.
+/// It never persists the callback or serves a general HTTP endpoint.
+final class NexLoopbackOAuthCallbackServer: @unchecked Sendable {
+    private let queue = DispatchQueue(label: "na.nexus.oauth.loopback")
+    private let lock = NSLock()
+    private var listener: NWListener?
+    private var readyContinuation: CheckedContinuation<URL, Error>?
+    private var callbackContinuation: CheckedContinuation<URL, Error>?
+    private var completedCallback: Result<URL, Error>?
+    private var redirectURL: URL?
+    private var finished = false
+
+    deinit { stop() }
+
+    func start() async throws -> URL {
+        try await withCheckedThrowingContinuation { continuation in
+            queue.async { [weak self] in
+                guard let self else {
+                    continuation.resume(throwing: NexConnectorAuthError.invalidCallback)
+                    return
+                }
+                guard self.listener == nil else {
+                    continuation.resume(throwing: NexConnectorAuthError.invalidCallback)
+                    return
+                }
+                let parameters = NWParameters.tcp
+                parameters.requiredLocalEndpoint = .hostPort(host: "127.0.0.1", port: .any)
+                do {
+                    let listener = try NWListener(using: parameters)
+                    self.listener = listener
+                    self.readyContinuation = continuation
+                    listener.stateUpdateHandler = { [weak self] state in
+                        guard let self else { return }
+                        switch state {
+                        case .ready:
+                            guard let port = listener.port,
+                                  let redirect = URL(string: "http://127.0.0.1:\(port.rawValue)/oauth/callback") else {
+                                self.finishStart(.failure(NexConnectorAuthError.invalidCallback))
+                                return
+                            }
+                            self.redirectURL = redirect
+                            self.finishStart(.success(redirect))
+                        case .failed(let error):
+                            self.finishStart(.failure(error))
+                            self.finishCallback(.failure(error))
+                        case .cancelled:
+                            self.finishStart(.failure(NexConnectorAuthError.cancelled))
+                            self.finishCallback(.failure(NexConnectorAuthError.cancelled))
+                        default:
+                            break
+                        }
+                    }
+                    listener.newConnectionHandler = { [weak self] connection in
+                        self?.receive(connection)
+                    }
+                    listener.start(queue: self.queue)
+                } catch {
+                    continuation.resume(throwing: error)
+                }
+            }
+        }
+    }
+
+    func waitForCallback() async throws -> URL {
+        try await withCheckedThrowingContinuation { continuation in
+            lock.lock()
+            defer { lock.unlock() }
+            if let completedCallback {
+                continuation.resume(with: completedCallback)
+                return
+            }
+            guard listener != nil else {
+                continuation.resume(throwing: NexConnectorAuthError.cancelled)
+                return
+            }
+            callbackContinuation = continuation
+        }
+    }
+
+    func stop() {
+        lock.lock()
+        let listener = self.listener
+        self.listener = nil
+        let callback = callbackContinuation
+        callbackContinuation = nil
+        let start = readyContinuation
+        readyContinuation = nil
+        completedCallback = .failure(NexConnectorAuthError.cancelled)
+        finished = true
+        lock.unlock()
+        listener?.cancel()
+        callback?.resume(throwing: NexConnectorAuthError.cancelled)
+        start?.resume(throwing: NexConnectorAuthError.cancelled)
+    }
+
+    private func receive(_ connection: NWConnection) {
+        connection.start(queue: queue)
+        connection.receive(minimumIncompleteLength: 1, maximumLength: 16_384) { [weak self] data, _, _, error in
+            guard let self else { return }
+            guard error == nil,
+                  let data,
+                  let request = String(data: data, encoding: .utf8),
+                  let requestLine = request.components(separatedBy: "\r\n").first,
+                  requestLine.hasPrefix("GET "),
+                  let target = requestLine.split(separator: " ").dropFirst().first,
+                  let base = self.redirectURL,
+                  let callback = URL(string: String(target), relativeTo: base)?.absoluteURL else {
+                self.writeResponse(to: connection, status: "400 Bad Request", body: "Invalid Nexus callback.")
+                self.finishCallback(.failure(NexConnectorAuthError.invalidCallback))
+                return
+            }
+            self.writeResponse(to: connection, status: "200 OK", body: "Nexus connected. You can return to the app.")
+            self.finishCallback(.success(callback))
+        }
+    }
+
+    private func writeResponse(to connection: NWConnection, status: String, body: String) {
+        let response = "HTTP/1.1 \(status)\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: \(body.utf8.count)\r\nConnection: close\r\n\r\n\(body)"
+        connection.send(content: response.data(using: .utf8), completion: .contentProcessed { _ in connection.cancel() })
+    }
+
+    private func finishStart(_ result: Result<URL, Error>) {
+        lock.lock()
+        let continuation = readyContinuation
+        readyContinuation = nil
+        lock.unlock()
+        continuation?.resume(with: result)
+    }
+
+    private func finishCallback(_ result: Result<URL, Error>) {
+        lock.lock()
+        guard !finished else { lock.unlock(); return }
+        finished = true
+        let continuation = callbackContinuation
+        callbackContinuation = nil
+        completedCallback = result
+        lock.unlock()
+        continuation?.resume(with: result)
+    }
+}
+
 @MainActor
 final class NexConnectorAuthController: NSObject, ObservableObject, ASWebAuthenticationPresentationContextProviding {
     static let shared = NexConnectorAuthController()
@@ -342,7 +501,13 @@ final class NexConnectorAuthController: NSObject, ObservableObject, ASWebAuthent
                 let verifier = Self.randomURLSafe(bytes: 48)
                 let challenge = Data(SHA256.hash(data: Data(verifier.utf8))).base64URLEncoded
                 let appCallback = URL(string: "\(configuration.callbackScheme)://oauth/callback")!
-                let redirect = configuration.redirectURL ?? appCallback
+                let loopback = configuration.usesLoopbackRedirect ? NexLoopbackOAuthCallbackServer() : nil
+                let redirect: URL
+                if let loopback {
+                    redirect = try await loopback.start()
+                } else {
+                    redirect = configuration.redirectURL ?? appCallback
+                }
                 var components = URLComponents(url: configuration.authorizationURL, resolvingAgainstBaseURL: false)!
                 components.queryItems = [
                     .init(name: "client_id", value: configuration.clientID), .init(name: "redirect_uri", value: redirect.absoluteString),
@@ -355,13 +520,21 @@ final class NexConnectorAuthController: NSObject, ObservableObject, ASWebAuthent
                 guard let authorizationURL = components.url else { throw NexConnectorAuthError.invalidCallback }
                 activeProvider = provider
                 message = "Opening \(provider.title)…"
-                let callbackURL = try await authenticate(url: authorizationURL, scheme: configuration.callbackScheme)
-                try NexConnectorSecurityPolicy.validateCallback(callbackURL, expectedScheme: configuration.callbackScheme)
+                let callbackURL: URL
+                if let loopback {
+                    guard NSWorkspace.shared.open(authorizationURL) else { throw NexConnectorAuthError.invalidCallback }
+                    callbackURL = try await loopback.waitForCallback()
+                    try NexConnectorSecurityPolicy.validateLoopbackCallback(callbackURL, expectedRedirect: redirect)
+                    loopback.stop()
+                } else {
+                    callbackURL = try await authenticate(url: authorizationURL, scheme: configuration.callbackScheme)
+                    try NexConnectorSecurityPolicy.validateCallback(callbackURL, expectedScheme: configuration.callbackScheme)
+                }
                 let query = URLComponents(url: callbackURL, resolvingAgainstBaseURL: false)?.queryItems ?? []
                 guard query.first(where: { $0.name == "state" })?.value == state else { throw NexConnectorAuthError.stateMismatch }
                 guard let code = query.first(where: { $0.name == "code" })?.value, !code.isEmpty else { throw NexConnectorAuthError.invalidCallback }
                 var credential = try await transport.exchange(configuration: configuration, code: code, verifier: verifier, callbackURL: redirect, scopes: selectedScopes)
-                let account = try await transport.verify(configuration: configuration, credential: credential)
+                let account = provider == .notion ? credential.account : try await transport.verify(configuration: configuration, credential: credential)
                 credential = .init(provider: credential.provider, account: account, accessToken: credential.accessToken, refreshToken: credential.refreshToken, tokenType: credential.tokenType, scopes: credential.scopes, expiresAt: credential.expiresAt, connectedAt: credential.connectedAt, lastSuccessfulUse: .now)
                 try store.save(credential)
                 message = "\(provider.title) connected."
@@ -484,6 +657,17 @@ actor NexAuthenticatedConnectorSession {
 enum NexConnectorSecurityPolicy {
     static func validateCallback(_ url: URL, expectedScheme: String) throws {
         guard url.scheme == expectedScheme, url.host == "oauth", url.path == "/callback", url.user == nil, url.password == nil else { throw NexConnectorAuthError.invalidCallback }
+    }
+
+    static func validateLoopbackCallback(_ url: URL, expectedRedirect: URL) throws {
+        guard url.scheme == "http",
+              url.host == "127.0.0.1",
+              url.port == expectedRedirect.port,
+              url.path == "/oauth/callback",
+              url.user == nil,
+              url.password == nil else {
+            throw NexConnectorAuthError.invalidCallback
+        }
     }
 
     static func redacted(_ value: String, credentials: [NexConnectorCredential] = []) -> String {

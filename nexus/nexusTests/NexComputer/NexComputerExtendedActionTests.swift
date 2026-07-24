@@ -227,9 +227,27 @@ final class NexComputerExtendedActionTests: XCTestCase {
     func testConnectorSecurityRejectsWrongOriginAndRedactsSecrets() throws {
         XCTAssertNoThrow(try NexConnectorSecurityPolicy.validateCallback(URL(string: "na.nexus.oauth://oauth/callback?code=abc")!, expectedScheme: "na.nexus.oauth"))
         XCTAssertThrowsError(try NexConnectorSecurityPolicy.validateCallback(URL(string: "na.nexus.oauth://evil/callback?code=abc")!, expectedScheme: "na.nexus.oauth"))
+        let loopbackRedirect = URL(string: "http://127.0.0.1:53123/oauth/callback")!
+        XCTAssertNoThrow(try NexConnectorSecurityPolicy.validateLoopbackCallback(URL(string: "http://127.0.0.1:53123/oauth/callback?code=abc")!, expectedRedirect: loopbackRedirect))
+        XCTAssertThrowsError(try NexConnectorSecurityPolicy.validateLoopbackCallback(URL(string: "http://127.0.0.1:53124/oauth/callback?code=abc")!, expectedRedirect: loopbackRedirect))
+        XCTAssertThrowsError(try NexConnectorSecurityPolicy.validateLoopbackCallback(URL(string: "http://localhost:53123/oauth/callback?code=abc")!, expectedRedirect: loopbackRedirect))
         let credential = NexConnectorCredential(provider: .github, account: "vishay", accessToken: "access-secret", refreshToken: "refresh-secret", tokenType: "Bearer", scopes: ["repo"], expiresAt: nil, connectedAt: .now, lastSuccessfulUse: nil)
         let redacted = NexConnectorSecurityPolicy.redacted("Authorization: Bearer access-secret refresh_token=refresh-secret", credentials: [credential])
         XCTAssertFalse(redacted.contains("access-secret")); XCTAssertFalse(redacted.contains("refresh-secret"))
+    }
+
+    func testGoogleLoopbackReceiverAcceptsOnlyItsOneTimeCallback() async throws {
+        let server = NexLoopbackOAuthCallbackServer()
+        let redirect = try await server.start()
+        let waiting = Task { try await server.waitForCallback() }
+        var components = URLComponents(url: redirect, resolvingAgainstBaseURL: false)!
+        components.queryItems = [.init(name: "code", value: "fixture-code"), .init(name: "state", value: "fixture-state")]
+        let (_, response) = try await URLSession.shared.data(from: try XCTUnwrap(components.url))
+        XCTAssertEqual((response as? HTTPURLResponse)?.statusCode, 200)
+        let callback = try await waiting.value
+        XCTAssertEqual(URLComponents(url: callback, resolvingAgainstBaseURL: false)?.queryItems?.first(where: { $0.name == "code" })?.value, "fixture-code")
+        XCTAssertNoThrow(try NexConnectorSecurityPolicy.validateLoopbackCallback(callback, expectedRedirect: redirect))
+        server.stop()
     }
 
     func testConnectorSessionRefreshesRotatesAndRemovesRevokedCredentials() async throws {

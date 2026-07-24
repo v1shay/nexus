@@ -8,7 +8,7 @@ Obsidian vault, or a synced folder.
 
 ## Redirect architecture
 
-The registered web redirect URI for Google, Notion, Slack, and GitHub is:
+The registered web redirect URI for Notion, Slack, and GitHub is:
 
 ```text
 https://v1shay.github.io/nexus/callback.html
@@ -20,9 +20,11 @@ It forwards only `code`, `state`, `error`, and `error_description` to
 host, path, and original CSRF state before exchanging the code. The static
 page never stores, logs, or exchanges tokens.
 
-Google uses the same HTTPS callback bridge. Configure the Google client as a
-web OAuth client and register the GitHub Pages URI exactly; the bridge then
-returns the code and state to Nexus's private native scheme.
+Google uses a native macOS Desktop OAuth client. Nexus starts a one-time
+loopback listener on `127.0.0.1` for each Google connection and opens the
+system browser; it does not use GitHub Pages or a custom URI scheme for Google.
+Do not add a Google client secret to Nexus: desktop-client secrets cannot be
+kept confidential in an installed app, and Nexus uses PKCE instead.
 
 ## Provider console values
 
@@ -33,7 +35,7 @@ Configure the following before pressing **Connect** in Nexus:
 | Notion | `https://v1shay.github.io/nexus/callback.html` | The public connection must allow the workspace you choose. |
 | Slack | `https://v1shay.github.io/nexus/callback.html` | Add user-token scopes matching the Nexus toggles, at minimum a read scope and `chat:write` only when needed. |
 | GitHub App | `https://v1shay.github.io/nexus/callback.html` | Enable user authorization for the app and keep its installation permissions least-privilege. |
-| Google | `https://v1shay.github.io/nexus/callback.html` | Add this exact URI under Google Cloud **Authorized redirect URIs**; enable Gmail, Calendar, and People APIs individually. |
+| Google | A temporary `http://127.0.0.1:<port>/oauth/callback` | Create a **Desktop** OAuth client. No hosted redirect URI is configured. Enable Gmail, Calendar, and People APIs individually. |
 
 The GitHub Pages site is published from the `gh-pages` branch root. Verify
 the two public endpoints before configuring a provider:
