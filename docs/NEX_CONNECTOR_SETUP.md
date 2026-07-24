@@ -8,7 +8,7 @@ Obsidian vault, or a synced folder.
 
 ## Redirect architecture
 
-The registered web redirect URI for Notion, Slack, and GitHub is:
+The registered web redirect URI for Google, Notion, Slack, and GitHub is:
 
 ```text
 https://v1shay.github.io/nexus/callback.html
@@ -20,8 +20,9 @@ It forwards only `code`, `state`, `error`, and `error_description` to
 host, path, and original CSRF state before exchanging the code. The static
 page never stores, logs, or exchanges tokens.
 
-Google remains a native desktop OAuth client and uses the app custom scheme
-directly; do not configure the GitHub Pages URI for that client.
+Google uses the same HTTPS callback bridge. Configure the Google client as a
+web OAuth client and register the GitHub Pages URI exactly; the bridge then
+returns the code and state to Nexus's private native scheme.
 
 ## Provider console values
 
@@ -32,7 +33,7 @@ Configure the following before pressing **Connect** in Nexus:
 | Notion | `https://v1shay.github.io/nexus/callback.html` | The public connection must allow the workspace you choose. |
 | Slack | `https://v1shay.github.io/nexus/callback.html` | Add user-token scopes matching the Nexus toggles, at minimum a read scope and `chat:write` only when needed. |
 | GitHub App | `https://v1shay.github.io/nexus/callback.html` | Enable user authorization for the app and keep its installation permissions least-privilege. |
-| Google desktop | `na.nexus.oauth://oauth/callback` | Enable Gmail, Calendar, and People APIs individually in Google Cloud. |
+| Google | `https://v1shay.github.io/nexus/callback.html` | Add this exact URI under Google Cloud **Authorized redirect URIs**; enable Gmail, Calendar, and People APIs individually. |
 
 The GitHub Pages site is published from the `gh-pages` branch root. Verify
 the two public endpoints before configuring a provider:
@@ -66,6 +67,11 @@ beginning OAuth or app authentication; they are not emitted in diagnostics.
 Discord is intentionally not a connected Nexus provider. Use Nexus's managed
 browser for Discord workflows; Nexus does not keep Discord user credentials or
 operate a self-bot.
+
+If Slack's app configuration does not expose **OAuth & Permissions → Redirect
+URLs**, the signed-in Slack account is not an editor of that Slack app. OAuth
+cannot work with that registration until its owner adds the redirect URI above;
+create a new app in a workspace you administer when the owner cannot do that.
 
 ## Rotate exposed values
 
