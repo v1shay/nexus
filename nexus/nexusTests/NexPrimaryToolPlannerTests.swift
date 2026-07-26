@@ -20,7 +20,20 @@ final class NexPrimaryToolPlannerTests: XCTestCase {
         XCTAssertTrue(instructions.contains("memory_get only with an exact source_id"))
         XCTAssertTrue(instructions.contains("conversation_recall for something visible above"))
         XCTAssertTrue(instructions.contains("memory_propose or memory_forget directly"))
+        XCTAssertTrue(instructions.contains("Hard distinction: research versus browser action"))
+        XCTAssertTrue(instructions.contains("Never substitute `web_search` for an explicit Nexus-browser request"))
         XCTAssertEqual(Array(messages.dropFirst()), context)
+    }
+
+    func testPlannerRequiresCapabilityDiscoveryBeforeAnExternalActionIsRefused() {
+        let instructions = NexPrimaryToolPlanner.planningMessages(
+            context: [.init(role: "user", content: "Text Test that he needs to get the milk.")],
+            tools: tools()
+        ).first?.content ?? ""
+
+        XCTAssertTrue(instructions.contains("never return no actions or tell the user the capability is unavailable"))
+        XCTAssertTrue(instructions.contains("Call search_tools first with a complete standalone capability description"))
+        XCTAssertTrue(instructions.contains("Discovery is not completion"))
     }
 
     func testNoToolAndActiveConversationPlansStayToolFree() {

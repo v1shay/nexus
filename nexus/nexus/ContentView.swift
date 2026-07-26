@@ -366,7 +366,8 @@ private struct ToolActivityIndicator: View {
                     confirm: notch.confirmTaskPreview,
                     cancel: notch.cancelTaskPreview,
                     connect: { notch.connectProvider($0) },
-                    open: notch.openTaskPreviewTarget
+                    open: notch.openTaskPreviewTarget,
+                    sendDraft: notch.sendMessageDraft
                 )
             } else {
                 compactBody
@@ -1007,6 +1008,8 @@ private struct ThinkingToolHighlightText: View {
 private struct TranscriptContents: View {
     @EnvironmentObject private var notch: NotchController
     private static let responseBottomID = "nex-response-bottom"
+    @State private var typedPrompt = ""
+    @FocusState private var typedPromptFocused: Bool
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -1081,6 +1084,7 @@ private struct TranscriptContents: View {
                             .font(.system(size: notch.answer.isEmpty ? 25 : 17, weight: .medium, design: .rounded))
                             .foregroundStyle(.white.opacity(notch.answer.isEmpty ? 0.96 : 0.62))
                             .textSelection(.enabled)
+                            .accessibilityIdentifier("nexus-transcript")
 
                         if !notch.answer.isEmpty {
                             Capsule()
@@ -1108,10 +1112,49 @@ private struct TranscriptContents: View {
                 }
             }
             .padding(.top, 18)
+
+            HStack(spacing: 10) {
+                TextField("Ask Nex…", text: $typedPrompt)
+                    .textFieldStyle(.plain)
+                    .font(.system(size: 14, weight: .medium, design: .rounded))
+                    .foregroundStyle(.white.opacity(0.9))
+                    .padding(.horizontal, 14)
+                    .frame(height: 38)
+                    .background(.white.opacity(0.08), in: Capsule())
+                    .overlay {
+                        Capsule().stroke(.white.opacity(0.14), lineWidth: 1)
+                    }
+                    .focused($typedPromptFocused)
+                    .onSubmit(submitTypedPrompt)
+                    .accessibilityIdentifier("nexus-typed-prompt")
+                    .accessibilityLabel("Type a request for Nex")
+
+                Button(action: submitTypedPrompt) {
+                    Image(systemName: "arrow.up")
+                        .font(.system(size: 13, weight: .bold))
+                        .frame(width: 38, height: 38)
+                        .background(.white.opacity(typedPrompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? 0.08 : 0.2), in: Circle())
+                }
+                .buttonStyle(.plain)
+                .disabled(typedPrompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                .accessibilityIdentifier("nexus-typed-submit")
+                .accessibilityLabel("Send typed request")
+            }
+            .padding(.top, 14)
         }
         .padding(.horizontal, 27)
         .padding(.top, 20)
         .padding(.bottom, 20)
+    }
+
+    private func submitTypedPrompt() {
+        let request = typedPrompt
+        guard !request.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+        typedPrompt = ""
+        typedPromptFocused = false
+        Task { @MainActor in
+            await notch.submitTypedPrompt(request)
+        }
     }
 
     private var saveButtonColor: Color {

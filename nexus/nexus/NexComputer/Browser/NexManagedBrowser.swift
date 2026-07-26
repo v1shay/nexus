@@ -42,6 +42,22 @@ actor NexManagedBrowserProvider {
         for name in ["Bookmarks", "History", "Preferences"] { let from = source.appendingPathComponent(name), to = destination.appendingPathComponent(name); guard FileManager.default.fileExists(atPath: from.path) else { continue }; try? FileManager.default.removeItem(at: to); try FileManager.default.copyItem(at: from, to: to); copied.append(name) }
         return copied
     }
+    /// Opens a separate, persistent Chrome profile owned by Nexus. This is the
+    /// only supported place to sign in to private web services for managed
+    /// browser tasks; macOS-encrypted cookies and passwords are never copied
+    /// out of the user's normal Chrome profile.
+    func openProfileForSignIn() throws {
+        let chrome = URL(fileURLWithPath: "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome")
+        guard FileManager.default.isExecutableFile(atPath: chrome.path) else {
+            throw NexToolError.executionFailed(code: "chrome_unavailable", message: "Google Chrome is required for Nexus's managed browser.")
+        }
+        let profile = root.appendingPathComponent("Profile", isDirectory: true)
+        try FileManager.default.createDirectory(at: profile, withIntermediateDirectories: true)
+        let process = Process()
+        process.executableURL = chrome
+        process.arguments = ["--user-data-dir=\(profile.path)", "--new-window", "about:blank"]
+        try process.run()
+    }
     func reset() throws { for process in processes.values { process.terminate() }; processes.removeAll(); try? FileManager.default.removeItem(at: root.appendingPathComponent("Profile")); try FileManager.default.createDirectory(at: root.appendingPathComponent("Profile"), withIntermediateDirectories: true) }
 
     private func ensureRuntime() async throws -> URL {
@@ -49,7 +65,14 @@ actor NexManagedBrowserProvider {
         try FileManager.default.createDirectory(at: runtime, withIntermediateDirectories: true)
         if !FileManager.default.fileExists(atPath: module.path) {
             guard FileManager.default.isExecutableFile(atPath: "/opt/homebrew/bin/npm") else { throw NexToolError.executionFailed(code: "npm_unavailable", message: "Managed Playwright provisioning requires the installed npm executable.") }
-            let process = Process(), pipe = Pipe(); process.executableURL = URL(fileURLWithPath: "/opt/homebrew/bin/npm"); process.arguments = ["install", "--prefix", runtime.path, "--no-audit", "--no-fund", "playwright-core@1.55.0"]; process.standardOutput = pipe; process.standardError = pipe; try process.run(); process.waitUntilExit(); guard process.terminationStatus == 0 else { throw NexToolError.executionFailed(code: "playwright_install_failed", message: String(data: pipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? "Playwright provisioning failed.") }
+            let process = Process(), pipe = Pipe(); process.executableURL = URL(fileURLWithPath: "/opt/homebrew/bin/npm"); process.arguments = ["install", "--prefix", runtime.path, "--no-audit", "--no-fund", "playwright-core@1.55.0"]
+            // `npm` launches Node through `/usr/bin/env`. Xcode's sanitized
+            // process environment omits Homebrew's bin directory, so make the
+            // managed runtime self-contained rather than requiring Terminal.
+            var environment = ProcessInfo.processInfo.environment
+            environment["PATH"] = "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"
+            process.environment = environment
+            process.standardOutput = pipe; process.standardError = pipe; try process.run(); process.waitUntilExit(); guard process.terminationStatus == 0 else { throw NexToolError.executionFailed(code: "playwright_install_failed", message: String(data: pipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? "Playwright provisioning failed.") }
         }
         let script = runtime.appendingPathComponent("agent.mjs"); if !FileManager.default.fileExists(atPath: script.path) { try Self.script.write(to: script, atomically: true, encoding: .utf8) }; return runtime
     }
@@ -93,15 +116,43 @@ actor NexBrowserActionCatalog {
     init(managed: NexManagedBrowserProvider = NexManagedBrowserProvider()) { self.managed = managed }
     func register(on registry: NexComputerRegistry) async throws {
         guard !registered else { return }; let managed = managed
+        try await registry.register(manifest: Self.manifest("browser.visit_url", "Visit one HTTP(S) page in Nexus's separate managed browser profile and return readable page evidence so Nex can answer Sir's request from the page. Use this for a simple explicit request to open, visit, or inspect one URL. For clicks, forms, uploads, downloads, or multiple pages use browser.run_task.", ["Use Nexus browser to inspect https://example.com", "Visit this page and tell me what it says"], ["url": .init(.string, required: true)], risk: .medium, confirmation: .never, method: .browserAgent)) { args, context in
+            let url = try Self.validHTTPURL(try Self.required(args, "url"))
+            let steps = try Self.pageVisitSteps(url: url)
+            let result = try await managed.run(goal: "Visit \(url.host ?? url.absoluteString) and extract its readable page text.", stepsJSON: steps) { await context.reportProgress($0, nil) }
+            return Self.result(result)
+        }
         try await registry.register(manifest: Self.manifest("browser.run_task", "Run a bounded Playwright task in Nexus's separate persistent browser profile. Steps support navigation, tabs, click, type, forms, extraction, downloads, uploads, and screenshots.", ["Research this site and extract the results", "Fill this form but do not submit without confirmation"], ["goal": .init(.string, required: true), "steps_json": .init(.string, required: true)], risk: .high, confirmation: .always, method: .browserAgent)) { args, context in let result = try await managed.run(goal: try Self.required(args, "goal"), stepsJSON: try Self.required(args, "steps_json")) { await context.reportProgress($0, nil) }; return Self.result(result) }
         try await registry.register(manifest: Self.manifest("browser.get_task", "Read a managed browser task by stable ID.", ["Check that browser task"], ["task_id": .init(.string, required: true)], method: .browserAgent)) { args, _ in guard let result = await managed.status(try Self.required(args, "task_id")) else { throw NexToolError.executionFailed(code: "browser_task_missing", message: "Browser task was not found.") }; return Self.result(result) }
         try await registry.register(manifest: Self.manifest("browser.cancel_task", "Cancel a running managed browser task.", ["Cancel the browser task"], ["task_id": .init(.string, required: true)], risk: .high, confirmation: .always, method: .browserAgent)) { args, _ in let id = try Self.required(args, "task_id"); try await managed.cancel(id); return Self.result(.init(taskID: id, status: "cancelled", text: "", tabs: [], downloads: [], screenshots: [], error: "")) }
-        try await registry.register(manifest: Self.manifest("browser.import_chrome_profile", "One-time copy of bookmarks, history, and preferences into Nexus's separate profile while Chrome is closed. Passwords, cookies, and Keychain secrets are never extracted.", ["Import safe Chrome state"], ["chrome_profile_root": .init(.string, required: true)], risk: .high, confirmation: .always, method: .nativeAPI)) { args, _ in let copied = try await managed.importProfile(chromeRoot: URL(fileURLWithPath: try Self.required(args, "chrome_profile_root"))); return .object(["display": .string("Imported: \(copied.joined(separator: ", ")). Sign in once where encrypted sessions cannot transfer safely."), "status": .string("completed"), "task_id": .string(""), "text": .string(""), "tabs": .array([]), "downloads": .array([]), "screenshots": .array([]), "error": .string("")]) }
+        try await registry.register(manifest: Self.manifest("browser.import_chrome_profile", "One-time copy of bookmarks, history, and preferences from the default Chrome profile into Nexus's separate profile while Chrome is closed. Passwords, cookies, and Keychain secrets are never extracted. The source root is optional and defaults to ~/Library/Application Support/Google/Chrome.", ["Import my safe Chrome browser data into Nexus"], ["chrome_profile_root": .init(.string, required: false)], risk: .high, confirmation: .always, method: .nativeAPI)) { args, _ in
+            let source = args["chrome_profile_root"]?.string.map { URL(fileURLWithPath: $0) } ?? Self.defaultChromeRoot
+            let copied = try await managed.importProfile(chromeRoot: source)
+            return .object(["display": .string("Imported: \(copied.joined(separator: ", ")). Sign in once in the Nexus browser for private sites; encrypted sessions are never copied."), "status": .string("completed"), "task_id": .string(""), "text": .string(""), "tabs": .array([]), "downloads": .array([]), "screenshots": .array([]), "error": .string("")])
+        }
+        try await registry.register(manifest: Self.manifest("browser.open_profile", "Open Nexus's separate persistent Chrome profile so Sir can sign in once to private sites. Its session stays local to Nexus and is reused by future managed-browser tasks.", ["Open the Nexus browser so I can sign in to Notion", "Let me sign in to a website in Nexus browser"], [:], risk: .medium, confirmation: .never, method: .nativeAPI)) { _, _ in
+            try await managed.openProfileForSignIn()
+            return Self.result(.init(taskID: "", status: "completed", text: "Opened the separate Nexus browser profile. Sign in there once, then close that Nexus Chrome window before asking Nex to automate the site.", tabs: [], downloads: [], screenshots: [], error: ""))
+        }
         try await registry.register(manifest: Self.manifest("browser.reset_profile", "Reset only the Nexus-owned browser profile and cancel managed browser tasks.", ["Reset Nexus browser"], [:], risk: .high, confirmation: .always, method: .nativeAPI)) { _, _ in try await managed.reset(); return Self.result(.init(taskID: "", status: "completed", text: "Nexus browser profile reset.", tabs: [], downloads: [], screenshots: [], error: "")) }
         registered = true
     }
     private static let output = NexToolInputSchema(fields: ["display": .init(.string, required: true), "status": .init(.string, required: true), "task_id": .init(.string, required: true), "text": .init(.string, required: true), "tabs": .init(.stringArray, required: true), "downloads": .init(.stringArray, required: true), "screenshots": .init(.stringArray, required: true), "error": .init(.string, required: true)])
+    private static let defaultChromeRoot = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support/Google/Chrome", isDirectory: true)
     private static func required(_ input: [String: NexJSONValue], _ key: String) throws -> String { guard let value = input[key]?.string, !value.isEmpty else { throw NexToolError.missingField(key) }; return value }
+    private static func validHTTPURL(_ text: String) throws -> URL {
+        guard let url = URL(string: text), ["http", "https"].contains(url.scheme?.lowercased() ?? ""), url.host != nil else {
+            throw NexToolError.executionFailed(code: "unsafe_url", message: "Nexus browser accepts only complete HTTP(S) URLs.")
+        }
+        return url
+    }
+    private static func pageVisitSteps(url: URL) throws -> String {
+        let steps: [[String: String]] = [
+            ["action": "navigate", "url": url.absoluteString, "label": "Opening \(url.host ?? url.absoluteString)"],
+            ["action": "extract", "selector": "body", "label": "Reading the page"]
+        ]
+        return String(data: try JSONSerialization.data(withJSONObject: steps), encoding: .utf8) ?? "[]"
+    }
     private static func result(_ r: NexBrowserTaskResult) -> NexJSONValue { .object(["display": .string(r.error.isEmpty ? "Browser task \(r.status)." : r.error), "status": .string(r.status), "task_id": .string(r.taskID), "text": .string(r.text), "tabs": .array(r.tabs.map(NexJSONValue.string)), "downloads": .array(r.downloads.map(NexJSONValue.string)), "screenshots": .array(r.screenshots.map(NexJSONValue.string)), "error": .string(r.error)]) }
     private static func manifest(_ id: String, _ description: String, _ examples: [String], _ fields: [String: NexToolFieldSchema], risk: NexComputerRiskClass = .low, confirmation: NexComputerConfirmationPolicy = .never, method: NexComputerImplementationMethod) -> NexComputerActionManifest { .init(actionID: id, application: "Chrome", provider: "Managed Playwright", bundleIdentifier: "com.google.Chrome", description: description, examples: examples, aliases: [id.replacingOccurrences(of: ".", with: " ")], tags: ["browser", "chrome", "webpage", "form", "download", "screenshot"], inputSchema: .init(fields: fields), outputSchema: output, implementationMethod: method, registryPermission: .network, riskClass: risk, confirmationPolicy: confirmation, availabilityCheck: .application(bundleIdentifier: "com.google.Chrome"), timeoutSeconds: 300, supportsCancellation: true, dryRunBehavior: .supported("Would run \(id) in the separate Nexus browser profile."), previewRenderer: "browser.task", tests: ["NexBrowserActionTests"]) }
 }
@@ -118,7 +169,7 @@ final class NexChromeTabActionCatalog {
         try await registry.register(manifest: Self.manifest("chrome.list_tabs", "List every live Chrome tab with stable ID, window/tab position, title, URL, and active state.", ["List my Chrome tabs"], [:])) { _, _ in Self.result("Read Chrome tabs.", tabs: try await provider.listTabs()) }
         try await registry.register(manifest: Self.manifest("chrome.get_active_tab", "Read the currently active Chrome tab.", ["What Chrome tab is active?"], [:])) { _, _ in Self.result("Read the active Chrome tab.", tabs: try await provider.activeTab().map { [$0] } ?? []) }
         try await registry.register(manifest: Self.manifest("chrome.activate_tab", "Activate an existing live Chrome tab by stable tab ID.", ["Switch back to that YouTube tab"], ["tab_id": .init(.string, required: true)])) { args, _ in guard let id = args["tab_id"]?.string else { throw NexToolError.missingField("tab_id") }; try await provider.activate(tabID: id); return Self.result("Activated the Chrome tab.") }
-        try await registry.register(manifest: Self.manifest("chrome.open_url", "Open one validated HTTP(S) URL in Chrome.", ["Open this URL in Chrome"], ["url": .init(.string, required: true)], risk: .medium, confirmation: .always)) { args, _ in guard let text = args["url"]?.string, let url = URL(string: text) else { throw NexToolError.executionFailed(code: "unsafe_url", message: "Chrome accepts only HTTP(S) URLs.") }; try await catalog.openURL(url); return Self.result("Opened the URL in Chrome.") }
+        try await registry.register(manifest: Self.manifest("chrome.open_url", "Open one validated HTTP(S) URL in Chrome.", ["Open this URL in Chrome"], ["url": .init(.string, required: true)], risk: .medium, confirmation: .never)) { args, _ in guard let text = args["url"]?.string, let url = URL(string: text) else { throw NexToolError.executionFailed(code: "unsafe_url", message: "Chrome accepts only HTTP(S) URLs.") }; try await catalog.openURL(url); return Self.result("Opened the URL in Chrome.") }
         try await registry.register(manifest: Self.manifest("chrome.close_tab", "Close one exact live Chrome tab by stable ID.", ["Close that Chrome tab"], ["tab_id": .init(.string, required: true)], risk: .high, confirmation: .always)) { args, _ in
             guard let id = args["tab_id"]?.string else { throw NexToolError.missingField("tab_id") }; try await catalog.closeTab(id: id); return Self.result("Closed the Chrome tab.")
         }

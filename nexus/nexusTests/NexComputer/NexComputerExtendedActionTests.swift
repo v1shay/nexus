@@ -107,7 +107,48 @@ final class NexComputerExtendedActionTests: XCTestCase {
     }
 
     func testApplicationCatalogProvidesDeterministicOpenOnly() async throws { let tools = NexToolRegistry(), computer = NexComputerRegistry(toolRegistry: tools, permissionManager: NexComputerPermissionManager(backend: AuthorizedPermissions())); try await NexApplicationActionCatalog().register(on: computer); let names = Set(await tools.definitions().map(\.name)); XCTAssertEqual(names.intersection(["applications.list", "applications.open"]), ["applications.list", "applications.open"]) }
+    func testAppResultsUseGlassPreviewWhileTerminalStaysDirect() {
+        let finder = ToolActivity(
+            actionID: "finder.search",
+            toolName: "Finder Search",
+            status: "Found a folder.",
+            spokenStatus: "Found a folder.",
+            icon: .systemSymbol("folder"),
+            phase: .completed,
+            result: .object(["status": .string("completed"), "paths": .array([.string("/tmp/Results")])])
+        )
+        XCTAssertTrue(finder.requiresExpandedPreview)
+
+        let terminal = ToolActivity(
+            actionID: "terminal.run",
+            toolName: "Terminal Run",
+            status: "Finished.",
+            spokenStatus: "Finished.",
+            icon: .systemSymbol("terminal"),
+            phase: .completed,
+            result: .object(["status": .string("completed")])
+        )
+        XCTAssertFalse(terminal.requiresExpandedPreview)
+    }
     func testManagedBrowserRejectsInvalidStepPayloadBeforeProvisioning() async throws { do { _ = try await NexManagedBrowserProvider(root: FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)).run(goal: "test", stepsJSON: "{}") { _ in }; XCTFail("Expected invalid steps") } catch let error as NexToolError { XCTAssertEqual(error.code, "invalid_browser_steps") } }
+
+    func testManagedBrowserReadsExampleDomainEndToEnd() async throws {
+        let chrome = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
+        let node = "/opt/homebrew/bin/node"
+        guard FileManager.default.isExecutableFile(atPath: chrome),
+              FileManager.default.isExecutableFile(atPath: node) else {
+            throw XCTSkip("Managed-browser runtime is not installed on this host.")
+        }
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("NexBrowserE2E-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let result = try await NexManagedBrowserProvider(root: root).run(
+            goal: "Read the Example Domain page heading",
+            stepsJSON: "[{\"action\":\"navigate\",\"url\":\"https://example.com\"},{\"action\":\"extract\",\"selector\":\"h1\"}]"
+        ) { _ in }
+        XCTAssertEqual(result.status, "completed")
+        XCTAssertTrue(result.text.localizedCaseInsensitiveContains("Example Domain"))
+        XCTAssertTrue(result.error.isEmpty)
+    }
     func testBrowserProfileImportCopiesOnlySafeState() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         let chrome = root.appendingPathComponent("Chrome"), destination = root.appendingPathComponent("Nexus")
@@ -371,6 +412,49 @@ final class NexComputerExtendedActionTests: XCTestCase {
         let preview = NexTaskPreviewModel.make(activity: activity)
         XCTAssertEqual(preview.kind, .connector)
         XCTAssertEqual(preview.connectionID, connectionID)
+    }
+
+    func testMessagesDraftPreviewUsesActualRecipientBodyAndStableDraftID() throws {
+        let draftID = UUID().uuidString
+        let activity = ToolActivity(
+            actionID: "messages.draft",
+            toolName: "Messages",
+            status: "Drafted message",
+            spokenStatus: "",
+            icon: .systemSymbol("message"),
+            phase: .completed,
+            arguments: ["recipient": .string("Alex"), "body": .string("You need to get the milk.")],
+            result: .object([
+                "status": .string("drafted"),
+                "messageDraftId": .string(draftID),
+                "recipient": .string("Alex"),
+                "body": .string("You need to get the milk.")
+            ])
+        )
+        let preview = NexTaskPreviewModel.make(activity: activity)
+        XCTAssertEqual(preview.kind, .message)
+        XCTAssertEqual(preview.messageDraftID, draftID)
+        XCTAssertEqual(preview.messageRecipient, "Alex")
+        XCTAssertEqual(preview.messageBody, "You need to get the milk.")
+        XCTAssertTrue(preview.items.contains(.init(title: "You need to get the milk.", detail: "Draft", emphasis: true)))
+    }
+
+    func testFinderPreviewUsesPathsAndMakesFirstPathOpenable() throws {
+        let path = "/tmp/Project/Brief.pdf"
+        let activity = ToolActivity(
+            actionID: "finder.search",
+            toolName: "Finder",
+            status: "Found one item",
+            spokenStatus: "",
+            icon: .systemSymbol("folder"),
+            phase: .completed,
+            arguments: ["root": .string("/tmp/Project")],
+            result: .object(["status": .string("completed"), "display": .string("Found 1 item."), "paths": .array([.string(path)])])
+        )
+        let preview = NexTaskPreviewModel.make(activity: activity)
+        XCTAssertEqual(preview.kind, .files)
+        XCTAssertEqual(preview.targetURL?.path, path)
+        XCTAssertEqual(preview.items.first?.title, "Brief.pdf")
     }
 
     func testCodexAndNexCLIPreserveSpecializedCompactLayouts() {

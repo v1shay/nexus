@@ -1,16 +1,30 @@
 import Foundation
 
+/// Keeps paid-provider routing explicit and testable. Cloud providers are used
+/// only after the user explicitly selects one. Every cloud failure goes to the
+/// currently selected local runtime; Nexus never silently starts a paid cloud
+/// chain just because credentials happen to be present in Keychain.
+enum NexusCloudRoutingPolicy {
+    static func usesAutomaticCloudChain(apiProviderIsExplicitlyEnabled: Bool) -> Bool {
+        false
+    }
+}
+
 /// The built-in, low-latency cloud chain. These identifiers and endpoints are
 /// public configuration; only the provider API keys are stored in the local
 /// Keychain. A missing key simply removes that provider from the chain.
 enum NexusManagedCloudProvider: String, CaseIterable, Sendable {
     case inception
     case nvidiaNIM
+    case gemini
+    case groq
 
     var title: String {
         switch self {
         case .inception: "Inception Mercury"
         case .nvidiaNIM: "NVIDIA NIM GPT-OSS"
+        case .gemini: "Gemini"
+        case .groq: "Groq"
         }
     }
 
@@ -23,6 +37,8 @@ enum NexusManagedCloudProvider: String, CaseIterable, Sendable {
         // NIM key and is therefore the safe managed route. Keep the provider
         // separate so Kimi can be re-enabled once NVIDIA provisions it.
         case .nvidiaNIM: "openai/gpt-oss-120b"
+        case .gemini: NexusAPIProviderKind.gemini.defaultModel
+        case .groq: NexusAPIProviderKind.groq.defaultModel
         }
     }
 
@@ -30,6 +46,8 @@ enum NexusManagedCloudProvider: String, CaseIterable, Sendable {
         switch self {
         case .inception: URL(string: "https://api.inceptionlabs.ai/v1")!
         case .nvidiaNIM: URL(string: "https://integrate.api.nvidia.com/v1")!
+        case .gemini: URL(string: NexusAPIProviderKind.gemini.defaultBaseURL)!
+        case .groq: URL(string: NexusAPIProviderKind.groq.defaultBaseURL)!
         }
     }
 
@@ -40,6 +58,28 @@ enum NexusManagedCloudProvider: String, CaseIterable, Sendable {
         switch self {
         case .inception: "nexus"
         case .nvidiaNIM: "nvidia.nim.v1"
+        case .gemini: NexusAPIProviderKind.gemini.keyAccount
+        case .groq: NexusAPIProviderKind.groq.keyAccount
+        }
+    }
+
+    var apiProviderKind: NexusAPIProviderKind {
+        switch self {
+        case .inception: .openAICompatible
+        case .nvidiaNIM: .nvidiaNIM
+        case .gemini: .gemini
+        case .groq: .groq
+        }
+    }
+
+    /// Inception and NIM historically kept their managed credentials in a
+    /// separate Keychain service. User-selected API providers use the normal
+    /// model-provider service, and the automatic chain reads those keys
+    /// without copying them anywhere else.
+    var usesManagedKeychain: Bool {
+        switch self {
+        case .inception, .nvidiaNIM: true
+        case .gemini, .groq: false
         }
     }
 }
@@ -47,10 +87,18 @@ enum NexusManagedCloudProvider: String, CaseIterable, Sendable {
 struct NexusManagedCloudInferenceStore: Sendable {
     static let keychainService = "na.nexus.managed-inference"
 
-    private let secrets: NexusSecretStore
+    private let standardSecrets: NexusSecretStore
+    private let managedSecrets: NexusSecretStore
 
-    init(secrets: NexusSecretStore = NexusKeychainSecretStore(service: Self.keychainService)) {
-        self.secrets = secrets
+    init(
+        secrets: NexusSecretStore? = nil,
+        standardSecrets: NexusSecretStore = NexusKeychainSecretStore(service: "na.nexus.model-provider"),
+        managedSecrets: NexusSecretStore = NexusKeychainSecretStore(service: Self.keychainService)
+    ) {
+        // A single injected store preserves deterministic unit tests while
+        // production keeps previously saved keys in their respective service.
+        self.standardSecrets = secrets ?? standardSecrets
+        self.managedSecrets = secrets ?? managedSecrets
     }
 
     /// Ordered primary-to-secondary configurations. This is deliberately
@@ -59,6 +107,7 @@ struct NexusManagedCloudInferenceStore: Sendable {
     /// before streaming.
     func configurations() throws -> [(provider: NexusManagedCloudProvider, configuration: NexusAPIProviderConfiguration)] {
         try NexusManagedCloudProvider.allCases.compactMap { provider in
+            let secrets = provider.usesManagedKeychain ? managedSecrets : standardSecrets
             guard let data = try secrets.data(for: provider.keyAccount),
                   let key = String(data: data, encoding: .utf8)?
                     .trimmingCharacters(in: .whitespacesAndNewlines),
@@ -68,7 +117,7 @@ struct NexusManagedCloudInferenceStore: Sendable {
             return (
                 provider,
                 .init(
-                    kind: .openAICompatible,
+                    kind: provider.apiProviderKind,
                     baseURL: provider.baseURL,
                     model: provider.model,
                     apiKey: key

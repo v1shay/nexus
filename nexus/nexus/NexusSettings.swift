@@ -1,5 +1,45 @@
 import Foundation
 import Combine
+import SwiftUI
+
+/// The shell uses material-backed, neutral smoked glass on every supported
+/// Mac. Themes only change the angle and warmth of a restrained reflection;
+/// they deliberately never recolor the entire application.
+enum NexusGlassTheme: String, CaseIterable, Identifiable, Codable {
+    case graphite
+    case silver
+    case warmGlass
+    case frost
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .graphite: "Graphite"
+        case .silver: "Frost"
+        case .warmGlass: "Sage"
+        case .frost: "Onyx"
+        }
+    }
+
+    var mainLight: Color {
+        switch self {
+        case .graphite: Color(white: 0.84)
+        case .silver: Color(red: 0.89, green: 0.94, blue: 0.95)
+        case .warmGlass: Color(red: 0.89, green: 0.92, blue: 0.86)
+        case .frost: Color(white: 0.70)
+        }
+    }
+
+    var sidebarLight: Color {
+        switch self {
+        case .graphite: Color(white: 0.58)
+        case .silver: Color(red: 0.67, green: 0.76, blue: 0.79)
+        case .warmGlass: Color(red: 0.65, green: 0.72, blue: 0.62)
+        case .frost: Color(white: 0.46)
+        }
+    }
+}
 
 enum NexusStatusGenerationMode: String, CaseIterable, Identifiable, Codable {
     case deterministic
@@ -29,6 +69,37 @@ enum NexusSpeechEngine: String, CaseIterable, Identifiable, Codable {
     }
 }
 
+/// The duplex engine is deliberately independent from dictation and the main
+/// response model.  A duplex model owns the live audio conversation, while
+/// Nex's selected model continues to own tools, memory, and final answers.
+///
+/// PersonaPlex is intentionally *not* offered as a local Apple-silicon mode:
+/// NVIDIA's reference runtime needs CUDA.  Selecting it is only meaningful
+/// after a compatible CUDA host has been configured.
+enum NexusDuplexVoiceEngine: String, CaseIterable, Identifiable, Codable {
+    case disabled
+    case moshiMLXQ4
+    case personaPlexRemoteCUDA
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .disabled: "Off"
+        case .moshiMLXQ4: "Moshi MLX (4-bit)"
+        case .personaPlexRemoteCUDA: "PersonaPlex (remote CUDA)"
+        }
+    }
+
+    var detail: String {
+        switch self {
+        case .disabled: "Use Nex's existing dictation and Piper response voice."
+        case .moshiMLXQ4: "Runs Moshiko/Moshika Q4 locally on Apple silicon (about 8 GB)."
+        case .personaPlexRemoteCUDA: "Requires a separately configured NVIDIA CUDA host; Mac Studio itself is not CUDA-capable."
+        }
+    }
+}
+
 @MainActor
 final class NexusAppSettings: ObservableObject {
     @Published var statusMode: NexusStatusGenerationMode { didSet { persist() } }
@@ -36,6 +107,9 @@ final class NexusAppSettings: ObservableObject {
     @Published var speechEngine: NexusSpeechEngine { didSet { persist() } }
     @Published var localSpeechEndpoint: String { didSet { persist() } }
     @Published var localSpeechModel: String { didSet { persist() } }
+    @Published var duplexVoiceEngine: NexusDuplexVoiceEngine { didSet { persist() } }
+    @Published var personaPlexRemoteEndpoint: String { didSet { persist() } }
+    @Published var glassTheme: NexusGlassTheme { didSet { persist() } }
 
     private let defaults = UserDefaults.standard
     private let key = "nexus.app.settings.v1"
@@ -47,6 +121,9 @@ final class NexusAppSettings: ObservableObject {
         speechEngine = NexusSpeechEngine(rawValue: saved["speechEngine"] as? String ?? "") ?? .appleSpeech
         localSpeechEndpoint = saved["localSpeechEndpoint"] as? String ?? "http://127.0.0.1:8000/v1/audio/transcriptions"
         localSpeechModel = saved["localSpeechModel"] as? String ?? "nvidia/parakeet-tdt-0.6b-v2"
+        duplexVoiceEngine = NexusDuplexVoiceEngine(rawValue: saved["duplexVoiceEngine"] as? String ?? "") ?? .disabled
+        personaPlexRemoteEndpoint = saved["personaPlexRemoteEndpoint"] as? String ?? ""
+        glassTheme = NexusGlassTheme(rawValue: saved["glassTheme"] as? String ?? "") ?? .graphite
     }
 
     private func persist() {
@@ -55,8 +132,228 @@ final class NexusAppSettings: ObservableObject {
             "secondaryStatusModelID": secondaryStatusModelID,
             "speechEngine": speechEngine.rawValue,
             "localSpeechEndpoint": localSpeechEndpoint,
-            "localSpeechModel": localSpeechModel
+            "localSpeechModel": localSpeechModel,
+            "duplexVoiceEngine": duplexVoiceEngine.rawValue,
+            "personaPlexRemoteEndpoint": personaPlexRemoteEndpoint,
+            "glassTheme": glassTheme.rawValue
         ], forKey: key)
+    }
+}
+
+/// Manages the official `moshi_mlx.local_web` server without using a shell.
+/// The server is kept warm once started so its 4-bit weights are not reloaded
+/// for every voice session.  It is intentionally a local, user-scoped process
+/// and is stopped when Nexus quits.
+@MainActor
+final class NexusDuplexVoiceRuntime: ObservableObject {
+    static let shared = NexusDuplexVoiceRuntime()
+
+    enum State: Equatable {
+        case stopped
+        case installing
+        case starting
+        case ready
+        case unavailable(String)
+        case failed(String)
+
+        var label: String {
+            switch self {
+            case .stopped: "Not running"
+            case .installing: "Installing Moshi MLX…"
+            case .starting: "Starting Moshi MLX…"
+            case .ready: "Ready locally"
+            case .unavailable(let message), .failed(let message): message
+            }
+        }
+    }
+
+    @Published private(set) var state: State = .stopped
+    private var process: Process?
+    private let port = 8998
+
+    private init() {}
+
+    var isAppleSilicon: Bool {
+        #if arch(arm64)
+        true
+        #else
+        false
+        #endif
+    }
+
+    private var supportDirectory: URL {
+        FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent("Library/Application Support/Nexus/MoshiMLX", isDirectory: true)
+    }
+
+    private var virtualEnvironmentPython: URL {
+        supportDirectory.appendingPathComponent("venv/bin/python")
+    }
+
+    func reconcile(with engine: NexusDuplexVoiceEngine, personaPlexEndpoint: String) async {
+        switch engine {
+        case .disabled:
+            stop()
+        case .moshiMLXQ4:
+            guard isAppleSilicon else {
+                state = .unavailable("Moshi MLX requires Apple silicon")
+                return
+            }
+            guard FileManager.default.isExecutableFile(atPath: virtualEnvironmentPython.path) else {
+                state = .unavailable("Install Moshi MLX to enable duplex voice")
+                return
+            }
+            await startMoshiIfNeeded()
+        case .personaPlexRemoteCUDA:
+            stop()
+            state = personaPlexEndpoint.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                ? .unavailable("PersonaPlex needs a configured CUDA host")
+                : .unavailable("PersonaPlex remote bridge is not configured")
+        }
+    }
+
+    /// Installs only after an explicit button press in Settings.  This avoids a
+    /// surprise Python environment and the later Q4 model download appearing
+    /// simply because Nexus launched.
+    func installMoshiAndStart() async {
+        guard isAppleSilicon else {
+            state = .unavailable("Moshi MLX requires Apple silicon")
+            return
+        }
+        do {
+            state = .installing
+            let bootstrapPython = try await resolvePython312()
+            try FileManager.default.createDirectory(at: supportDirectory, withIntermediateDirectories: true)
+            if !FileManager.default.fileExists(atPath: virtualEnvironmentPython.path) {
+                try await run(executable: bootstrapPython, arguments: ["-m", "venv", supportDirectory.appendingPathComponent("venv").path])
+            }
+            try await run(executable: virtualEnvironmentPython, arguments: ["-m", "pip", "install", "--disable-pip-version-check", "--upgrade", "pip"])
+            try await run(executable: virtualEnvironmentPython, arguments: ["-m", "pip", "install", "--disable-pip-version-check", "moshi_mlx"])
+            await startMoshiIfNeeded()
+        } catch {
+            state = .failed("Moshi MLX installation failed: \(error.localizedDescription)")
+        }
+    }
+
+    func stop() {
+        process?.terminate()
+        process = nil
+        state = .stopped
+    }
+
+    private func startMoshiIfNeeded() async {
+        if await isHealthy() {
+            state = .ready
+            return
+        }
+        guard process == nil || process?.isRunning == false else {
+            state = .starting
+            return
+        }
+        guard FileManager.default.isExecutableFile(atPath: virtualEnvironmentPython.path) else {
+            state = .unavailable("Install Moshi MLX to enable duplex voice")
+            return
+        }
+        do {
+            state = .starting
+            let server = Process()
+            let output = Pipe()
+            server.executableURL = virtualEnvironmentPython
+            server.arguments = [
+                "-m", "moshi_mlx.local_web",
+                "-q", "4",
+                "--host", "127.0.0.1",
+                "--no-browser",
+                "--port", "\(port)"
+            ]
+            server.standardOutput = output
+            server.standardError = output
+            try server.run()
+            process = server
+            for _ in 0..<80 {
+                if await isHealthy() {
+                    state = .ready
+                    return
+                }
+                try? await Task.sleep(for: .milliseconds(250))
+            }
+            state = .failed("Moshi MLX did not become ready on localhost:\(port)")
+            server.terminate()
+            process = nil
+        } catch {
+            state = .failed("Could not start Moshi MLX: \(error.localizedDescription)")
+        }
+    }
+
+    private func isHealthy() async -> Bool {
+        guard let url = URL(string: "http://127.0.0.1:\(port)/") else { return false }
+        var request = URLRequest(url: url)
+        request.timeoutInterval = 0.5
+        do {
+            let (_, response) = try await URLSession.shared.data(for: request)
+            return (response as? HTTPURLResponse)?.statusCode == 200
+        } catch {
+            return false
+        }
+    }
+
+    /// `moshi_mlx` 0.3 currently supports the Python 3.12 MLX wheel on this
+    /// app's Apple-silicon target.  Do not silently fall through to newer
+    /// interpreters: that looks installed but fails later when pip resolves
+    /// the package. Homebrew is used only after the user explicitly chooses
+    /// "Install & start" in Settings.
+    private func resolvePython312() async throws -> URL {
+        if let existing = findPython312() { return existing }
+
+        let homebrew = URL(fileURLWithPath: "/opt/homebrew/bin/brew")
+        guard FileManager.default.isExecutableFile(atPath: homebrew.path) else {
+            throw NSError(
+                domain: "NexusDuplexVoice",
+                code: 2,
+                userInfo: [NSLocalizedDescriptionKey: "Moshi MLX needs Python 3.12. Install Homebrew Python 3.12, then try again."]
+            )
+        }
+        try await run(executable: homebrew, arguments: ["install", "python@3.12"])
+        guard let installed = findPython312() else {
+            throw NSError(
+                domain: "NexusDuplexVoice",
+                code: 3,
+                userInfo: [NSLocalizedDescriptionKey: "Homebrew finished, but Python 3.12 was not found."]
+            )
+        }
+        return installed
+    }
+
+    private func findPython312() -> URL? {
+        let candidates = [
+            "/opt/homebrew/bin/python3.12",
+            "/usr/local/bin/python3.12",
+            "/opt/anaconda3/bin/python3.12"
+        ]
+        return candidates.map(URL.init(fileURLWithPath:)).first {
+            FileManager.default.isExecutableFile(atPath: $0.path)
+        }
+    }
+
+    private func run(executable: URL, arguments: [String]) async throws {
+        try await withCheckedThrowingContinuation { continuation in
+            let task = Process()
+            let output = Pipe()
+            task.executableURL = executable
+            task.arguments = arguments
+            task.standardOutput = output
+            task.standardError = output
+            task.terminationHandler = { task in
+                let data = output.fileHandleForReading.readDataToEndOfFile()
+                let text = String(data: data, encoding: .utf8) ?? ""
+                if task.terminationStatus == 0 {
+                    continuation.resume()
+                } else {
+                    continuation.resume(throwing: NSError(domain: "NexusDuplexVoice", code: Int(task.terminationStatus), userInfo: [NSLocalizedDescriptionKey: text.isEmpty ? "Process exited with status \(task.terminationStatus)" : text]))
+                }
+            }
+            do { try task.run() } catch { continuation.resume(throwing: error) }
+        }
     }
 }
 
@@ -133,7 +430,15 @@ enum NexusStatusLineGenerator {
     static func prompt(for request: String) -> [NexusChatMessage] {
         [
             .init(role: "system", content: """
-            Generate one short Nex status line for the request. It must describe work beginning, not answer the request. Make it a specific, capable, slightly whimsical JARVIS-style phrase of 2–8 words. The first word must end in "ing" (for example: "Reviewing…", "Mapping…", "Checking…"). Use a concrete noun only when it is unambiguous. Never mention models, tools, prompts, implementation, or completion. Return only JSON: {"status":"…"}.
+            You write the tiny first line Nex shows while work begins. Return
+            exactly one natural, readable JARVIS-style status for the user’s
+            request. It must be specific when the subject is clear, calm and
+            capable, 2–9 words, and describe beginning work rather than an
+            answer or completed work. Examples: "Mapping your project…",
+            "Tracing that signal…", "Building the first pass…". Do not
+            repeat the request, quote it, name a model or tool, explain your
+            reasoning, or output markdown. Return only JSON:
+            {"status":"…"}.
             """),
             .init(role: "user", content: request)
         ]
@@ -155,16 +460,11 @@ enum NexusStatusLineGenerator {
             .map(String.init)?
             .trimmingCharacters(in: CharacterSet(charactersIn: " `\"'“”.,:;")) ?? ""
         let words = line.split(whereSeparator: \.isWhitespace)
-        guard line.count >= 4, line.count <= 100,
-              (2...8).contains(words.count),
-              !line.localizedCaseInsensitiveContains("status") else { return nil }
-        if words.first?.lowercased().hasSuffix("ing") == true {
-            return line.hasSuffix("…") ? line : line + "…"
-        }
-        // Some small local models return a concise inferred subject in
-        // snake_case despite the requested surface form. Preserve that model
-        // inference and supply only the grammatical beginning; no request
-        // keywords or tool-routing rules are involved here.
-        return "Reviewing \(line)…"
+        guard line.count >= 4, line.count <= 110,
+              (2...9).contains(words.count) else { return nil }
+        // Small local models often answer with a good sentence that does not
+        // start with an -ing verb. Preserve its inference instead of masking
+        // it behind the old generic "Reviewing …" fallback.
+        return line.hasSuffix("…") ? line : line + "…"
     }
 }

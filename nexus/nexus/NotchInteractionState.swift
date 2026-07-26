@@ -45,11 +45,17 @@ struct ToolActivity: Equatable, Sendable {
     var result: NexJSONValue? = nil
 
     var requiresExpandedPreview: Bool {
-        guard toolName != "Codex", toolName != "Nex CLI" else { return false }
+        let action = actionID ?? ""
+        // Execution consoles are intentionally direct. Their streamed status
+        // is the useful UI, whereas app actions hand off to a result card.
+        guard toolName != "Codex", toolName != "Nex CLI", !action.hasPrefix("terminal.") else { return false }
         if phase == .failed { return true }
         guard phase == .completed else { return false }
-        if case .object(let object) = result, ["confirmation_required", "connection_required", "completed", "failed"].contains(object["status"]?.string ?? "") { return true }
-        return false
+        // A status-bearing app result is a real handoff: show its returned
+        // files, media, draft, connector result, or setting in the glass
+        // card. Retrieval-only tools typically do not emit a status field,
+        // so web and memory streaming retain their existing compact UX.
+        return result?.object?["status"]?.string != nil
     }
 
     /// Generic activity text stays in the compact row. Reserve a second line

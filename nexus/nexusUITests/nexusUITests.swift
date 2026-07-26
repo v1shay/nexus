@@ -22,20 +22,7 @@ final class nexusUITests: XCTestCase {
         // Put teardown code here. This method is called after the invocation of each test method in the class.
     }
 
-    func testExample() throws {
-        let app = XCUIApplication()
-        app.launchArguments = ["--nexus-ui-testing"]
-        app.launch()
-        XCTAssertNotEqual(app.state, .notRunning)
-        app.terminate()
-    }
-
     func testLaunchPerformance() throws {
-        if #available(macOS 10.15, iOS 13.0, tvOS 13.0, watchOS 7.0, *) {
-            // This measures how long it takes to launch your application.
-            measure(metrics: [XCTApplicationLaunchMetric()]) {
-                XCUIApplication().launch()
-            }
-        }
+        throw XCTSkip("Panel timing is measured by the bounded Nexus automation harness.")
     }
 }

@@ -48,6 +48,73 @@ final class NexComputerToolSearchTests: XCTestCase {
         XCTAssertEqual(names, ["web.search", "mail.send"])
     }
 
+    func testAgenticBrowserRequestRanksManagedBrowserInsteadOfWebResearch() {
+        let web = tool(
+            name: "web_search",
+            description: "Search current public facts and return source results.",
+            application: "Web",
+            provider: "Search",
+            tags: ["web", "research", "sources"]
+        )
+        let browser = tool(
+            name: "browser.run_task",
+            description: "Run an agentic Nexus managed browser task that visits a URL, navigates a site, clicks, fills forms, downloads, and extracts a webpage.",
+            application: "Chrome",
+            provider: "Managed Playwright",
+            examples: ["Use your browser to inspect this website"],
+            tags: ["browser", "website", "navigate", "url", "click", "download"]
+        )
+        let candidates = search("Use your browser to inspect https://example.com and return the heading", [web, browser])
+        XCTAssertEqual(candidates.first?.tool, "browser.run_task")
+    }
+
+    func testSimpleExplicitBrowserVisitRanksSimpleURLActionInsteadOfWebResearch() {
+        let web = tool(
+            name: "web_search",
+            description: "Search current public facts and return source results.",
+            application: "Web",
+            provider: "Search",
+            tags: ["web", "research", "sources"]
+        )
+        let visit = tool(
+            name: "browser.visit_url",
+            description: "Visit one HTTP(S) page in Nexus managed browser and return readable page text.",
+            application: "Chrome",
+            provider: "Managed Playwright",
+            examples: ["Use Nexus browser to inspect https://example.com"],
+            tags: ["browser", "website", "navigate", "url", "inspect"]
+        )
+        XCTAssertEqual(
+            search("Use Nexus browser to visit https://example.com and read the page", [web, visit]).first?.tool,
+            "browser.visit_url"
+        )
+    }
+
+    func testSemanticCapabilityLookupFindsMessagesForNaturalTextingIntent() {
+        let messages = tool(
+            name: "messages.draft",
+            description: "Create a draft message for a resolved recipient.",
+            application: "Messages",
+            provider: "Apple Messages",
+            tags: ["imessage", "sms", "contact", "chat"]
+        )
+        let calendar = tool(
+            name: "calendar.create_event",
+            description: "Create a calendar event.",
+            application: "Calendar",
+            provider: "EventKit",
+            tags: ["schedule", "event"]
+        )
+
+        // “text” intentionally does not appear in the Messages manifest.
+        // The registry's on-device semantic fallback must still surface the
+        // actual Messages action instead of letting the model deny the task.
+        XCTAssertEqual(
+            search("text someone that they need to get milk", [messages, calendar]).first?.tool,
+            "messages.draft"
+        )
+    }
+
     func testEnforcesTopKAndSuppressesIrrelevantTools() {
         let tools = (0..<7).map { index in
             tool(

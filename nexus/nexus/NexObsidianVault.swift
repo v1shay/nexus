@@ -138,6 +138,17 @@ struct NexVaultScanResult: Sendable {
     let ingestionFailures: [String]
 }
 
+/// A human-authored Markdown file shown in the visual vault graph. Unlike a
+/// canonical Nex document it is not implicitly eligible for retrieval: this
+/// prevents a decorative graph feature from changing the memory policy.
+struct NexVaultGraphNote: Identifiable, Sendable, Equatable {
+    let relativePath: String
+    let title: String
+    let updatedAt: Date
+
+    var id: String { relativePath }
+}
+
 struct NexVaultEvent: Codable, Equatable, Identifiable, Sendable {
     enum Action: String, Codable, Sendable { case upsert, delete }
 
@@ -413,6 +424,29 @@ actor NexObsidianVault {
 
     func rebuildableDocuments() throws -> [NexCanonicalDocument] {
         try scan().documents
+    }
+
+    func rawMarkdownNotes() throws -> [NexVaultGraphNote] {
+        try prepare()
+        let keys: [URLResourceKey] = [.isRegularFileKey, .contentModificationDateKey]
+        let enumerator = fileManager.enumerator(
+            at: rootURL,
+            includingPropertiesForKeys: keys,
+            options: [.skipsHiddenFiles, .skipsPackageDescendants]
+        )
+        var notes: [NexVaultGraphNote] = []
+        while let url = enumerator?.nextObject() as? URL {
+            guard url.pathExtension.lowercased() == "md", !url.path.contains("/.nex/") else { continue }
+            let values = try? url.resourceValues(forKeys: Set(keys))
+            guard values?.isRegularFile == true else { continue }
+            let relativePath = try relativePathWithinVault(for: url)
+            notes.append(.init(
+                relativePath: relativePath,
+                title: url.deletingPathExtension().lastPathComponent.replacingOccurrences(of: "-", with: " "),
+                updatedAt: values?.contentModificationDate ?? .distantPast
+            ))
+        }
+        return notes.sorted { $0.updatedAt > $1.updatedAt }
     }
 
     private func parseDocument(at url: URL) throws -> NexCanonicalDocument {

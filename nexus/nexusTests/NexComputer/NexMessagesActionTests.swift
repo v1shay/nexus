@@ -40,18 +40,28 @@ final class NexMessagesActionTests: XCTestCase {
 
     func testDraftPersistsAndSendRequiresSeparateConfirmationWithoutSending() async throws {
         let fixture = try await makeFixture()
-        let draftPending = try await fixture.core.execute(name: "messages.draft", arguments: ["recipient": .string("sam@example.com"), "body": .string("Fixture only")])
-        let draftConfirmationID = try actionID(draftPending)
-        let draftResult = try await fixture.core.execute(name: "confirm_action", arguments: ["actionId": .string(draftConfirmationID)])
+        let draftResult = try await fixture.core.execute(name: "messages.draft", arguments: ["recipient": .string("sam@example.com"), "body": .string("Fixture only")])
         guard case .object(let object) = draftResult, let draftID = object["messageDraftId"]?.string else { return XCTFail("Expected draft ID") }
+        XCTAssertEqual(object["recipient"], .string("sam@example.com"))
+        XCTAssertEqual(object["body"], .string("Fixture only"))
+        XCTAssertEqual(object["items"]?.strings?.first?.contains("messages:7"), true, "A message draft card must receive real recent conversation data when history is available.")
 
         let reloaded = NexMessageDraftStore(fileURL: fixture.draftURL)
         let persistedDraft = await reloaded.draft(id: UUID(uuidString: draftID)!)
         XCTAssertNotNil(persistedDraft)
-        let sendPending = try await fixture.core.execute(name: "messages.send_draft", arguments: ["messageDraftId": .string(draftID)])
-        _ = try actionID(sendPending)
+        let sendPending = try await fixture.core.execute(name: "messages.send_draft", arguments: [
+            "messageDraftId": .string(draftID),
+            "recipient": .string("sam@example.com"),
+            "body": .string("Fixture only")
+        ])
+        let confirmationID = try actionID(sendPending)
         let sentCount = await fixture.sender.sentCount()
         XCTAssertEqual(sentCount, 0, "Tests must never send a real or mock message before explicit confirmation")
+
+        let sent = try await fixture.core.execute(name: "confirm_action", arguments: ["actionId": .string(confirmationID)])
+        XCTAssertEqual(sent.object?["status"], .string("sent"))
+        let confirmedSendCount = await fixture.sender.sentCount()
+        XCTAssertEqual(confirmedSendCount, 1, "The exact persisted draft must send only after the card confirmation.")
     }
 
     func testRequiredMessageActionsRegister() async throws {
