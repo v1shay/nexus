@@ -19,6 +19,7 @@ struct NexusApp: App {
 @MainActor
 final class NexusAppDelegate: NSObject, NSApplicationDelegate {
     private var notch: NotchController?
+    private var automationWindow: NSWindow?
     private var connectHost: NexusConnectHostDaemon?
     private var nexCLIHost: NexCLIHostDaemon?
     private var launchTask: Task<Void, Never>?
@@ -27,7 +28,13 @@ final class NexusAppDelegate: NSObject, NSApplicationDelegate {
         // Unit tests inject XCTest into the app process. They construct every
         // controller explicitly and must not initialize the real Keychain,
         // global hotkey, notch panel, or LaunchAgent as a side effect.
-        if NSClassFromString("XCTestCase") != nil { return }
+        // Unit-test bundles are linked into the app process too. The explicit
+        // UI-test launch argument must win so the automation overlay can be
+        // constructed and exercised.
+        if NSClassFromString("XCTestCase") != nil,
+           !CommandLine.arguments.contains("--nexus-ui-testing") {
+            return
+        }
         if let index = CommandLine.arguments.firstIndex(of: "--nex-computer") {
             NSApp.setActivationPolicy(.prohibited)
             let arguments = Array(CommandLine.arguments.dropFirst(index + 1))
@@ -51,11 +58,47 @@ final class NexusAppDelegate: NSObject, NSApplicationDelegate {
             launchTask = Task { @MainActor in await host.start() }
             return
         }
+        if CommandLine.arguments.contains("--nexus-ui-smoke") {
+            // This is intentionally a controller-level smoke test, not a
+            // hidden production mode. It exercises typed submission through
+            // the exact same state pipeline as the overlay while keeping the
+            // run hermetic (no microphone, Keychain, connector, or model).
+            NSApp.setActivationPolicy(.prohibited)
+            launchTask = Task { @MainActor in
+                let notch = NotchController()
+                await notch.submitTypedPrompt("Validate the typed Nexus request pipeline")
+                try? await Task.sleep(for: .milliseconds(650))
+                let expected = "Automation response: Validate the typed Nexus request pipeline"
+                let passed = notch.transcript == "Validate the typed Nexus request pipeline"
+                    && notch.answer == expected
+                    && notch.toolReceipt?.actionID == "automation.typed_request"
+                FileHandle.standardOutput.write(Data("Nexus typed lifecycle smoke: \(passed ? "passed" : "failed")\n".utf8))
+                Foundation.exit(passed ? 0 : 1)
+            }
+            return
+        }
         NSApp.setActivationPolicy(.regular)
         if CommandLine.arguments.contains("--nexus-ui-testing") {
             let notch = NotchController()
             self.notch = notch
-            notch.install(startServices: false)
+            notch.openAutomationTypingOverlay()
+            // XCUITest cannot reliably synthesize keyboard/mouse events into
+            // a system-level notch panel. This normal host window renders the
+            // same controller and SwiftUI overlay so the request lifecycle is
+            // testable without microphone, hotkey, Keychain, or global-panel
+            // focus dependencies. Notch geometry is covered independently.
+            let window = NSWindow(
+                contentRect: NSRect(x: 0, y: 0, width: 680, height: 360),
+                styleMask: [.titled, .closable],
+                backing: .buffered,
+                defer: false
+            )
+            window.title = "Nexus automation"
+            window.contentView = NSHostingView(rootView: ContentView().environmentObject(notch))
+            window.center()
+            window.makeKeyAndOrderFront(nil)
+            NSApp.activate(ignoringOtherApps: true)
+            automationWindow = window
             return
         }
         launchTask = Task { @MainActor [weak self] in
@@ -66,6 +109,10 @@ final class NexusAppDelegate: NSObject, NSApplicationDelegate {
             let notch = NotchController()
             self?.notch = notch
             notch.install()
+            await NexusDuplexVoiceRuntime.shared.reconcile(
+                with: notch.settings.duplexVoiceEngine,
+                personaPlexEndpoint: notch.settings.personaPlexRemoteEndpoint
+            )
         }
     }
 
@@ -74,6 +121,7 @@ final class NexusAppDelegate: NSObject, NSApplicationDelegate {
         notch?.shutdown()
         connectHost?.stop()
         nexCLIHost?.stop()
+        NexusDuplexVoiceRuntime.shared.stop()
     }
 
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
@@ -329,7 +377,7 @@ final class NotchController: ObservableObject {
 
         let panel = NexusNotchPanel(
             contentRect: frame(for: currentSize, on: screen),
-            styleMask: [.borderless, .nonactivatingPanel, .utilityWindow, .hudWindow],
+            styleMask: [.borderless, .utilityWindow, .hudWindow],
             backing: .buffered,
             defer: false
         )
@@ -398,6 +446,15 @@ final class NotchController: ObservableObject {
         )
     }
 
+    /// XCUITest needs a visible, keyboard-accessible surface without relying
+    /// on a mouse hover, microphone permission, or global hotkey.  This is
+    /// only reachable through the explicit automation launch argument.
+    func openAutomationTypingOverlay() {
+        guard NexusSecretStoreRuntime.usesSyntheticResponse else { return }
+        interaction.showOverlay()
+        if let screen { resize(to: expandedSize(for: screen), animated: false) }
+    }
+
     /// Watches a generous virtual region over the physical notch.  This means
     /// the cursor is considered inside Nexus even in the camera cutout itself,
     /// where a transparent AppKit view cannot reliably receive hover events.
@@ -437,7 +494,11 @@ final class NotchController: ObservableObject {
         monitor.install()
     }
 
-    private func startGlobalDictation(automaticallySubmitAfterSilence: Bool = false) async {
+    /// Starts a new request before either speech or typed text is supplied.
+    /// Keeping this separate is important: both input modes must interrupt a
+    /// prior stream, preserve the same active conversation, and then enter the
+    /// exact same finalization/response pipeline.
+    private func prepareForUserRequest() async {
         wakePhraseListener.stop()
         closeTask?.cancel()
         // Foreground speech always wins model capacity. If a prior background
@@ -459,6 +520,10 @@ final class NotchController: ObservableObject {
         if let screen {
             resize(to: listeningSize(for: screen), animated: true)
         }
+    }
+
+    private func startGlobalDictation(automaticallySubmitAfterSilence: Bool = false) async {
+        await prepareForUserRequest()
         speechTranscriber.start(
             engine: settings.speechEngine,
             automaticallySubmitAfterSilence: automaticallySubmitAfterSilence ? 0.7 : nil,
@@ -482,6 +547,22 @@ final class NotchController: ObservableObject {
         if let endpointTranscript = await speechTranscriber.stopAndTranscribe() {
             interaction.updateTranscript(endpointTranscript)
         }
+        await submitFinalizedPrompt()
+    }
+
+    /// Typed input is deliberately not a parallel chat implementation.  It
+    /// shares the speech path after transcription, so it gets the same active
+    /// context, tool registry, preview cards, streaming response, memory
+    /// policy, and notch transitions.
+    func submitTypedPrompt(_ text: String) async {
+        let prompt = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !prompt.isEmpty else { return }
+        await prepareForUserRequest()
+        interaction.updateTranscript(prompt)
+        await submitFinalizedPrompt()
+    }
+
+    private func submitFinalizedPrompt() async {
         interaction.finishDictation()
         let finalizedPrompt = transcript.trimmingCharacters(in: .whitespacesAndNewlines)
         if !finalizedPrompt.isEmpty, await conversationSession.appendUser(finalizedPrompt) != nil {
@@ -505,6 +586,10 @@ final class NotchController: ObservableObject {
 
     private func startResponseIfPossible() {
         let prompt = transcript.trimmingCharacters(in: .whitespacesAndNewlines)
+        if NexusSecretStoreRuntime.usesSyntheticResponse {
+            startAutomationResponse(for: prompt)
+            return
+        }
         guard !prompt.isEmpty, modelDownloadViewModel.activeModel != nil else {
             armWakePhraseListener()
             return
@@ -527,12 +612,21 @@ final class NotchController: ObservableObject {
         // from tool routing. It gives the user a useful line without delaying
         // generation; NexPrimaryToolPlanner remains the only authority that
         // decides whether a tool actually runs.
+        // A generated status must be the first text Nex presents.  Previously
+        // the model-backed modes wrote and spoke “Preparing a response…” here,
+        // which could outlive (and visually mask) the actual generated line.
+        // Deterministic mode is intentionally immediate; model-backed modes
+        // stay text-free until their real status arrives.
         let immediateStatus = settings.statusMode == .deterministic
             ? NexusStatusLineGenerator.status(for: prompt)
-            : NexusStatusLineGenerator.fallback
-        interaction.acknowledge(immediateStatus)
+            : nil
+        if let immediateStatus {
+            interaction.acknowledge(immediateStatus)
+        }
         if let screen { resize(to: expandedSize(for: screen), animated: true) }
-        responseSpeaker.speakImmediately(immediateStatus)
+        if let immediateStatus {
+            responseSpeaker.speakImmediately(immediateStatus)
+        }
         responseTask = Task { [weak self] in
             guard let self else { return }
             guard !Task.isCancelled, responseGeneration == generation else { return }
@@ -707,6 +801,41 @@ final class NotchController: ObservableObject {
         }
     }
 
+    /// A deterministic, no-network responder used exclusively by the UI
+    /// automation profile.  It proves the real typed-input → compact work
+    /// state → tool receipt → answer UI lifecycle without exercising a live
+    /// model, microphone, Keychain, connector, or destructive tool.  Live
+    /// model/tool verification remains separate and opt-in.
+    private func startAutomationResponse(for prompt: String) {
+        guard !prompt.isEmpty else { return }
+        responseTask?.cancel()
+        let generation = UUID()
+        responseGeneration = generation
+        responseIsStreaming = true
+        interaction.acknowledge("Validating typed request…")
+        responseTask = Task { [weak self] in
+            guard let self else { return }
+            try? await Task.sleep(for: .milliseconds(120))
+            guard !Task.isCancelled, self.responseGeneration == generation else { return }
+            let activity = ToolActivity(
+                actionID: "automation.typed_request",
+                toolName: "Nexus automation",
+                status: "Validated typed request",
+                spokenStatus: "",
+                icon: .systemSymbol("checkmark.seal"),
+                phase: .completed,
+                result: .object(["status": .string("validated")])
+            )
+            self.interaction.completeToolActivity(activity)
+            try? await Task.sleep(for: .milliseconds(120))
+            guard !Task.isCancelled, self.responseGeneration == generation else { return }
+            let answer = "Automation response: \(prompt)"
+            self.interaction.receiveAnswer(answer)
+            _ = await self.conversationSession.appendAssistant(answer)
+            self.responseIsStreaming = false
+        }
+    }
+
     private func presentFullscreenYouTubeImmediately() {
         guard mediaOverlayTab != nil, let screen else {
             armWakePhraseListener()
@@ -735,7 +864,7 @@ final class NotchController: ObservableObject {
                     raw = try await modelDownloadViewModel.response(
                         messages: messages,
                         temperature: 0.45,
-                        maximumTokens: 32,
+                        maximumTokens: 24,
                         onDelta: { _, _ in }
                     )
                 case .secondaryModel:
@@ -746,7 +875,8 @@ final class NotchController: ObservableObject {
                         using: model,
                         messages: messages,
                         temperature: 0.45,
-                        maximumTokens: 32,
+                        maximumTokens: 24,
+                        includeNexusSystemPrompt: false,
                         onDelta: { _, _ in }
                     )
                 case .deterministic:
@@ -754,14 +884,12 @@ final class NotchController: ObservableObject {
                 }
                 guard responseGeneration == generation,
                       let status = NexusStatusLineGenerator.sanitize(raw) else { return }
-                if presentation == .overlay {
-                    interaction.acknowledge(status)
-                } else if isThinking {
-                    // Small models are often slower than the visual hand-off.
-                    // Keep a valid late status visible in the compact notch
-                    // instead of silently discarding it after 800 ms.
-                    interaction.updateWorkingStatus(status)
-                }
+                // Never replace the transcript or an answer with a late
+                // status-model result. `workingStatus` is retained through the
+                // compact thinking handoff and displayed as soon as that state
+                // is active. Do not accept a result after the response ended.
+                guard responseIsStreaming else { return }
+                interaction.updateWorkingStatus(status)
             } catch {
                 // A status model is optional and never allowed to delay Nex.
             }
@@ -926,13 +1054,30 @@ final class NotchController: ObservableObject {
     }
 
     func confirmTaskPreview(_ id: UUID) {
-        Task { _ = try? await memory.registry.execute(name: "nex.confirm_action", arguments: ["actionId": .string(id.uuidString)], invocation: .app) }
+        // Confirmation controls are registered without a `nex.` namespace.
+        // The old spelling failed and discarded the error, leaving every
+        // confirmation card looking like it had done nothing.
+        Task { _ = try? await memory.registry.execute(name: "confirm_action", arguments: ["actionId": .string(id.uuidString)], invocation: .app) }
     }
 
     func cancelTaskPreview(_ id: UUID?) {
-        if let id { Task { _ = try? await memory.registry.execute(name: "nex.cancel_action", arguments: ["actionId": .string(id.uuidString)], invocation: .app) } }
+        if let id { Task { _ = try? await memory.registry.execute(name: "cancel_action", arguments: ["actionId": .string(id.uuidString)], invocation: .app) } }
         interaction.dismiss()
         if let screen { resize(to: idleSize(for: screen), animated: true) }
+    }
+
+    func sendMessageDraft(id: String, recipient: String, body: String) {
+        Task {
+            _ = try? await memory.registry.execute(
+                name: "messages.send_draft",
+                arguments: [
+                    "messageDraftId": .string(id),
+                    "recipient": .string(recipient),
+                    "body": .string(body)
+                ],
+                invocation: .app
+            )
+        }
     }
 
     func connectProvider(_ provider: NexConnectorProvider) { connectorAuth.connectWithEnabledScopes(provider) }
@@ -1615,7 +1760,9 @@ private final class NexusNotchPanel: NSPanel {
         collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary, .ignoresCycle]
     }
 
-    override var canBecomeKey: Bool { false }
+    // Hovering only orders the panel front. It becomes key after an
+    // intentional interaction so the typed request field can receive input.
+    override var canBecomeKey: Bool { true }
     override var canBecomeMain: Bool { false }
 
     override func sendEvent(_ event: NSEvent) {

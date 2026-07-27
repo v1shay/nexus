@@ -1,19 +1,6 @@
 import Foundation
 import Combine
 
-@MainActor
-private final class NexusCloudAttemptReporter {
-    weak var viewModel: ModelDownloadViewModel?
-
-    init(viewModel: ModelDownloadViewModel) {
-        self.viewModel = viewModel
-    }
-
-    func report(_ provider: NexusManagedCloudProvider) {
-        viewModel?.activeCloudProvider = provider
-    }
-}
-
 struct RemoteRuntimeInstallRequest: Identifiable, Equatable {
     let id = UUID()
     let model: LocalModel
@@ -50,7 +37,6 @@ final class ModelDownloadViewModel: ObservableObject {
     private let lmStudio: LMStudioManager
     private let catalogService: ModelCatalogService
     private let connect: NexusConnectController?
-    private let managedCloud = NexusManagedCloudInferenceStore()
     private var downloadTasks: [String: Task<Void, Never>] = [:]
     private var cancellables: Set<AnyCancellable> = []
     private var installedModelRecords: [String: LocalModel] = [:]
@@ -298,6 +284,13 @@ final class ModelDownloadViewModel: ObservableObject {
 
     func use(_ model: LocalModel) {
         guard isUsable(model) else { return }
+        // A local "Use" choice is a routing choice, not merely a visual
+        // selection.  Keep the stored API credential intact, but disable its
+        // explicit routing flag so a previous Gemini/NIM/etc. selection can
+        // never continue to win inference behind a local-model label.
+        apiProvider.disable()
+        activeCloudProvider = nil
+        cloudFallbackMessage = nil
         activeModel = model
         if let data = try? JSONEncoder().encode(model) {
             UserDefaults.standard.set(data, forKey: activeModelDefaultsKey)
@@ -327,10 +320,10 @@ final class ModelDownloadViewModel: ObservableObject {
         // label after the user has selected Gemini or NVIDIA NIM.
         activeCloudProvider = nil
 
-        // The provider selected in the API sheet is an explicit user choice,
-        // so it must run before Nexus's managed fallback chain. Previously
-        // Inception could answer first even while the user had selected
-        // Gemini, making the API selector effectively cosmetic.
+        // The provider selected in the API sheet is an explicit user choice.
+        // It gets exactly one cloud attempt, then Nexus falls straight back
+        // to the user's local model. Never silently spend a second cloud
+        // provider after the user picked Gemini, NIM, Groq, or OpenRouter.
         if apiProvider.enabled {
             do {
                 return try await NexusAPIProviderClient.streamChat(
@@ -345,50 +338,6 @@ final class ModelDownloadViewModel: ObservableObject {
             } catch {
                 let apiFailure = "Selected API provider failed: \(error.localizedDescription)"
                 cloudFallbackMessage = apiFailure
-                apiProvider.recordError(error)
-            }
-        }
-
-        let cloudAttempts: [(provider: NexusManagedCloudProvider, configuration: NexusAPIProviderConfiguration)]
-        do {
-            cloudAttempts = try managedCloud.configurations()
-        } catch {
-            cloudAttempts = []
-            apiProvider.recordError(error)
-        }
-
-        if !cloudAttempts.isEmpty {
-            do {
-                activeCloudProvider = nil
-                let attemptReporter = NexusCloudAttemptReporter(viewModel: self)
-                let result = try await NexusManagedCloudInferenceClient.streamChat(
-                    attempts: cloudAttempts,
-                    messages: messages,
-                    temperature: temperature,
-                    maximumTokens: maximumTokens,
-                    onProviderAttempt: { provider in
-                        await attemptReporter.report(provider)
-                    },
-                    onDelta: onDelta
-                )
-                activeCloudProvider = result.provider
-                return result.text
-            } catch is CancellationError {
-                throw CancellationError()
-            } catch let error as NexusManagedCloudInferenceError {
-                // A response that visibly began must not be followed by a
-                // second model's answer. Only pre-stream provider failures are
-                // eligible for the local fallback below.
-                if case .interruptedStream = error { throw error }
-                activeCloudProvider = nil
-                cloudFallbackMessage = error.localizedDescription
-                apiProvider.recordError(error)
-            } catch {
-                // Both cloud providers failed before an answer began. The
-                // existing local model path remains the final, offline-safe
-                // fallback exactly as before.
-                activeCloudProvider = nil
-                cloudFallbackMessage = error.localizedDescription
                 apiProvider.recordError(error)
             }
         }
@@ -452,9 +401,7 @@ final class ModelDownloadViewModel: ObservableObject {
         guard selectedAPIProvider || activeModel != nil else {
             throw LocalModelError.invalidResponse("Choose an installed model in the model window first")
         }
-        let cloudConfigured = (try? managedCloud.configurations().isEmpty == false) ?? false
-        if !cloudConfigured,
-           !selectedAPIProvider,
+        if !selectedAPIProvider,
            let activeModel,
            activeModel.backend == .ollama,
            (connect == nil || connect?.modelRoute == .thisMac) {
@@ -490,6 +437,7 @@ final class ModelDownloadViewModel: ObservableObject {
         messages: [NexusChatMessage],
         temperature: Double? = nil,
         maximumTokens: Int? = nil,
+        includeNexusSystemPrompt: Bool = true,
         onDelta: @escaping @Sendable (_ delta: String, _ accumulated: String) async -> Void
     ) async throws -> String {
         guard isUsable(model) else {
@@ -502,6 +450,7 @@ final class ModelDownloadViewModel: ObservableObject {
                 messages: messages,
                 temperature: temperature,
                 maximumTokens: maximumTokens,
+                includeNexusSystemPrompt: includeNexusSystemPrompt,
                 onDelta: onDelta
             )
         case .lmStudio:
@@ -510,6 +459,7 @@ final class ModelDownloadViewModel: ObservableObject {
                 messages: messages,
                 temperature: temperature,
                 maximumTokens: maximumTokens,
+                includeNexusSystemPrompt: includeNexusSystemPrompt,
                 onDelta: onDelta
             )
         }

@@ -68,6 +68,8 @@ enum ModelProviderIdentity: String, Equatable, Sendable {
     case openAI
     case gemini
     case nvidia
+    case groq
+    case openRouter
     case qwen
     case mistral
     case deepSeek
@@ -100,6 +102,8 @@ enum ModelProviderResolver {
     ) -> ModelProviderIdentity {
         if kind == .gemini { return .gemini }
         if kind == .nvidiaNIM { return .nvidia }
+        if kind == .groq { return .groq }
+        if kind == .openRouter { return .openRouter }
         if URL(string: baseURL)?.host?.lowercased() == "api.openai.com" {
             return .openAI
         }
@@ -158,8 +162,15 @@ enum ModelBrandArtwork {
     static func assetName(for identity: ModelProviderIdentity) -> String {
         switch identity {
         case .openAI: "openai.webp"
-        case .gemini: "gemini-color.svg"
-        case .nvidia: "nvidia-color.svg"
+        // These supplied PNGs have a real 512 × 512 canvas. The previous SVGs
+        // declare their canvas in `em`, which AppKit occasionally rasterizes
+        // as a single pixel when they appear in a Picker or a compact row.
+        case .gemini: "google-gemini.png"
+        case .nvidia: "pngwing.com.png"
+        case .groq: "groq.webp"
+        // Use the supplied raster mark here. The SVG's CSS-em canvas caused
+        // AppKit to reduce the mark to an almost invisible dash at text size.
+        case .openRouter: "open-router-dark.png"
         case .qwen: "qwen-color.svg"
         case .mistral: "mistral-color.svg"
         case .deepSeek: "icons8-deepseek-94.png"
@@ -188,9 +199,9 @@ enum ModelBrandArtwork {
     }
 
     /// AppKit menu items do not consistently honor SwiftUI's resizable frame
-    /// when the source is an SVG with CSS `em` dimensions. Rasterizing the
-    /// supplied mark into a fixed square before it reaches a Picker prevents
-    /// the giant provider-logo menu shown in the API sheet.
+    /// when a source's intrinsic artwork is unusually large. Rasterizing the
+    /// supplied mark into a fixed square before it reaches a Picker keeps
+    /// provider artwork at the requested text size.
     static func icon(for identity: ModelProviderIdentity, size: CGFloat) -> NSImage? {
         guard let source = image(for: identity) else { return nil }
         let target = NSSize(width: size, height: size)
@@ -208,17 +219,14 @@ enum ModelBrandArtwork {
             bitsPerPixel: 0
         ), let context = NSGraphicsContext(bitmapImageRep: bitmap) else { return nil }
 
-        // The downloaded SVG declares `width` and `height` as `1em`.
-        // AppKit otherwise rasterizes it at 1 × 1 before SwiftUI ever sees it.
-        // Render its vector representation into a real 3× bitmap first.
         bitmap.size = target
         let vector = (source.copy() as? NSImage) ?? source
-        vector.size = target
+        let sourceRect = NSRect(origin: .zero, size: vector.size)
         NSGraphicsContext.saveGraphicsState()
         NSGraphicsContext.current = context
         context.imageInterpolation = .high
         vector.draw(in: NSRect(origin: .zero, size: target),
-                    from: NSRect(origin: .zero, size: target),
+                    from: sourceRect,
                     operation: .sourceOver,
                     fraction: 1,
                     respectFlipped: true,
@@ -264,8 +272,19 @@ struct ModelProviderIcon: View {
 
     var body: some View {
         Group {
-            if let image = ModelBrandArtwork.icon(for: identity, size: size) {
+            if (identity == .gemini || identity == .nvidia || identity == .groq || identity == .openRouter),
+               let image = ModelBrandArtwork.image(for: identity) {
+                // These marks are supplied as real PNGs. Draw them directly
+                // rather than routing them through AppKit's SVG path.
                 Image(nsImage: image)
+                    .resizable()
+                    .interpolation(.high)
+                    .scaledToFit()
+            } else if let image = ModelBrandArtwork.icon(for: identity, size: size) {
+                Image(nsImage: image)
+                    .resizable()
+                    .interpolation(.high)
+                    .scaledToFit()
             } else {
                 Image(systemName: ModelBrandArtwork.fallbackSystemName)
                     .resizable()

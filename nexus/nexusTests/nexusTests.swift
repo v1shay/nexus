@@ -3,6 +3,25 @@ import WebKit
 @testable import nexus
 
 final class NexusGeometryTests: XCTestCase {
+    func testAutomationSecretStoreNeverTouchesLoginKeychain() throws {
+        let store = NexusKeychainSecretStore(
+            service: "na.nexus.tests.automation",
+            useEphemeralStore: true
+        )
+        let payload = Data("automation-only".utf8)
+
+        try store.set(payload, for: "token")
+        XCTAssertEqual(try store.data(for: "token"), payload)
+        try store.delete(account: "token")
+        XCTAssertNil(try store.data(for: "token"))
+    }
+
+    func testDuplexVoiceEnginesKeepMoshiLocalAndPersonaPlexRemote() {
+        XCTAssertEqual(NexusDuplexVoiceEngine.moshiMLXQ4.title, "Moshi MLX (4-bit)")
+        XCTAssertTrue(NexusDuplexVoiceEngine.moshiMLXQ4.detail.contains("Apple silicon"))
+        XCTAssertTrue(NexusDuplexVoiceEngine.personaPlexRemoteCUDA.detail.contains("CUDA host"))
+    }
+
     func testManagedCloudConfigurationOrderIsInceptionThenNVIDIA() throws {
         let store = NexusManagedCloudInferenceStore(secrets: NexusMemorySecretStore())
         XCTAssertTrue(try store.configurations().isEmpty)
@@ -241,6 +260,7 @@ final class NexusGeometryTests: XCTestCase {
     func testSystemPromptUsesRegisteredRoutingToolNames() {
         let prompt = NexusResponseInstructions.completeSystemPrompt
         for tool in [
+            "search_tools",
             "memory_search",
             "memory_get",
             "conversation_recall",
@@ -258,6 +278,8 @@ final class NexusGeometryTests: XCTestCase {
         }
         XCTAssertTrue(prompt.contains("Do not call either directly"))
         XCTAssertTrue(prompt.contains("memory_write"))
+        XCTAssertTrue(prompt.contains("Capability Discovery Before Refusal"))
+        XCTAssertTrue(prompt.contains("small semantic shortlist"))
     }
 
     @MainActor
@@ -340,6 +362,37 @@ final class NexusGeometryTests: XCTestCase {
         XCTAssertEqual(attempts[1].configuration.apiKey, "nvidia-key")
     }
 
+    func testManagedCloudInferenceAddsGeminiThenGroqBeforeLocalFallback() throws {
+        let secrets = NexusMemorySecretStore()
+        let store = NexusManagedCloudInferenceStore(secrets: secrets)
+        for provider in NexusManagedCloudProvider.allCases {
+            try secrets.set(Data("\(provider.rawValue)-key".utf8), for: provider.keyAccount)
+        }
+
+        let attempts = try store.configurations()
+
+        XCTAssertEqual(attempts.map(\.provider), [.inception, .nvidiaNIM, .gemini, .groq])
+        XCTAssertEqual(attempts.map(\.configuration.kind), [.openAICompatible, .nvidiaNIM, .gemini, .groq])
+        XCTAssertEqual(attempts.map { $0.configuration.model }, [
+            "mercury-2",
+            "openai/gpt-oss-120b",
+            "gemini-2.5-flash",
+            "llama-3.3-70b-versatile"
+        ])
+    }
+
+    func testCloudRoutingNeverStartsAnAutomaticCloudChain() {
+        XCTAssertFalse(NexusCloudRoutingPolicy.usesAutomaticCloudChain(apiProviderIsExplicitlyEnabled: true))
+        XCTAssertFalse(NexusCloudRoutingPolicy.usesAutomaticCloudChain(apiProviderIsExplicitlyEnabled: false))
+    }
+
+    func testGroqAndOpenRouterArtworkCanRenderAtTextSize() {
+        XCTAssertNotNil(ModelBrandArtwork.image(for: .groq))
+        XCTAssertNotNil(ModelBrandArtwork.icon(for: .groq, size: 18))
+        XCTAssertNotNil(ModelBrandArtwork.image(for: .openRouter))
+        XCTAssertNotNil(ModelBrandArtwork.icon(for: .openRouter, size: 18))
+    }
+
     @MainActor
     func testNVIDIAPresetUsesDedicatedKeychainAccountAndVerifiedDefaults() throws {
         let suite = "nexus-nvidia-provider-test-\(UUID().uuidString)"
@@ -367,6 +420,57 @@ final class NexusGeometryTests: XCTestCase {
     }
 
     @MainActor
+    func testGroqAndOpenRouterPresetsKeepSeparateKeychainAccounts() throws {
+        let suite = "nexus-extra-provider-test-\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let standardSecrets = NexusMemorySecretStore()
+        let managedSecrets = NexusMemorySecretStore()
+        let store = NexusAPIProviderStore(
+            defaults: defaults,
+            secretStore: standardSecrets,
+            managedSecretStore: managedSecrets
+        )
+
+        store.selectKind(.groq, replacing: .gemini)
+        store.apiKeyInput = "groq-test-key"
+        store.enabled = true
+        try store.save()
+        XCTAssertEqual(try store.configuration().baseURL.absoluteString, "https://api.groq.com/openai/v1")
+        XCTAssertEqual(try standardSecrets.data(for: NexusAPIProviderKind.groq.keyAccount), Data("groq-test-key".utf8))
+
+        store.selectKind(.openRouter, replacing: .groq)
+        store.apiKeyInput = "openrouter-test-key"
+        try store.save()
+        XCTAssertEqual(try store.configuration().model, "inclusionai/ling-3.0-flash:free")
+        XCTAssertEqual(try standardSecrets.data(for: NexusAPIProviderKind.openRouter.keyAccount), Data("openrouter-test-key".utf8))
+    }
+
+    func testLiveGroqAndOpenRouterStreamWhenEnabled() async throws {
+        guard ProcessInfo.processInfo.environment["NEXUS_LIVE_EXTRA_CLOUD_TEST"] == "1" else {
+            throw XCTSkip("Set NEXUS_LIVE_EXTRA_CLOUD_TEST=1 to verify the stored Groq and OpenRouter credentials.")
+        }
+        let secrets = NexusKeychainSecretStore(service: "na.nexus.model-provider")
+
+        for kind in [NexusAPIProviderKind.groq, .openRouter] {
+            let keyData = try XCTUnwrap(try secrets.data(for: kind.keyAccount))
+            let key = try XCTUnwrap(String(data: keyData, encoding: .utf8))
+            let response = try await NexusAPIProviderClient.streamChat(
+                configuration: .init(
+                    kind: kind,
+                    baseURL: URL(string: kind.defaultBaseURL)!,
+                    model: kind.defaultModel,
+                    apiKey: key
+                ),
+                messages: [.init(role: "user", content: "Reply with exactly: connected")],
+                temperature: 0,
+                maximumTokens: 12
+            ) { _, _ in }
+            XCTAssertFalse(response.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, kind.title)
+        }
+    }
+
+    @MainActor
     func testSelectingPresetWithSavedCredentialImmediatelyActivatesIt() throws {
         let suite = "nexus-api-provider-autoselect-test-\(UUID().uuidString)"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
@@ -389,10 +493,12 @@ final class NexusGeometryTests: XCTestCase {
 
     func testRequestedModelAndConnectCameraSizing() {
         XCTAssertEqual(Nexus3DLayout.computerCameraDistance, 2.55)
-        XCTAssertEqual(Nexus3DLayout.globeCameraDistance, 2.70)
-        XCTAssertEqual(Nexus3DLayout.connectDeviceCameraDistance, 4.15)
+        XCTAssertEqual(Nexus3DLayout.globeCameraDistance, 3.18)
+        XCTAssertEqual(Nexus3DLayout.connectDeviceCameraDistance, 4.52)
         XCTAssertLessThan(Nexus3DLayout.computerCameraDistance, 2.72)
-        XCTAssertLessThan(Nexus3DLayout.globeCameraDistance, 2.88)
+        // A larger camera distance intentionally makes the globe smaller than
+        // the computer scene, rather than letting it dominate its panel.
+        XCTAssertGreaterThan(Nexus3DLayout.globeCameraDistance, 3.0)
         XCTAssertGreaterThan(Nexus3DLayout.connectDeviceCameraDistance, 3.70)
     }
 
@@ -665,18 +771,23 @@ final class NexusGeometryTests: XCTestCase {
         XCTAssertTrue(instructions.contains("web_search"))
         XCTAssertTrue(instructions.contains("nex_cli_task"))
         XCTAssertTrue(instructions.contains("nex_cli_set_workspace"))
+        XCTAssertTrue(instructions.contains("browser.run_task"))
+        XCTAssertTrue(instructions.contains("Web research versus browser action"))
         XCTAssertTrue(instructions.contains("Never invent"))
-        XCTAssertLessThan(instructions.split(whereSeparator: \.isWhitespace).count, 600)
+        // The tool registry is deliberately explicit so small local models can
+        // route safely, including discovery-before-refusal. Keep it bounded
+        // without stripping the capability contract that prevents false denials.
+        XCTAssertLessThan(instructions.split(whereSeparator: \.isWhitespace).count, 1_500)
     }
 
-    func testStatusFallbackHasNoKeywordRoutingAndSanitizesModelSubjects() {
+    func testStatusFallbackHasNoKeywordRoutingAndPreservesModelGeneratedStatus() {
         XCTAssertEqual(NexusStatusLineGenerator.fallback, "Working on that now, Sir…")
         XCTAssertEqual(
             NexusStatusLineGenerator.sanitize(#"{"status":"swift_release_changes"}"#),
-            "Reviewing swift release changes…"
+            "swift release changes…"
         )
         XCTAssertEqual(NexusStatusLineGenerator.sanitize("Exploring the Atlas project"), "Exploring the Atlas project…")
-        XCTAssertNil(NexusStatusLineGenerator.sanitize("natural status describing work"))
+        XCTAssertEqual(NexusStatusLineGenerator.sanitize("natural status describing work"), "natural status describing work…")
     }
 
     func testToolPlanAcceptsModelsThatOmitPresentationStatus() {
@@ -697,6 +808,61 @@ final class NexusGeometryTests: XCTestCase {
         )
         XCTAssertEqual(plan.actions.count, 1)
         XCTAssertEqual(plan.actions.first?.tool, "web_search")
+    }
+
+    func testToolPlanExecutesLegacyXMLStyleLocalModelCallInsteadOfLeakingIt() {
+        let tools = [NexRegisteredTool(
+            name: "memory_search",
+            description: "Search saved memory.",
+            statusLabel: "Checking memory…",
+            completionLabel: "Used memory",
+            spokenStatus: "Checking memory.",
+            iconSystemName: "magnifyingglass",
+            permission: .readMemory,
+            schema: .init(fields: ["query": .init(.string, required: true)]),
+            handler: { _, _ in .null }
+        )]
+        let raw = """
+        <tool_call>memory_search
+        <arg_key>query</arg_key>
+        <arg_value>Vishay Agarwal projects</arg_value>
+        </tool_call>
+        """
+
+        let plan = NexPrimaryToolPlanner.parseStrict(raw, registeredTools: tools)
+
+        XCTAssertEqual(plan?.actions.count, 1)
+        XCTAssertEqual(plan?.actions.first?.tool, "memory_search")
+        XCTAssertEqual(plan?.actions.first?.arguments["query"], .string("Vishay Agarwal projects"))
+    }
+
+    func testToolPlanParsesEveryArgumentInLegacyXMLConversationRecallCall() {
+        let tools = [NexRegisteredTool(
+            name: "conversation_recall",
+            description: "Search saved conversations.",
+            statusLabel: "Checking conversation…",
+            completionLabel: "Used conversation history",
+            spokenStatus: "Checking our conversation.",
+            iconSystemName: "bubble.left.and.bubble.right",
+            permission: .readMemory,
+            schema: .init(fields: [
+                "query": .init(.string),
+                "scope": .init(.string, required: true, allowedValues: ["saved", "current", "all"])
+            ]),
+            handler: { _, _ in .null }
+        )]
+        let raw = """
+        <tool_call>conversation_recall
+        <arg_key>query</arg_key><arg_value>messages</arg_value>
+        <arg_key>scope</arg_key><arg_value>saved</arg_value>
+        </tool_call>
+        """
+
+        let plan = NexPrimaryToolPlanner.parseStrict(raw, registeredTools: tools)
+
+        XCTAssertEqual(plan?.actions.first?.tool, "conversation_recall")
+        XCTAssertEqual(plan?.actions.first?.arguments["query"], .string("messages"))
+        XCTAssertEqual(plan?.actions.first?.arguments["scope"], .string("saved"))
     }
 
     func testResponseModePreventsCodeLeakageIntoOrdinaryRequests() {

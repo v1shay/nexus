@@ -4,8 +4,8 @@ import SwiftUI
 
 enum Nexus3DLayout {
     static let computerCameraDistance: Float = 2.55
-    static let globeCameraDistance: Float = 2.70
-    static let connectDeviceCameraDistance: Float = 4.15
+    static let globeCameraDistance: Float = 3.18
+    static let connectDeviceCameraDistance: Float = 4.52
 }
 
 struct ModelAggregatorView: View {
@@ -19,25 +19,36 @@ struct ModelAggregatorView: View {
     @State private var page: NexusAppPage = .models
 
     var body: some View {
-        HStack(spacing: 0) {
-            NexusAppRail(page: $page)
+        ZStack {
+            NexusLiquidGlassBackground(theme: settings.glassTheme)
+
+            HStack(spacing: 0) {
+                NexusAppRail(page: $page, theme: settings.glassTheme)
+                    .nexusGlassPanel(theme: settings.glassTheme, role: .sidebar, radius: 0)
+                Rectangle()
+                    .fill(.white.opacity(0.10))
+                    .frame(width: 1)
             Group {
                 switch page {
                 case .models:
-                    NexusModelsPage(viewModel: viewModel)
+                    NexusModelsPage(viewModel: viewModel, theme: settings.glassTheme)
                 case .connect:
-                    NexusConnectPage(controller: connect)
+                    NexusConnectPage(controller: connect, theme: settings.glassTheme)
                 case .memory:
-                    NexusMemoryPage(memory: memory)
+                    NexusMemoryPage(memory: memory, theme: settings.glassTheme)
                 case .settings:
-                    NexusSettingsPage(settings: settings, viewModel: viewModel, connectorAuth: connectorAuth)
+                    NexusExperienceSettingsPage(settings: settings, viewModel: viewModel)
+                case .connectors:
+                    NexusConnectorsPage(connectorAuth: connectorAuth, theme: settings.glassTheme)
                 case .cli:
-                    NexCLIWorkspacePage(controller: cli, settings: cliSettings)
+                    NexCLIWorkspacePage(controller: cli, settings: cliSettings, theme: settings.glassTheme)
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .padding(.horizontal, 28)
+            .padding(.vertical, 20)
         }
-        .background(Color(nsColor: .windowBackgroundColor))
+        }
         .preferredColorScheme(.dark)
         .frame(minWidth: 900, minHeight: 620)
         .alert(item: $viewModel.pendingOllamaInstall) { model in
@@ -64,6 +75,7 @@ private enum NexusAppPage: String, CaseIterable, Identifiable {
     case connect
     case memory
     case settings
+    case connectors
     case cli
 
     var id: String { rawValue }
@@ -73,6 +85,7 @@ private enum NexusAppPage: String, CaseIterable, Identifiable {
         case .connect: "point.3.connected.trianglepath.dotted"
         case .memory: "circle.hexagongrid"
         case .settings: "gearshape"
+        case .connectors: "point.3.connected.trianglepath.dotted"
         case .cli: "terminal"
         }
     }
@@ -84,6 +97,7 @@ private enum NexusAppPage: String, CaseIterable, Identifiable {
 private struct NexCLIWorkspacePage: View {
     @ObservedObject var controller: NexCLITaskController
     @ObservedObject var settings: NexCLITaskSettings
+    let theme: NexusGlassTheme
     @State private var input = ""
     @State private var error: String?
     @State private var isSubmitting = false
@@ -167,7 +181,7 @@ private struct NexCLIWorkspacePage: View {
             .onTapGesture { isInputFocused = true }
             .onAppear { isInputFocused = true }
         }
-        .background(Color.black.opacity(0.18))
+        .nexusGlassPanel(theme: theme, role: .terminal, radius: 26)
     }
 
     private func submit() {
@@ -257,49 +271,146 @@ private struct NexCLIConsoleHeader: View {
     }
 }
 
-private struct NexusSettingsPage: View {
+private struct NexusExperienceSettingsPage: View {
     @ObservedObject var settings: NexusAppSettings
     @ObservedObject var viewModel: ModelDownloadViewModel
-    @ObservedObject var connectorAuth: NexConnectorAuthController
+    @ObservedObject private var duplexRuntime = NexusDuplexVoiceRuntime.shared
 
     var body: some View {
-        Form {
-            Section("Status") {
-                Picker("Generator", selection: $settings.statusMode) {
-                    ForEach(NexusStatusGenerationMode.allCases) { mode in
-                        Text(mode.title).tag(mode)
+        ScrollView {
+            VStack(spacing: 0) {
+                NexusSettingsLine(label: "Glass") {
+                    Picker("Glass", selection: $settings.glassTheme) {
+                        ForEach(NexusGlassTheme.allCases) { theme in Text(theme.title).tag(theme) }
                     }
+                    .labelsHidden()
+                    .frame(width: 210)
+                }
+                NexusHairline(axis: .horizontal)
+                NexusSettingsLine(label: "Status") {
+                    Picker("Status", selection: $settings.statusMode) {
+                        ForEach(NexusStatusGenerationMode.allCases) { mode in Text(mode.title).tag(mode) }
+                    }
+                    .labelsHidden()
+                    .frame(width: 210)
                 }
                 if settings.statusMode == .secondaryModel {
-                    Picker("Status model", selection: $settings.secondaryStatusModelID) {
-                        Text("Choose a local model").tag("")
-                        ForEach(viewModel.installedModels) { model in
-                            Text(model.name).tag(model.id)
+                    NexusHairline(axis: .horizontal)
+                    NexusSettingsLine(label: "Model") {
+                        Picker("Status model", selection: $settings.secondaryStatusModelID) {
+                            Text("Choose model").tag("")
+                            ForEach(viewModel.installedModels) { model in Text(model.name).tag(model.id) }
+                        }
+                        .labelsHidden()
+                        .frame(width: 250)
+                    }
+                }
+                NexusHairline(axis: .horizontal)
+                NexusSettingsLine(label: "Dictation") {
+                    Picker("Dictation", selection: $settings.speechEngine) {
+                        ForEach(NexusSpeechEngine.allCases) { engine in Text(engine.title).tag(engine) }
+                    }
+                    .labelsHidden()
+                    .frame(width: 210)
+                }
+                NexusHairline(axis: .horizontal)
+                NexusSettingsLine(label: "Duplex") {
+                    Picker("Duplex voice", selection: $settings.duplexVoiceEngine) {
+                        ForEach(NexusDuplexVoiceEngine.allCases) { engine in Text(engine.title).tag(engine) }
+                    }
+                    .labelsHidden()
+                    .frame(width: 210)
+                    .onChange(of: settings.duplexVoiceEngine) { _, engine in
+                        Task {
+                            await duplexRuntime.reconcile(
+                                with: engine,
+                                personaPlexEndpoint: settings.personaPlexRemoteEndpoint
+                            )
                         }
                     }
                 }
-            }
-
-            Section("Dictation") {
-                Picker("Engine", selection: $settings.speechEngine) {
-                    ForEach(NexusSpeechEngine.allCases) { engine in
-                        Text(engine.title).tag(engine)
+                if settings.duplexVoiceEngine == .moshiMLXQ4 {
+                    NexusHairline(axis: .horizontal)
+                    NexusSettingsLine(label: "Moshi") {
+                        HStack(spacing: 10) {
+                            Text(duplexRuntime.state.label)
+                                .font(.system(size: 11, weight: .medium, design: .monospaced))
+                                .foregroundStyle(duplexRuntime.state == .ready ? .green : .secondary)
+                                .lineLimit(1)
+                            if duplexRuntime.state != .ready {
+                                Button("Install & start") {
+                                    Task { await duplexRuntime.installMoshiAndStart() }
+                                }
+                                .controlSize(.small)
+                            }
+                        }
+                    }
+                    NexusSettingsLine(label: "Note") {
+                        Text(NexusDuplexVoiceEngine.moshiMLXQ4.detail)
+                            .font(.system(size: 11, weight: .medium))
+                            .foregroundStyle(.secondary)
+                            .frame(maxWidth: 360, alignment: .trailing)
                     }
                 }
-                if settings.speechEngine == .parakeetLocal {
-                    Text("Runs the open-source Parakeet CoreML model locally. Its Hugging Face weights download once on first use; no transcription endpoint or API key is used.")
-                        .foregroundStyle(.secondary)
+                if settings.duplexVoiceEngine == .personaPlexRemoteCUDA {
+                    NexusHairline(axis: .horizontal)
+                    NexusSettingsLine(label: "CUDA host") {
+                        TextField("https://cuda-host.example", text: $settings.personaPlexRemoteEndpoint)
+                            .textFieldStyle(.roundedBorder)
+                            .frame(width: 250)
+                            .onChange(of: settings.personaPlexRemoteEndpoint) { _, endpoint in
+                                Task { await duplexRuntime.reconcile(with: .personaPlexRemoteCUDA, personaPlexEndpoint: endpoint) }
+                            }
+                    }
+                    NexusSettingsLine(label: "Note") {
+                        Text(NexusDuplexVoiceEngine.personaPlexRemoteCUDA.detail)
+                            .font(.system(size: 11, weight: .medium))
+                            .foregroundStyle(.secondary)
+                            .frame(maxWidth: 360, alignment: .trailing)
+                    }
                 }
             }
-            NexConnectionsSettingsView(controller: connectorAuth)
+            .nexusGlassPanel(theme: settings.glassTheme, role: .content, radius: 10)
+            .padding(.top, 18)
         }
-        .formStyle(.grouped)
-        .padding(28)
+    }
+}
+
+private struct NexusSettingsLine<Content: View>: View {
+    let label: String
+    @ViewBuilder let content: Content
+
+    var body: some View {
+        HStack {
+            Text(label.uppercased())
+                .font(.system(size: 11, weight: .semibold, design: .monospaced))
+                .tracking(1.2)
+                .foregroundStyle(.white.opacity(0.58))
+            Spacer()
+            content
+        }
+        .padding(.horizontal, 18)
+        .frame(minHeight: 56)
+    }
+}
+
+private struct NexusConnectorsPage: View {
+    @ObservedObject var connectorAuth: NexConnectorAuthController
+    let theme: NexusGlassTheme
+
+    var body: some View {
+        ScrollView {
+            NexConnectionsSettingsView(controller: connectorAuth)
+                .padding(16)
+                .nexusGlassPanel(theme: theme, role: .content, radius: 10)
+                .padding(.top, 18)
+        }
     }
 }
 
 private struct NexusAppRail: View {
     @Binding var page: NexusAppPage
+    let theme: NexusGlassTheme
 
     var body: some View {
         VStack(spacing: 10) {
@@ -308,7 +419,7 @@ private struct NexusAppRail: View {
                     Image(systemName: item.icon)
                         .font(.system(size: 17, weight: .medium))
                         .frame(width: 38, height: 38)
-                        .background(page == item ? .white.opacity(0.11) : .clear, in: RoundedRectangle(cornerRadius: 11))
+                        .background(page == item ? .white.opacity(0.12) : .clear, in: RoundedRectangle(cornerRadius: 7))
                 }
                 .buttonStyle(.plain)
                 .foregroundStyle(page == item ? .white : .secondary)
@@ -324,6 +435,7 @@ private struct NexusAppRail: View {
 
 private struct NexusModelsPage: View {
     @ObservedObject var viewModel: ModelDownloadViewModel
+    let theme: NexusGlassTheme
     @State private var isShowingAPISettings = false
 
     var body: some View {
@@ -339,22 +451,60 @@ private struct NexusModelsPage: View {
             .padding(.horizontal, 22)
             .frame(height: 28)
             GeometryReader { proxy in
-                let rowHeight = max(260, (proxy.size.height - 42) / 2)
+                let topHeight = max(250, proxy.size.height * 0.54)
+                let lowerHeight = max(220, proxy.size.height - topHeight)
+                // The two rows deliberately have different proportions: the
+                // LM Studio library needs more width, while the Moon Globe is
+                // visually smaller than Computer and should not dominate it.
+                // Cloud runtimes intentionally share the same canvas width.
+                // Keeping NIM/Groq and Gemini/OpenRouter equal makes them read
+                // as a paired, balanced part of the model surface.
+                let cloudRuntimeWidth = min(270, max(205, proxy.size.width * 0.16))
+                let computerWidth = max(380, proxy.size.width * 0.43)
+                // The globe is deliberately compact. LM Studio owns the
+                // remaining lower-row space because its model names benefit
+                // from the extra width.
+                let globeWidth = min(300, max(230, proxy.size.width * 0.17))
+                let lmStudioWidth = max(420, proxy.size.width - cloudRuntimeWidth - globeWidth - 2)
                 VStack(spacing: 0) {
-                    HStack(spacing: 0) {
-                        ModelSceneCard(asset: "Computer", accent: .cyan)
-                        ModelLibraryCard(backend: .ollama, viewModel: viewModel)
+                    VStack(spacing: 0) {
+                        HStack(spacing: 0) {
+                            ModelSceneCard(asset: "Computer", accent: theme.mainLight, theme: theme)
+                                .frame(width: computerWidth)
+                            NexusHairline(axis: .vertical)
+                            NexusCloudRuntimePanel(
+                                providers: [.nvidiaNIM, .groq],
+                                store: viewModel.apiProvider,
+                                theme: theme,
+                                showSettings: { isShowingAPISettings = true }
+                            )
+                            .frame(width: cloudRuntimeWidth)
+                            NexusHairline(axis: .vertical)
+                            ModelLibraryCard(backend: .ollama, viewModel: viewModel, theme: theme)
+                        }
+                        .frame(height: topHeight)
+                        NexusHairline(axis: .horizontal)
+                        HStack(spacing: 0) {
+                            ModelLibraryCard(backend: .lmStudio, viewModel: viewModel, theme: theme)
+                                .frame(width: lmStudioWidth)
+                            NexusHairline(axis: .vertical)
+                            NexusCloudRuntimePanel(
+                                providers: [.gemini, .openRouter],
+                                store: viewModel.apiProvider,
+                                theme: theme,
+                                showSettings: { isShowingAPISettings = true }
+                            )
+                            .frame(width: cloudRuntimeWidth)
+                            NexusHairline(axis: .vertical)
+                            ModelSceneCard(asset: "Moon_Globe", accent: theme.sidebarLight, theme: theme)
+                                .frame(width: globeWidth)
+                        }
+                        .frame(height: lowerHeight)
                     }
-                    .frame(height: rowHeight)
-                    HStack(spacing: 0) {
-                        ModelLibraryCard(backend: .lmStudio, viewModel: viewModel)
-                        ModelSceneCard(asset: "Moon_Globe", accent: .indigo)
-                    }
-                    .frame(height: rowHeight)
                 }
             }
         }
-        .sheet(isPresented: $isShowingAPISettings) { NexusAPIProviderView(store: viewModel.apiProvider) }
+        .sheet(isPresented: $isShowingAPISettings) { NexusAPIProviderView(store: viewModel.apiProvider, theme: theme) }
     }
 
     @ViewBuilder
@@ -368,7 +518,7 @@ private struct NexusModelsPage: View {
                 Text(cloud.title).foregroundStyle(.secondary)
             }
                 .foregroundStyle(.green)
-                .help("Managed cloud inference falls back to the next provider, then your local model")
+                .help("A selected API provider falls back to your selected local model if it fails")
         } else if viewModel.apiProvider.enabled {
             HStack(spacing: 6) {
                 Circle().fill(.green).frame(width: 6, height: 6)
@@ -409,8 +559,89 @@ private struct NexusModelsPage: View {
     }
 }
 
+/// Two cloud runtimes share each intentional canvas column: NIM/Groq in the
+/// upper column and Gemini/OpenRouter in the lower one. This avoids turning
+/// cloud providers into a generic settings list while keeping each mark and
+/// its active model centered in the available space.
+private struct NexusCloudRuntimePanel: View {
+    let providers: [NexusAPIProviderKind]
+    @ObservedObject var store: NexusAPIProviderStore
+    let theme: NexusGlassTheme
+    let showSettings: () -> Void
+
+    var body: some View {
+        VStack(spacing: 0) {
+            Spacer(minLength: 0)
+            ForEach(providers) { provider in
+                NexusCloudRuntimeSlot(
+                    provider: provider,
+                    store: store,
+                    theme: theme,
+                    showSettings: showSettings
+                )
+                .frame(maxWidth: .infinity)
+                .frame(height: 96)
+                if provider != providers.last! {
+                    NexusHairline(axis: .horizontal)
+                        .padding(.horizontal, 16)
+                }
+            }
+            Spacer(minLength: 0)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+}
+
+/// A text-sized, centered cloud-runtime control. Artwork is intentionally raw
+/// provider artwork—no shared rounded-square tile or background shape.
+private struct NexusCloudRuntimeSlot: View {
+    let provider: NexusAPIProviderKind
+    @ObservedObject var store: NexusAPIProviderStore
+    let theme: NexusGlassTheme
+    let showSettings: () -> Void
+
+    private var isActive: Bool {
+        store.kind == provider && store.enabled
+    }
+
+    var body: some View {
+        Button {
+            let previous = store.kind
+            store.selectKind(provider, replacing: previous)
+            if !store.savedKey { showSettings() }
+        } label: {
+            VStack(alignment: .center, spacing: 7) {
+                HStack(spacing: 9) {
+                    ModelProviderIcon(
+                        identity: ModelProviderResolver.identity(
+                            for: provider,
+                            modelID: provider.defaultModel,
+                            baseURL: provider.defaultBaseURL
+                        ),
+                        size: 18
+                    )
+                    Text(provider.title)
+                    .font(.system(size: 12, weight: .semibold, design: .monospaced))
+                        .tracking(0.4)
+                }
+                Text(provider.defaultModel)
+                    .font(.caption)
+                    .foregroundStyle(isActive ? .green : .secondary)
+                    .lineLimit(2)
+                    .multilineTextAlignment(.center)
+            }
+            .padding(.horizontal, 12)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .help("Use \(provider.title) when it has a saved API key")
+    }
+}
+
 private struct NexusAPIProviderView: View {
     @ObservedObject var store: NexusAPIProviderStore
+    let theme: NexusGlassTheme
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
@@ -462,6 +693,7 @@ private struct NexusAPIProviderView: View {
         }
         .padding(24)
         .frame(width: 520)
+        .nexusGlassPanel(theme: theme, role: .content, radius: 26)
     }
 }
 
@@ -489,29 +721,28 @@ private struct APIProviderPickerLabel: View {
 private struct ModelSceneCard: View {
     let asset: String
     let accent: Color
+    let theme: NexusGlassTheme
 
     var body: some View {
-        SpinningUSDZView(
+        ZStack {
+            NexusFloatingScene(theme: theme, accent: accent) {
+            SpinningUSDZView(
             assetName: asset,
             cameraDistance: asset == "Computer"
                 ? Nexus3DLayout.computerCameraDistance
                 : Nexus3DLayout.globeCameraDistance
-        )
-            .background(
-                RadialGradient(
-                    colors: [accent.opacity(0.17), .clear],
-                    center: .center,
-                    startRadius: 10,
-                    endRadius: 220
-                )
             )
             .frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 }
 
 private struct ModelLibraryCard: View {
     let backend: ModelBackend
     @ObservedObject var viewModel: ModelDownloadViewModel
+    let theme: NexusGlassTheme
     @State private var query = ""
 
     var body: some View {
@@ -640,37 +871,49 @@ private struct NexusModelRow: View {
 
 private struct NexusConnectPage: View {
     @ObservedObject var controller: NexusConnectController
+    let theme: NexusGlassTheme
 
     var body: some View {
-        VStack(spacing: 16) {
-            HStack(spacing: 14) {
-                DeviceCard(device: localDevice, controller: controller)
-                DeviceCard(device: remoteDevice(kind: .studio), controller: controller)
-                DeviceCard(device: remoteDevice(kind: .imac), controller: controller)
-            }
-            .frame(maxHeight: .infinity)
-
-            HStack(spacing: 10) {
-                Toggle("", isOn: Binding(
-                    get: { controller.enabled },
-                    set: { controller.setEnabled($0) }
-                ))
-                .toggleStyle(.switch)
-                .labelsHidden()
-                TextField("Pairing code", text: $controller.pairingCode)
-                    .textFieldStyle(.plain)
-                    .padding(.horizontal, 11)
-                    .frame(height: 32)
-                    .overlay(alignment: .bottom) { Rectangle().fill(.white.opacity(0.14)).frame(height: 1) }
-                Button("Pair") { controller.applyPairingCode() }
-                    .disabled(controller.pairingCode.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-                if !controller.setupMessage.isEmpty {
-                    Text(controller.setupMessage).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+        GeometryReader { proxy in
+            let footerHeight: CGFloat = 58
+            VStack(spacing: 0) {
+                HStack(spacing: 0) {
+                    DeviceCard(device: localDevice, controller: controller, theme: theme)
+                    NexusHairline(axis: .vertical)
+                    DeviceCard(device: remoteDevice(kind: .studio), controller: controller, theme: theme)
+                    NexusHairline(axis: .vertical)
+                    DeviceCard(device: remoteDevice(kind: .imac), controller: controller, theme: theme)
                 }
+                .frame(height: max(260, proxy.size.height - footerHeight - 1))
+                .layoutPriority(1)
+                NexusHairline(axis: .horizontal)
+                pairingFooter
+                    .frame(height: footerHeight)
             }
         }
-        .padding(.horizontal, 28)
-        .padding(.vertical, 18)
+        .nexusGlassPanel(theme: theme, role: .content, radius: 10)
+    }
+
+    private var pairingFooter: some View {
+        HStack(spacing: 10) {
+            Toggle("", isOn: Binding(
+                get: { controller.enabled },
+                set: { controller.setEnabled($0) }
+            ))
+            .toggleStyle(.switch)
+            .labelsHidden()
+            TextField("Pairing code", text: $controller.pairingCode)
+                .textFieldStyle(.plain)
+                .padding(.horizontal, 11)
+                .frame(height: 32)
+                .overlay(alignment: .bottom) { Rectangle().fill(.white.opacity(0.14)).frame(height: 1) }
+            Button("Pair") { controller.applyPairingCode() }
+                .disabled(controller.pairingCode.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            if !controller.setupMessage.isEmpty {
+                Text(controller.setupMessage).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+            }
+        }
+        .padding(.horizontal, 14)
     }
 
     private var localDevice: NexusDeviceCardModel {
@@ -736,12 +979,16 @@ private struct NexusDeviceCardModel {
 private struct DeviceCard: View {
     let device: NexusDeviceCardModel
     @ObservedObject var controller: NexusConnectController
+    let theme: NexusGlassTheme
 
     var body: some View {
         VStack(spacing: 8) {
             SpinningUSDZView(
                 assetName: device.asset,
-                cameraDistance: Nexus3DLayout.connectDeviceCameraDistance
+                cameraDistance: device.kind == .imac
+                    ? Nexus3DLayout.connectDeviceCameraDistance
+                    : Nexus3DLayout.connectDeviceCameraDistance + 0.18,
+                presentationTilt: 0.11
             )
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             Text(device.name).font(.headline).lineLimit(1)
@@ -755,13 +1002,8 @@ private struct DeviceCard: View {
                 Button("Reconnect") { controller.reconnect(nodeID: id) }.controlSize(.small)
             }
         }
-        .padding(14)
-        .background {
-            if device.isSelected {
-                RadialGradient(colors: [.cyan.opacity(0.08), .clear], center: .center, startRadius: 30, endRadius: 320)
-            }
-        }
-        .contentShape(RoundedRectangle(cornerRadius: 18))
+        .padding(18)
+        .contentShape(Rectangle())
         .onTapGesture {
             guard device.isOnline else { return }
             if let id = device.nodeID {
@@ -777,29 +1019,37 @@ private struct DeviceCard: View {
 
 private struct NexusMemoryPage: View {
     @ObservedObject var memory: NexMemoryController
+    let theme: NexusGlassTheme
 
     var body: some View {
-        HStack(spacing: 14) {
-            VStack(spacing: 14) {
-                MemoryCard(title: "Current") {
+        HStack(spacing: 0) {
+            VStack(spacing: 0) {
+                MemoryCard(title: "Current", theme: theme) {
                     CurrentConversationView(snapshot: memory.activeConversation)
                 }
-                MemoryCard(title: "Previous") {
+                NexusHairline(axis: .horizontal)
+                MemoryCard(title: "Previous", theme: theme) {
                     SavedConversationList(memory: memory)
                 }
             }
-            .frame(width: 390)
-            MemoryCard(title: "Obsidian") {
-                NexMemoryPhysicsGraphView(graph: memory.memoryGraph, vaultURL: memory.vaultURL)
+            .frame(width: 270)
+            NexusHairline(axis: .vertical)
+            NexusObsidianBrainView(graph: memory.memoryGraph, vaultURL: memory.vaultURL, theme: theme)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            NexusHairline(axis: .vertical)
+            MemoryCard(title: "Vault", theme: theme) {
+                NexVaultOutlineView(vaultURL: memory.vaultURL)
             }
+            .frame(width: 240)
         }
-        .padding(14)
+        .nexusGlassPanel(theme: theme, role: .content, radius: 10)
         .task { await memory.refreshSavedConversations() }
     }
 }
 
 private struct MemoryCard<Content: View>: View {
     let title: String
+    let theme: NexusGlassTheme
     @ViewBuilder let content: Content
 
     var body: some View {
@@ -848,9 +1098,350 @@ private struct SavedConversationList: View {
     }
 }
 
+// MARK: - App glass system
+
+/// Refractive, grainy glass built from ordinary SwiftUI primitives. This is
+/// intentionally not `Material` or a macOS 26-only API, so the full visual
+/// language is present on the Air as well as the Studio. Newer macOS releases
+/// receive a little more highlight energy through the availability branch.
+private enum NexusGlassRole {
+    case sidebar
+    case content
+    case active
+    case terminal
+}
+
+private struct NexusLiquidGlassBackground: View {
+    let theme: NexusGlassTheme
+
+    var body: some View {
+        ZStack {
+            NexusBackdropMaterial()
+            Color.black.opacity(0.34)
+            // These are broad, physical-looking studio reflections—not a
+            // colored background. The selected theme only varies their tint.
+            LinearGradient(
+                colors: [.clear, theme.mainLight.opacity(0.055), .clear],
+                startPoint: .topLeading,
+                endPoint: .bottomTrailing
+            )
+            LinearGradient(
+                colors: [.clear, theme.sidebarLight.opacity(0.028), .clear],
+                startPoint: .bottomLeading,
+                endPoint: .topTrailing
+            )
+            NexusGrain(opacity: 0.018)
+            Rectangle().stroke(.white.opacity(0.16), lineWidth: 0.7)
+        }
+        .ignoresSafeArea()
+    }
+}
+
+/// NSVisualEffectView gives the app actual behind-window blur on every
+/// supported macOS release. It is intentionally not a macOS 26-only effect.
+private struct NexusBackdropMaterial: NSViewRepresentable {
+    func makeNSView(context: Context) -> NSVisualEffectView {
+        let view = NSVisualEffectView()
+        view.material = .hudWindow
+        view.blendingMode = .behindWindow
+        view.state = .active
+        view.isEmphasized = true
+        return view
+    }
+
+    func updateNSView(_ nsView: NSVisualEffectView, context: Context) {
+        nsView.material = .hudWindow
+        nsView.state = .active
+    }
+}
+
+private struct NexusGrain: View {
+    let opacity: Double
+
+    var body: some View {
+        Canvas { context, size in
+            var state: UInt64 = 0x9E3779B97F4A7C15
+            for index in 0..<900 {
+                state = state &* 2_862_933_555_777_941_757 &+ 3_037_000_493
+                let x = CGFloat(state & 0xFFFF) / 65_535 * size.width
+                state = state &* 2_862_933_555_777_941_757 &+ 3_037_000_493
+                let y = CGFloat(state & 0xFFFF) / 65_535 * size.height
+                let alpha = (index.isMultiple(of: 4) ? 0.85 : 0.30) * opacity
+                context.fill(Path(ellipseIn: CGRect(x: x, y: y, width: 0.8, height: 0.8)), with: .color(.white.opacity(alpha)))
+            }
+        }
+        .allowsHitTesting(false)
+        .blendMode(.overlay)
+    }
+}
+
+private struct NexusGlassPanel: ViewModifier {
+    let theme: NexusGlassTheme
+    let role: NexusGlassRole
+    let radius: CGFloat
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    func body(content: Content) -> some View {
+        content
+            .background {
+                RoundedRectangle(cornerRadius: radius, style: .continuous)
+                    .fill(baseFill)
+                    .overlay {
+                        RoundedRectangle(cornerRadius: radius, style: .continuous)
+                            .fill(
+                                LinearGradient(
+                                    colors: [highlight.opacity(0.08), .clear, .white.opacity(0.025)],
+                                    startPoint: .topLeading,
+                                    endPoint: .bottomTrailing
+                                )
+                            )
+                    }
+                    .overlay {
+                        RoundedRectangle(cornerRadius: radius, style: .continuous)
+                            .strokeBorder(
+                                .white.opacity(role == .active ? 0.24 : 0.115),
+                                lineWidth: 0.8
+                            )
+                    }
+                    .overlay { NexusGrain(opacity: 0.012).clipShape(RoundedRectangle(cornerRadius: radius, style: .continuous)) }
+                    .shadow(color: .black.opacity(role == .sidebar ? 0.18 : 0.13), radius: role == .terminal ? 16 : 8, y: 4)
+            }
+    }
+
+    private var highlight: Color { role == .sidebar ? theme.sidebarLight : theme.mainLight }
+
+    private var baseFill: Color {
+        switch role {
+        case .sidebar:
+            Color.black.opacity(0.12)
+        case .active:
+            Color.white.opacity(0.085)
+        case .terminal:
+            Color.black.opacity(0.42)
+        case .content:
+            Color.white.opacity(0.035)
+        }
+    }
+}
+
+private extension View {
+    func nexusGlassPanel(theme: NexusGlassTheme, role: NexusGlassRole = .content, radius: CGFloat = 22) -> some View {
+        modifier(NexusGlassPanel(theme: theme, role: role, radius: radius))
+    }
+
+    func nexusGlassCard(theme: NexusGlassTheme, role: NexusGlassRole = .content) -> some View {
+        nexusGlassPanel(theme: theme, role: role, radius: 22)
+    }
+}
+
+private struct NexusGlassCard<Content: View>: View {
+    let theme: NexusGlassTheme
+    let role: NexusGlassRole
+    @ViewBuilder let content: Content
+
+    init(theme: NexusGlassTheme, role: NexusGlassRole = .content, @ViewBuilder content: () -> Content) {
+        self.theme = theme
+        self.role = role
+        self.content = content()
+    }
+
+    var body: some View { content.nexusGlassCard(theme: theme, role: role) }
+}
+
+private struct GlassSectionHeader: View {
+    let eyebrow: String
+    let title: String
+    let detail: String
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 5) {
+            Text(eyebrow)
+                .font(.system(size: 10, weight: .bold, design: .rounded))
+                .tracking(2.4)
+                .foregroundStyle(.white.opacity(0.42))
+            Text(title)
+                .font(.system(size: 32, weight: .semibold, design: .rounded))
+            Text(detail)
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+        }
+    }
+}
+
+private struct NexusFloatingScene<Content: View>: View {
+    let theme: NexusGlassTheme
+    let accent: Color
+    @ViewBuilder let content: Content
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    var body: some View {
+        TimelineView(.animation(minimumInterval: reduceMotion ? 2 : 0.08)) { timeline in
+            let float = reduceMotion ? 0 : sin(timeline.date.timeIntervalSinceReferenceDate * 0.65) * 7
+            ZStack {
+                Ellipse()
+                    .fill(.black.opacity(0.28))
+                    .frame(width: 170, height: 26)
+                    .blur(radius: 11)
+                    .offset(y: 92 - float * 0.30)
+                content
+                    .offset(y: float)
+                    .shadow(color: .black.opacity(0.35), radius: 12, y: 10)
+            }
+        }
+    }
+}
+
+private struct NexusHairline: View {
+    enum Axis { case horizontal, vertical }
+    let axis: Axis
+
+    var body: some View {
+        Rectangle()
+            .fill(.white.opacity(0.095))
+            .frame(width: axis == .vertical ? 1 : nil, height: axis == .horizontal ? 1 : nil)
+    }
+}
+
+private struct NexusObsidianBrainView: View {
+    let graph: NexMemoryGraphSnapshot
+    let vaultURL: URL
+    let theme: NexusGlassTheme
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("NEX").font(.system(size: 11, weight: .bold, design: .monospaced)).tracking(3)
+                    Text("\(graph.nodes.count) indexed notes")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                }
+                Spacer()
+            }
+            ZStack {
+                NexusHolographicBrainMesh(theme: theme, reduceMotion: reduceMotion)
+                    .padding(4)
+                    .allowsHitTesting(false)
+                NexMemoryPhysicsGraphView(graph: graph, vaultURL: vaultURL, theme: theme)
+                    .padding(4)
+            }
+        }
+        .padding(16)
+    }
+}
+
+private struct NexusHolographicBrainMesh: View {
+    let theme: NexusGlassTheme
+    let reduceMotion: Bool
+
+    var body: some View {
+        TimelineView(.animation(minimumInterval: reduceMotion ? 3 : 0.08)) { timeline in
+            let angle = reduceMotion ? 0 : timeline.date.timeIntervalSinceReferenceDate * 0.22
+            Canvas { context, size in
+                let side = min(size.width, size.height) * 0.92
+                let center = CGPoint(x: size.width / 2, y: size.height / 2)
+                for latitude in -5...5 {
+                    let vertical = CGFloat(latitude) / 7
+                    let width = sqrt(max(0.05, 1 - vertical * vertical)) * side / 2
+                    let y = center.y + vertical * side / 2
+                    var path = Path()
+                    path.addEllipse(in: CGRect(x: center.x - width, y: y - side * 0.055, width: width * 2, height: side * 0.11))
+                    context.stroke(path, with: .color(.white.opacity(0.10)), lineWidth: 0.55)
+                }
+                for longitude in 0..<13 {
+                    let phase = CGFloat(angle) + CGFloat(longitude) * .pi / 13
+                    let xScale = abs(cos(phase)) * 0.92 + 0.06
+                    var path = Path()
+                    path.addEllipse(in: CGRect(x: center.x - side * xScale / 2, y: center.y - side / 2, width: side * xScale, height: side))
+                    context.stroke(path, with: .color(.white.opacity(0.065)), lineWidth: 0.45)
+                }
+                for point in 0..<170 {
+                    let phi = CGFloat(point) * 2.39996 + CGFloat(angle)
+                    let height = 1 - 2 * CGFloat(point) / 169
+                    let radius = sqrt(max(0, 1 - height * height))
+                    let x = center.x + cos(phi) * radius * side * 0.47
+                    let y = center.y + height * side * 0.47
+                    let alpha = 0.12 + Double((point % 5)) * 0.035
+                    context.fill(Path(ellipseIn: CGRect(x: x - 0.8, y: y - 0.8, width: 1.6, height: 1.6)), with: .color(.white.opacity(alpha)))
+                }
+            }
+            .shadow(color: .white.opacity(0.10), radius: 14)
+        }
+    }
+}
+
+private struct NexVaultOutlineView: View {
+    let vaultURL: URL
+    @State private var entries: [NexVaultOutlineEntry] = []
+
+    var body: some View {
+        ScrollView {
+            LazyVStack(alignment: .leading, spacing: 3) {
+                if entries.isEmpty {
+                    Text("Indexing vault…")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                ForEach(entries) { entry in
+                    Button {
+                        NSWorkspace.shared.open(entry.url)
+                    } label: {
+                        HStack(spacing: 6) {
+                            Image(systemName: entry.isDirectory ? "folder" : "doc.text")
+                                .font(.caption2)
+                                .foregroundStyle(entry.isDirectory ? .yellow.opacity(0.9) : .white.opacity(0.58))
+                            Text(entry.name)
+                                .lineLimit(1)
+                                .font(.caption)
+                        }
+                        .padding(.leading, CGFloat(entry.depth) * 11)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.vertical, 3)
+                    }
+                    .buttonStyle(.plain)
+                    .help(entry.url.path)
+                }
+            }
+        }
+        .task(id: vaultURL) { entries = NexVaultOutlineEntry.scan(root: vaultURL) }
+    }
+}
+
+private struct NexVaultOutlineEntry: Identifiable {
+    let url: URL
+    let name: String
+    let depth: Int
+    let isDirectory: Bool
+    var id: String { url.path }
+
+    static func scan(root: URL) -> [Self] {
+        var output: [Self] = []
+        func visit(_ directory: URL, depth: Int) {
+            guard output.count < 450,
+                  let children = try? FileManager.default.contentsOfDirectory(
+                    at: directory,
+                    includingPropertiesForKeys: [.isDirectoryKey, .isHiddenKey],
+                    options: [.skipsPackageDescendants]
+                  ) else { return }
+            for url in children.sorted(by: { $0.lastPathComponent.localizedStandardCompare($1.lastPathComponent) == .orderedAscending }) {
+                let values = try? url.resourceValues(forKeys: [.isDirectoryKey, .isHiddenKey])
+                guard values?.isHidden != true else { continue }
+                let isDirectory = values?.isDirectory == true
+                guard isDirectory || url.pathExtension.lowercased() == "md" else { continue }
+                output.append(.init(url: url, name: url.deletingPathExtension().lastPathComponent, depth: depth, isDirectory: isDirectory))
+                if isDirectory { visit(url, depth: depth + 1) }
+            }
+        }
+        visit(root, depth: 0)
+        return output
+    }
+}
+
 private struct SpinningUSDZView: NSViewRepresentable {
     let assetName: String
     var cameraDistance: Float = 3.1
+    var presentationTilt: Float = 0
 
     func makeNSView(context: Context) -> SCNView {
         let view = SCNView()
@@ -898,6 +1489,9 @@ private struct SpinningUSDZView: NSViewRepresentable {
         content.position = SCNVector3(-center.x, -center.y, -center.z)
 
         let spinner = SCNNode()
+        // A tiny consistent downward cant makes the three Connect machines
+        // read as physical objects without giving one node a different light.
+        spinner.eulerAngles.x = CGFloat(presentationTilt)
         spinner.addChildNode(content)
         spinner.runAction(.repeatForever(.rotateBy(x: 0, y: .pi * 2, z: 0, duration: 12)))
         scene.rootNode.addChildNode(spinner)
@@ -932,7 +1526,7 @@ private struct SpinningUSDZView: NSViewRepresentable {
         view.scene = scene
     }
 
-    private var viewIdentifier: String { "\(assetName):\(cameraDistance)" }
+    private var viewIdentifier: String { "\(assetName):\(cameraDistance):\(presentationTilt)" }
 
     private static func bounds(of root: SCNNode) -> (center: SCNVector3, radius: Float) {
         var minimum = SCNVector3(Float.greatestFiniteMagnitude, Float.greatestFiniteMagnitude, Float.greatestFiniteMagnitude)

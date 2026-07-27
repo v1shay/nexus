@@ -171,12 +171,44 @@ actor NexMessagesActionCatalog {
         try await registry.register(manifest: Self.draftManifest) { args, _ in
             guard let recipient = args["recipient"]?.string, let body = args["body"]?.string else { throw NexToolError.missingField(args["recipient"] == nil ? "recipient" : "body") }
             let draft = try await drafts.create(recipient: recipient, body: body)
-            return .object(["display": .string("Drafted a message to \(recipient)."), "messageDraftId": .string(draft.id.uuidString), "status": .string("drafted")])
+            // The card is meant to look like a real conversation, not a
+            // decorative confirmation. History is best-effort because Full
+            // Disk Access may not be granted; the draft itself remains fully
+            // usable either way.
+            let recent = (try? await history.search(
+                query: nil,
+                sender: recipient,
+                conversation: nil,
+                after: nil,
+                before: nil,
+                limit: 4
+            )) ?? []
+            return .object([
+                "display": .string("Drafted a message to \(recipient)."),
+                "messageDraftId": .string(draft.id.uuidString),
+                "recipient": .string(recipient),
+                "body": .string(body),
+                "items": .array(recent.map(Self.recordString)),
+                "status": .string("drafted")
+            ])
         }
         try await registry.register(manifest: Self.sendManifest) { args, _ in
-            guard let raw = args["messageDraftId"]?.string, let id = UUID(uuidString: raw), let draft = await drafts.draft(id: id), draft.sentAt == nil else { throw NexToolError.invalidStableID(args["messageDraftId"]?.string ?? "") }
+            guard let raw = args["messageDraftId"]?.string,
+                  let id = UUID(uuidString: raw),
+                  let draft = await drafts.draft(id: id),
+                  draft.sentAt == nil,
+                  args["recipient"]?.string == draft.recipient,
+                  args["body"]?.string == draft.body else {
+                throw NexToolError.invalidStableID(args["messageDraftId"]?.string ?? "")
+            }
             try await sender.send(body: draft.body, recipient: draft.recipient); try await drafts.markSent(id: id)
-            return .object(["display": .string("Sent the confirmed message to \(draft.recipient)."), "messageDraftId": .string(id.uuidString), "status": .string("sent")])
+            return .object([
+                "display": .string("Sent the confirmed message to \(draft.recipient)."),
+                "messageDraftId": .string(id.uuidString),
+                "recipient": .string(draft.recipient),
+                "body": .string(draft.body),
+                "status": .string("sent")
+            ])
         }
         try await registry.register(manifest: Self.conversationManifest) { args, _ in guard let recipient = args["recipient"]?.string else { throw NexToolError.missingField("recipient") }; try await sender.openConversation(recipient: recipient); return Self.simple("Opened the Messages conversation.") }
         registered = true
@@ -187,7 +219,12 @@ actor NexMessagesActionCatalog {
     private static func simple(_ display: String) -> NexJSONValue { .object(["display": .string(display), "status": .string("completed")]) }
     private static let simpleOutput = NexToolInputSchema(fields: ["display": .init(.string, required: true), "status": .init(.string, required: true)])
     private static let listOutput = NexToolInputSchema(fields: ["display": .init(.string, required: true), "count": .init(.integer, required: true), "items": .init(.stringArray, required: true)])
-    private static let draftOutput = NexToolInputSchema(fields: ["display": .init(.string, required: true), "messageDraftId": .init(.string, required: true), "status": .init(.string, required: true)])
+    private static let draftOutput = NexToolInputSchema(fields: [
+        "display": .init(.string, required: true), "messageDraftId": .init(.string, required: true),
+        "recipient": .init(.string, required: true), "body": .init(.string, required: true),
+        "items": .init(.stringArray),
+        "status": .init(.string, required: true)
+    ])
     private static let messagePermissions = [NexComputerPermissionRequirement(id: "full_disk_access.messages", permission: .files, recovery: "Open System Settings > Privacy & Security > Full Disk Access and allow Nexus to read Messages history.")]
     private static let contactsPermissions = [NexComputerPermissionRequirement(id: "contacts", permission: .automation)]
     private static let automationPermissions = [NexComputerPermissionRequirement(id: "automation.com.apple.MobileSMS", permission: .automation)]
@@ -196,8 +233,8 @@ actor NexMessagesActionCatalog {
     private static let contactsManifest = manifest("messages.search_contacts", "Search Contacts by person name and return stable contact IDs plus all candidate handles for safe ambiguity resolution.", ["Find Sam in my contacts"], .init(fields: ["name": .init(.string, required: true), "limit": .init(.integer, minimum: 1, maximum: 25)]), listOutput, .low, .never, contactsPermissions, .nativeAPI)
     private static let searchManifest = manifest("messages.search", "Read-only search of local Messages history by text, sender, conversation, date range, and limit.", ["Find messages from Sam about robotics"], searchInput, listOutput, .low, .never, messagePermissions, .nativeAPI)
     private static let triageManifest = manifest("messages.triage", "Return bounded Messages records with stable IDs, participants, timestamps, conversation, attachment metadata, read state, and text for triage.", ["Triage my recent unread project messages"], searchInput, listOutput, .low, .never, messagePermissions, .nativeAPI)
-    private static let draftManifest = manifest("messages.draft", "Create and persist a message draft for one exact recipient handle without sending it.", ["Draft a message to this contact"], .init(fields: ["recipient": .init(.string, required: true), "body": .init(.string, required: true)]), draftOutput, .medium, .whenRequired, [], .nativeAPI)
-    private static let sendManifest = manifest("messages.send_draft", "Send one immutable persisted message draft by its stable messageDraftId.", ["Send the drafted message"], .init(fields: ["messageDraftId": .init(.string, required: true)]), draftOutput, .high, .always, automationPermissions, .appleScript)
+    private static let draftManifest = manifest("messages.draft", "Create and persist a message draft for one exact recipient handle without sending it.", ["Draft a message to this contact"], .init(fields: ["recipient": .init(.string, required: true), "body": .init(.string, required: true)]), draftOutput, .low, .never, [], .nativeAPI)
+    private static let sendManifest = manifest("messages.send_draft", "Send one immutable persisted message draft. recipient and body must exactly match the stored draft, so the confirmation previews the real message.", ["Send the drafted message"], .init(fields: ["messageDraftId": .init(.string, required: true), "recipient": .init(.string, required: true), "body": .init(.string, required: true)]), draftOutput, .high, .always, automationPermissions, .appleScript)
     private static let conversationManifest = manifest("messages.open_conversation", "Open Messages to one exact resolved phone number or email address.", ["Open my conversation with Sam"], .init(fields: ["recipient": .init(.string, required: true)]), simpleOutput, .low, .never, [], .urlScheme)
     private static func manifest(_ id: String, _ description: String, _ examples: [String], _ input: NexToolInputSchema, _ output: NexToolInputSchema, _ risk: NexComputerRiskClass, _ confirmation: NexComputerConfirmationPolicy, _ permissions: [NexComputerPermissionRequirement], _ method: NexComputerImplementationMethod) -> NexComputerActionManifest {
         .init(actionID: id, application: "Messages", provider: "Apple Messages", bundleIdentifier: method == .appleScript ? "com.apple.MobileSMS" : nil, description: description, examples: examples,

@@ -3,19 +3,23 @@ import Foundation
 enum NexusAPIProviderKind: String, CaseIterable, Codable, Identifiable, Sendable {
     /// Kept for previously saved custom configurations and internal managed
     /// OpenAI-compatible providers. The API sheet intentionally exposes only
-    /// the two verified presets below.
+    /// the verified presets below.
     case openAICompatible
     case gemini
     case nvidiaNIM
+    case groq
+    case openRouter
 
     var id: String { rawValue }
-    static let supportedPresets: [Self] = [.gemini, .nvidiaNIM]
+    static let supportedPresets: [Self] = [.gemini, .nvidiaNIM, .groq, .openRouter]
 
     var title: String {
         switch self {
         case .openAICompatible: "OpenAI-compatible"
         case .gemini: "Gemini"
         case .nvidiaNIM: "NVIDIA NIM"
+        case .groq: "Groq"
+        case .openRouter: "OpenRouter"
         }
     }
 
@@ -26,6 +30,8 @@ enum NexusAPIProviderKind: String, CaseIterable, Codable, Identifiable, Sendable
         // that works with Nexus's streaming tool-plan and response transport.
         case .gemini: "https://generativelanguage.googleapis.com/v1beta/openai"
         case .nvidiaNIM: "https://integrate.api.nvidia.com/v1"
+        case .groq: "https://api.groq.com/openai/v1"
+        case .openRouter: "https://openrouter.ai/api/v1"
         }
     }
 
@@ -34,6 +40,10 @@ enum NexusAPIProviderKind: String, CaseIterable, Codable, Identifiable, Sendable
         case .openAICompatible: ""
         case .gemini: "gemini-2.5-flash"
         case .nvidiaNIM: "openai/gpt-oss-120b"
+        case .groq: "llama-3.3-70b-versatile"
+        // A free model is the safe preset. OpenRouter is always an explicit
+        // selection, never part of Nexus's automatic cloud fallback chain.
+        case .openRouter: "inclusionai/ling-3.0-flash:free"
         }
     }
 
@@ -42,6 +52,8 @@ enum NexusAPIProviderKind: String, CaseIterable, Codable, Identifiable, Sendable
         case .openAICompatible: "primary-model-api-key.v1"
         case .gemini: "gemini-api-key.v1"
         case .nvidiaNIM: "nvidia.nim.v1"
+        case .groq: "groq-api-key.v1"
+        case .openRouter: "openrouter-api-key.v1"
         }
     }
 
@@ -51,6 +63,10 @@ enum NexusAPIProviderKind: String, CaseIterable, Codable, Identifiable, Sendable
             "Gemini via Google’s OpenAI-compatible endpoint. Use a Google AI Studio API key."
         case .nvidiaNIM:
             "NVIDIA NIM GPT-OSS 120B via NVIDIA’s OpenAI-compatible inference endpoint."
+        case .groq:
+            "Groq via its OpenAI-compatible inference endpoint."
+        case .openRouter:
+            "OpenRouter via its OpenAI-compatible endpoint. This provider is used only when you explicitly select it."
         case .openAICompatible:
             "Custom OpenAI-compatible endpoint."
         }
@@ -103,16 +119,23 @@ final class NexusAPIProviderStore: ObservableObject {
         if restoredKind == .openAICompatible,
            storedBaseURL.localizedCaseInsensitiveContains("generativelanguage.googleapis.com") || storedModel.lowercased().contains("gemini") {
             inferredKind = .gemini
-        } else if restoredKind == .openAICompatible,
-                  storedBaseURL.localizedCaseInsensitiveContains("integrate.api.nvidia.com") {
-            inferredKind = .nvidiaNIM
+        } else if restoredKind == .openAICompatible {
+            if storedBaseURL.localizedCaseInsensitiveContains("integrate.api.nvidia.com") {
+                inferredKind = .nvidiaNIM
+            } else if storedBaseURL.localizedCaseInsensitiveContains("api.groq.com") {
+                inferredKind = .groq
+            } else if storedBaseURL.localizedCaseInsensitiveContains("openrouter.ai") {
+                inferredKind = .openRouter
+            } else {
+                inferredKind = restoredKind
+            }
         } else {
             inferredKind = restoredKind
         }
         self.enabled = stored?["enabled"] as? Bool ?? false
         self.kind = inferredKind
-        // The visible Gemini and NIM choices are verified presets, not loose
-        // endpoint fields. Normalize old saved native-Gemini URLs on launch.
+        // The visible presets are verified, not loose endpoint fields.
+        // Normalize old saved native-Gemini URLs on launch.
         self.baseURL = inferredKind == .openAICompatible
             ? (storedBaseURL.isEmpty ? inferredKind.defaultBaseURL : storedBaseURL)
             : inferredKind.defaultBaseURL
@@ -300,7 +323,7 @@ enum NexusAPIProviderClient {
         onDelta: @escaping @Sendable (String, String) async -> Void
     ) async throws -> String {
         switch configuration.kind {
-        case .openAICompatible, .nvidiaNIM:
+        case .openAICompatible, .nvidiaNIM, .groq, .openRouter:
             try await openAICompatible(configuration, messages, temperature, maximumTokens, onDelta)
         case .gemini:
             // The configured Gemini preset is Google's OpenAI-compatible API.

@@ -18,10 +18,20 @@ enum NexusResponseInstructions {
 
     Use only the exact names below when native tool definitions are available. Never invent a tool name, argument, source ID, file path, web result, or playback result.
 
+    ## Capability Discovery Before Refusal
+
+    The supplied functions are only a small semantic shortlist. For a concrete external action not listed, first call `search_tools` with a complete standalone capability and target. If it returns an available action, call it next; if it returns only unavailable actions, name the permission or connection problem. Say Nexus lacks a capability only after no applicable available action is returned. Do not search for intrinsic answers, writing, math, or visible follow-ups.
+
+    - `search_tools`: Semantically discover registered Nexus actions when the requested external capability is not present in this turn's named function list. Use a standalone `query` describing what Sir wants done, not an app name guess or a one-word fragment. It only discovers an explicit allowlist; after a result, call the matching returned action rather than treating discovery as completion.
     - `memory_search`: Search long-term Obsidian memory and explicitly saved chats when the answer depends on Sir’s prior chats, preferences, projects, school, schedule, goals, history, or other personal facts that are absent from the active conversation. Use a focused retrieval query. `document_types` accepts only `memory` or `chat`; use `memory_kinds` for categories such as `project`, `goal`, `preference`, `person`, `organization`, `decision`, `knowledge`, or `personal_context`. Do not use this for a visible active-chat turn.
     - `memory_get`: Read one stored item only when `memory_search` has returned its exact stable `source_id` and the returned summary or excerpt is not enough. Pass that returned `source_id`; never invent one.
     - `conversation_recall`: The active conversation is already supplied, so do not use `scope: "current"` for ordinary follow-ups. Use `scope: "saved"` with a focused `query` only when an explicitly saved past conversation, rather than a durable memory, is needed and is absent from the active conversation. Use `scope: "all"` only when both the live summary and saved history are genuinely needed.
     - `web_search`: Search the live web whenever the answer needs current, changing, time-sensitive, uncertain, niche, documentation, pricing, news, weather, sports, regulations, versions, releases, APIs, calendars, companies, or another verifiable public fact. Never say you lack real-time access without trying it. Use a focused standalone `query` containing the real objective, important entities, location, and relevant date/recency. Never copy the full request, reuse an unrelated earlier topic, or issue a one-word query.
+    - `browser.visit_url`: Use Nexus's separate managed browser for a simple explicit request to visit, open, or inspect one complete HTTP(S) URL. Supply only `url`; Nexus itself safely navigates and extracts the readable page text. Prefer this over `browser.run_task` for ordinary one-page inspection so you do not need to construct browser-step JSON.
+    - `browser.run_task`: Use Nexus's separate managed browser for a complex agentic browser action: navigation across multiple pages, click, sign in, fill a form, upload/download, or take a screenshot. Supply one concise `goal` and `steps_json`, a JSON array made only of supported steps (`navigate`, `new_tab`, `activate_tab`, `close_tab`, `click`, `type`, `form`, `extract`, `upload`, `download`, `screenshot`). Do not use it to answer a normal current-facts question when web search results are enough.
+    - `browser.open_profile`: Use when Sir wants to sign in to a private site for future Nexus browser work. It opens a separate persistent Nexus Chrome profile. Tell him to sign in there once and close that Nexus Chrome window before automated tasks; never claim that normal Chrome passwords or cookies can be imported.
+    - `browser.import_chrome_profile`: Use only when Sir asks to import normal Chrome browser state. It imports bookmarks, history, and preferences after Chrome is closed; passwords, cookies, and Keychain sessions are intentionally not copied.
+    - `chrome.*`: Use live Chrome only if Sir explicitly refers to an existing tab, asks to switch/open/close a live tab, or uses an existing Chrome tab for YouTube playback. Otherwise, browser work stays in the Nexus-managed browser.
     - `nex_cli_task`: For a request to build, create, implement, code, develop, refactor, scaffold, fix, test, run, validate, or generate software or another file-based artifact beyond a small requested snippet, use this tool. Send a precise standalone `prompt` preserving concrete requirements and relevant active-chat context, plus a short `title`. NexCLI owns implementation, permissions, streamed progress, and artifacts; do not pretend an implementation exists before it succeeds.
     - `nex_cli_set_workspace`: Use only when Sir explicitly asks to start, switch to, or resume a named coding folder. Pass a human-readable `name`, never a filesystem path. Otherwise, `nex_cli_task` continues in the current persistent app-managed workspace, including after restarts and after files were created.
     - `youtube_play_current`: Use with no arguments when Sir asks to play, show, or continue the YouTube or YouTube Music video in the active Google Chrome tab.
@@ -29,21 +39,23 @@ enum NexusResponseInstructions {
     - `youtube_play`: Use only after `youtube_search`, passing exactly one returned `video_id`. Never invent a video ID.
     - `youtube_fullscreen`: Use with no arguments only when a Nex YouTube player is already open and Sir asks to enlarge it, make it big, or full-screen it.
 
-    When personal stored context and current public evidence are both necessary, use both `memory_search` and `web_search`, then combine only their actual results. Independent tools may run together. Do not substitute `web_search` for YouTube playback.
+    **Web research versus browser action:** `web_search` discovers public facts and returns sources. It does not open a browser session, visit a URL, click, log in, fill forms, download files, or inspect a specified page. If Sir explicitly says “use Nexus browser,” “open this website,” “go to this URL,” or “inspect this page,” select `browser.visit_url` for one known URL, or `browser.run_task` for a multi-step interaction. Never substitute `web_search` for an explicit Nexus-browser request. Once a browser tool returns readable page text, answer Sir's original request directly from that evidence; never respond with only the site name, URL, or a generic claim that the page was opened. If he asks a factual question such as “what changed in Swift?” or “what is the weather tomorrow?”, select `web_search`, not browser tools. Use both only when one is needed to discover a URL or facts and the other is needed to act on the discovered result. Do not substitute `web_search` for YouTube playback.
 
     ## Durable Memory Policy
 
-    `memory_propose` and `memory_forget` are registered, policy-owned write tools. Do not call either directly. Instead, propose `memory_write` only when a durable, user-supported preference, correction, decision, workflow, explicit remember request, or explicit forget request should be retained. Use `append`, `update`, or `forget` with concise supported content. Do not propose memory writes for temporary facts, one-time requests, speculation, sensitive information without an explicit request, or assistant-generated assumptions. Nexus validates evidence, deduplicates, chooses the Obsidian file, and maps the approved proposal to `memory_propose` or `memory_forget`.
+    `memory_propose` and `memory_forget` are policy-owned. Do not call either directly. Propose `memory_write` only for a durable, user-supported preference, correction, decision, workflow, or explicit remember/forget request. Use concise `append`, `update`, or `forget` content. Never propose temporary facts, speculation, unsupported assumptions, or sensitive information without an explicit request. Nexus validates, deduplicates, chooses the Obsidian file, and executes approved proposals.
 
     ## Direct Answers
 
-    Use no tool for stable explanations, writing, rewriting, brainstorming, math, small requested snippets, or details already visible in the active conversation. The primary model must keep the original user request and active conversation; tool outputs are evidence, not replacements for either.
+    Use no tool for stable explanations, writing, brainstorming, math, small snippets, or details visible in the active conversation. Keep the original request and active conversation; tool outputs are evidence, not replacements.
 
     ## Never Fabricate
 
     Never invent memory results, web results, tool outputs, citations, URLs, personal facts, source IDs, video IDs, files, or completed work. If a tool fails or evidence cannot be found, say so briefly. Do not expose internal tool names, source IDs, raw tool JSON, or routing details in the user-facing answer unless Sir explicitly asks.
 
-    Core rule: personal missing from active chat → `memory_search`; current or externally verifiable → `web_search`; coding → `nex_cli_task`; explicit workspace change → `nex_cli_set_workspace`; current Chrome YouTube video → `youtube_play_current`; find/play YouTube → `youtube_search` then `youtube_play`; existing Nex YouTube playback enlargement → `youtube_fullscreen`; durable user-supported memory change → `memory_write`; mixed request → every required tool; known stable fact → answer directly.
+    Nexus executes tool calls in a separate planning turn. In a normal final answer, never emit `<tool_call>`, `<arg_key>`, `<arg_value>`, JSON tool payloads, or any other raw function-call markup. Use the actual result from the completed tool instead.
+
+    Core rule: personal missing from active chat → `memory_search`; current facts/research → `web_search`; inspect one known URL in Nexus browser → `browser.visit_url`; complex browser interaction → `browser.run_task`; sign in to a private Nexus browser session → `browser.open_profile`; coding → `nex_cli_task`; explicit workspace change → `nex_cli_set_workspace`; current Chrome YouTube video → `youtube_play_current`; find/play YouTube → `youtube_search` then `youtube_play`; existing Nex YouTube playback enlargement → `youtube_fullscreen`; durable user-supported memory change → `memory_write`; mixed request → every required tool; known stable fact → answer directly.
     """
 
     static var completeSystemPrompt: String { conciseSystemPrompt }
@@ -206,6 +218,7 @@ final class OllamaManager: @unchecked Sendable {
         messages: [NexusChatMessage],
         temperature: Double? = nil,
         maximumTokens: Int? = nil,
+        includeNexusSystemPrompt: Bool = true,
         onDelta: @escaping @Sendable (_ delta: String, _ accumulated: String) async -> Void
     ) async throws -> String {
         try await streamChat(
@@ -214,6 +227,7 @@ final class OllamaManager: @unchecked Sendable {
             temperature: temperature,
             maximumTokens: maximumTokens,
             includeThinking: false,
+            includeNexusSystemPrompt: includeNexusSystemPrompt,
             onThinkingDelta: nil,
             onDelta: onDelta
         )
@@ -227,6 +241,7 @@ final class OllamaManager: @unchecked Sendable {
         temperature: Double? = nil,
         maximumTokens: Int? = nil,
         includeThinking: Bool,
+        includeNexusSystemPrompt: Bool = true,
         onThinkingDelta: (@Sendable (_ delta: String, _ accumulated: String) async -> Void)?,
         onDelta: @escaping @Sendable (_ delta: String, _ accumulated: String) async -> Void
     ) async throws -> String {
@@ -238,7 +253,7 @@ final class OllamaManager: @unchecked Sendable {
         request.httpBody = try JSONEncoder().encode(
             OllamaChatRequest(
                 model: model,
-                messages: [.init(role: "system", content: NexusResponseInstructions.completeSystemPrompt)]
+                messages: (includeNexusSystemPrompt ? [.init(role: "system", content: NexusResponseInstructions.completeSystemPrompt)] : [])
                     + messages.map { .init(role: $0.role, content: $0.content) },
                 stream: true,
                 // `nil` lets thinking-capable models choose their own default.
@@ -739,6 +754,7 @@ final class LMStudioManager: @unchecked Sendable {
         messages: [NexusChatMessage],
         temperature: Double? = nil,
         maximumTokens: Int? = nil,
+        includeNexusSystemPrompt: Bool = true,
         onDelta: @escaping @Sendable (_ delta: String, _ accumulated: String) async -> Void
     ) async throws -> String {
         try await ensureServerRunning()
@@ -750,7 +766,7 @@ final class LMStudioManager: @unchecked Sendable {
         request.httpBody = try JSONEncoder().encode(
             OpenAIChatRequest(
                 model: resolvedModel,
-                messages: [.init(role: "system", content: NexusResponseInstructions.completeSystemPrompt)]
+                messages: (includeNexusSystemPrompt ? [.init(role: "system", content: NexusResponseInstructions.completeSystemPrompt)] : [])
                     + messages.map { .init(role: $0.role, content: $0.content) },
                 stream: true,
                 temperature: temperature,

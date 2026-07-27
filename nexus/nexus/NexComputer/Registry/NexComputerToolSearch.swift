@@ -1,4 +1,5 @@
 import Foundation
+import NaturalLanguage
 
 enum NexToolSearchAvailabilityPolicy: Equatable, Sendable {
     case omitUnavailable
@@ -25,8 +26,10 @@ struct NexToolSearchResult: Codable, Equatable, Sendable {
     let candidates: [NexToolSearchCandidate]
 }
 
-/// Pure local retrieval over semantic action metadata. It intentionally has
+/// Local hybrid retrieval over semantic action metadata. It intentionally has
 /// no app-name routing table: ranking comes from each action's own manifest.
+/// Lexical matches win when present; a small on-device embedding fallback
+/// covers natural capability wording such as “text someone” → Messages.
 struct NexToolSearchEngine: Sendable {
     struct Document: Sendable {
         let tool: NexRegisteredTool
@@ -125,7 +128,23 @@ struct NexToolSearchEngine: Sendable {
         Self.addTerms(from: fields, weight: 2, into: &weightedTerms)
 
         let matched = queryTerms.filter { weightedTerms[$0] != nil }
-        guard !matched.isEmpty else { return 0 }
+        if matched.isEmpty {
+            // The action manifests are canonical, but users naturally ask for
+            // capabilities rather than the exact app or tool wording. Only
+            // use embedding similarity as a fallback, so exact registry
+            // matches remain deterministic and higher-confidence.
+            let semanticScore = Self.semanticCapabilityScore(
+                query: query,
+                manifestValues: [
+                    tool.name,
+                    tool.application,
+                    tool.provider,
+                    tool.description
+                ] + tool.aliases + tool.tags + narratives
+            )
+            guard semanticScore >= Self.minimumSemanticCapabilityScore else { return 0 }
+            return 4 + semanticScore * 8
+        }
         var score = matched.reduce(0) { $0 + (weightedTerms[$1] ?? 0) }
         score += Double(matched.count) / Double(queryTerms.count) * 6
 
@@ -140,6 +159,50 @@ struct NexToolSearchEngine: Sendable {
         }
         return score
     }
+
+    /// A deliberately conservative semantic fallback. We compare only the
+    /// meaningful noun-like request terms with vocabulary supplied by a tool's
+    /// registered manifest. That avoids a hidden, app-specific keyword router
+    /// while allowing related language to discover the right capability.
+    private static func semanticCapabilityScore(
+        query: String,
+        manifestValues: [String]
+    ) -> Double {
+        guard let embedding = NLEmbedding.wordEmbedding(for: .english) else { return 0 }
+        let queryTerms = semanticTokens(query)
+            .filter { !$0.isEmpty && !semanticActionWords.contains($0) }
+            .sorted()
+            .prefix(8)
+        let candidates = Array(Set(manifestValues.flatMap(semanticTokens)))
+            .filter { $0.count > 2 && !semanticActionWords.contains($0) }
+            .sorted()
+            .prefix(72)
+        guard !queryTerms.isEmpty, !candidates.isEmpty else { return 0 }
+
+        var strongestMatch = 0.0
+        for queryTerm in queryTerms where embedding.contains(queryTerm) {
+            var nearestDistance: Double?
+            for candidateTerm in candidates where embedding.contains(candidateTerm) {
+                let distance = embedding.distance(between: queryTerm, and: candidateTerm)
+                nearestDistance = min(nearestDistance ?? distance, distance)
+            }
+            guard let nearestDistance else { continue }
+
+            // Distances near 0.95 capture related concepts such as
+            // “text” and “message”; unrelated vocabulary is normally beyond
+            // the 1.2 cutoff. Keep this intentionally strict.
+            let similarity = max(0, min(1, (1.2 - nearestDistance) / 0.5))
+            strongestMatch = max(strongestMatch, similarity)
+        }
+        return strongestMatch
+    }
+
+    private static let minimumSemanticCapabilityScore = 0.35
+    private static let semanticActionWords: Set<String> = [
+        "ask", "build", "can", "check", "create", "do", "find", "get", "help",
+        "look", "make", "need", "open", "please", "run", "search", "send", "show",
+        "start", "stop", "tell", "try", "use", "want", "write"
+    ]
 
     private func deduplicated(_ documents: [Document]) -> [Document] {
         var retained: [String: Document] = [:]
@@ -188,19 +251,26 @@ struct NexToolSearchEngine: Sendable {
     }
 
     private static func tokens(_ text: String) -> [String] {
-        let stopWords: Set<String> = [
-            "a", "an", "and", "are", "as", "at", "be", "by", "can", "do", "for",
-            "from", "i", "in", "is", "it", "me", "my", "of", "on", "or", "please",
-            "that", "the", "this", "to", "with", "you"
-        ]
+        semanticTokens(text).map(stem)
+    }
+
+    /// Keeps the original word for embedding lookup. The lexical index uses
+    /// `tokens(_:)` above and may stem words; embeddings must receive natural
+    /// forms such as “messages,” not the index-only form “messag.”
+    private static func semanticTokens(_ text: String) -> [String] {
         return text
             .lowercased()
             .replacingOccurrences(of: "_", with: " ")
             .replacingOccurrences(of: ".", with: " ")
             .components(separatedBy: CharacterSet.alphanumerics.inverted)
             .filter { !$0.isEmpty && !stopWords.contains($0) }
-            .map(stem)
     }
+
+    private static let stopWords: Set<String> = [
+        "a", "an", "and", "are", "as", "at", "be", "by", "can", "do", "for",
+        "from", "i", "in", "is", "it", "me", "my", "of", "on", "or", "please",
+        "that", "the", "this", "to", "with", "you"
+    ]
 
     private static func stem(_ token: String) -> String {
         for suffix in ["ing", "ed", "es", "s"] where token.count > suffix.count + 3 {

@@ -8,14 +8,45 @@ protocol NexusSecretStore: Sendable {
     func delete(account: String) throws
 }
 
+/// Keeps automated UI/CLI verification hermetic.  It is intentionally a
+/// *process-local* secret store: test launches must never read, write, or
+/// trigger an ACL prompt for the user's login Keychain.  This is not a
+/// production credential cache and it is never enabled in a normal launch.
+enum NexusSecretStoreRuntime {
+    static var usesEphemeralStore: Bool {
+        let arguments = ProcessInfo.processInfo.arguments
+        return arguments.contains("--nexus-ui-testing")
+            || arguments.contains("--nexus-ui-smoke")
+            || arguments.contains("--nexus-automation")
+            || ProcessInfo.processInfo.environment["NEXUS_AUTOMATION"] == "1"
+    }
+
+    /// Deterministic answers belong only in the UI test profile. Command-line
+    /// automation still executes real implementation paths.
+    static var usesSyntheticResponse: Bool {
+        let arguments = ProcessInfo.processInfo.arguments
+        return arguments.contains("--nexus-ui-testing")
+            || arguments.contains("--nexus-ui-smoke")
+            || arguments.contains("--nexus-automation-ui")
+    }
+}
+
 final class NexusKeychainSecretStore: NexusSecretStore, @unchecked Sendable {
     private let service: String
+    private let ephemeralStore: NexusMemorySecretStore?
 
-    init(service: String = "na.nexus.connect") {
+    init(
+        service: String = "na.nexus.connect",
+        useEphemeralStore: Bool = NexusSecretStoreRuntime.usesEphemeralStore
+    ) {
         self.service = service
+        self.ephemeralStore = useEphemeralStore
+            ? NexusMemorySecretStore()
+            : nil
     }
 
     func data(for account: String) throws -> Data? {
+        if let ephemeralStore { return try ephemeralStore.data(for: account) }
         var query = baseQuery(account: account)
         query[kSecReturnData as String] = true
         query[kSecMatchLimit as String] = kSecMatchLimitOne
@@ -29,6 +60,10 @@ final class NexusKeychainSecretStore: NexusSecretStore, @unchecked Sendable {
     }
 
     func set(_ data: Data, for account: String) throws {
+        if let ephemeralStore {
+            try ephemeralStore.set(data, for: account)
+            return
+        }
         let query = baseQuery(account: account)
         let updateStatus = SecItemUpdate(
             query as CFDictionary,
@@ -41,6 +76,10 @@ final class NexusKeychainSecretStore: NexusSecretStore, @unchecked Sendable {
         var add = query
         add[kSecValueData as String] = data
         add[kSecAttrSynchronizable as String] = false
+        // Allows normal background use after the user has unlocked the Mac
+        // once, while keeping credentials on this device.  It does not weaken
+        // the code-signing ACL that protects the item.
+        add[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
         let addStatus = SecItemAdd(add as CFDictionary, nil)
         guard addStatus == errSecSuccess else {
             throw NexusConnectError.unavailable("Keychain write failed (\(addStatus))")
@@ -48,6 +87,10 @@ final class NexusKeychainSecretStore: NexusSecretStore, @unchecked Sendable {
     }
 
     func delete(account: String) throws {
+        if let ephemeralStore {
+            try ephemeralStore.delete(account: account)
+            return
+        }
         let status = SecItemDelete(baseQuery(account: account) as CFDictionary)
         guard status == errSecSuccess || status == errSecItemNotFound else {
             throw NexusConnectError.unavailable("Keychain delete failed (\(status))")

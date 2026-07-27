@@ -12,6 +12,15 @@ enum NexConnectorProvider: String, CaseIterable, Codable, Identifiable, Sendable
     /// Discord is intentionally browser-only. Nexus never stores a Discord
     /// user credential or presents it as a connectable provider.
     var supportsUserConnection: Bool { self != .discord }
+
+    var bundledLogoName: String? {
+        switch self {
+        case .google: "ConnectorGoogle"
+        case .notion: "ConnectorNotion"
+        case .slack: "ConnectorSlack"
+        case .github, .discord: nil
+        }
+    }
 }
 
 enum NexOAuthTokenAuthentication: Sendable, Equatable {
@@ -682,8 +691,8 @@ enum NexConnectorSecurityPolicy {
 struct NexConnectionsSettingsView: View {
     @ObservedObject var controller: NexConnectorAuthController
     var body: some View {
-        Section("Connections") {
-            ForEach(NexConnectorProvider.allCases.filter(\.supportsUserConnection)) { provider in
+        VStack(spacing: 0) {
+            ForEach(Array(NexConnectorProvider.allCases.filter(\.supportsUserConnection).enumerated()), id: \.element.id) { index, provider in
                 let status = controller.statuses[provider]
                 DisclosureGroup {
                     VStack(alignment: .leading, spacing: 8) {
@@ -710,7 +719,9 @@ struct NexConnectionsSettingsView: View {
                     .padding(.top, 6)
                 } label: {
                     HStack {
+                        NexConnectorBrandMark(provider: provider)
                         Image(systemName: status?.connected == true ? (status?.healthy == true ? "checkmark.circle.fill" : "exclamationmark.circle.fill") : "circle")
+                            .font(.caption)
                             .foregroundStyle(status?.connected == true ? (status?.healthy == true ? .green : .orange) : .secondary)
                         VStack(alignment: .leading, spacing: 2) {
                             Text(provider.title).font(.headline)
@@ -721,10 +732,39 @@ struct NexConnectionsSettingsView: View {
                         if controller.activeProvider == provider { ProgressView().controlSize(.small) }
                     }
                 }
-                .padding(.vertical, 4)
+                .padding(.vertical, 10)
+                if index < NexConnectorProvider.allCases.filter(\.supportsUserConnection).count - 1 {
+                    Divider().opacity(0.22)
+                }
             }
         }
-        if let message = controller.message { Section { Text(message).font(.caption).textSelection(.enabled) } }
+        if let message = controller.message {
+            Text(message)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .textSelection(.enabled)
+                .padding(.top, 12)
+        }
+    }
+}
+
+private struct NexConnectorBrandMark: View {
+    let provider: NexConnectorProvider
+
+    var body: some View {
+        Group {
+            if let name = provider.bundledLogoName {
+                Image(name)
+                    .resizable()
+                    .scaledToFit()
+            } else {
+                Image(systemName: provider == .github ? "chevron.left.forwardslash.chevron.right" : "bubble.left.and.bubble.right")
+                    .symbolRenderingMode(.hierarchical)
+                    .foregroundStyle(.primary)
+            }
+        }
+        .frame(width: 22, height: 22)
+        .accessibilityLabel(provider.title)
     }
 }
 

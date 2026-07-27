@@ -339,9 +339,16 @@ actor NexFinderActionCatalog {
         return value
     }
     private static func date(_ raw: String?) -> Date? { raw.flatMap { ISO8601DateFormatter().date(from: $0) } }
-    private static func result(display: String, paths: [String]) -> NexJSONValue { .object(["display": .string(display), "paths": .array(paths.map(NexJSONValue.string)), "count": .number(Double(paths.count))]) }
+    private static func result(display: String, paths: [String]) -> NexJSONValue {
+        .object([
+            "display": .string(display),
+            "status": .string("completed"),
+            "paths": .array(paths.map(NexJSONValue.string)),
+            "count": .number(Double(paths.count))
+        ])
+    }
 
-    private static let output = NexToolInputSchema(fields: ["display": .init(.string, required: true), "paths": .init(.stringArray, required: true), "count": .init(.integer, required: true)])
+    private static let output = NexToolInputSchema(fields: ["display": .init(.string, required: true), "status": .init(.string, required: true), "paths": .init(.stringArray, required: true), "count": .init(.integer, required: true)])
     private static let finderPermission = [NexComputerPermissionRequirement(id: "automation.com.apple.finder", permission: .automation)]
     private static let collision = NexToolFieldSchema(.string, allowedValues: ["error", "replace", "keep_both"])
     private static let pathInput = NexToolInputSchema(fields: ["path": .init(.string, required: true)])
