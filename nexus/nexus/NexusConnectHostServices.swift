@@ -14,7 +14,7 @@ protocol NexusHostModelServing: Sendable {
     func streamChat(
         runtime: NexusRuntimeKind,
         model: String,
-        prompt: String,
+        messages: [NexusChatMessage],
         temperature: Double?,
         maximumTokens: Int?,
         onDelta: @escaping @Sendable (String, String) async -> Void
@@ -95,7 +95,7 @@ final class NexusLocalModelService: NexusHostModelServing, @unchecked Sendable {
     func streamChat(
         runtime: NexusRuntimeKind,
         model: String,
-        prompt: String,
+        messages: [NexusChatMessage],
         temperature: Double?,
         maximumTokens: Int?,
         onDelta: @escaping @Sendable (String, String) async -> Void
@@ -104,7 +104,7 @@ final class NexusLocalModelService: NexusHostModelServing, @unchecked Sendable {
         case .ollama:
             try await ollama.streamChat(
                 model: model,
-                messages: [.init(role: "user", content: prompt)],
+                messages: messages,
                 temperature: temperature,
                 maximumTokens: maximumTokens,
                 onDelta: onDelta
@@ -112,7 +112,7 @@ final class NexusLocalModelService: NexusHostModelServing, @unchecked Sendable {
         case .lmStudio:
             try await lmStudio.streamChat(
                 model: model,
-                messages: [.init(role: "user", content: prompt)],
+                messages: messages,
                 temperature: temperature,
                 maximumTokens: maximumTokens,
                 onDelta: onDelta
@@ -238,7 +238,7 @@ actor NexusHostRuntimeManager: NexusHostModelServing {
     func streamChat(
         runtime: NexusRuntimeKind,
         model: String,
-        prompt: String,
+        messages: [NexusChatMessage],
         temperature: Double?,
         maximumTokens: Int?,
         onDelta: @escaping @Sendable (String, String) async -> Void
@@ -247,7 +247,7 @@ actor NexusHostRuntimeManager: NexusHostModelServing {
         case .ollama:
             try await ollama.streamChat(
                 model: model,
-                messages: [.init(role: "user", content: prompt)],
+                messages: messages,
                 temperature: temperature,
                 maximumTokens: maximumTokens,
                 onDelta: onDelta
@@ -255,7 +255,7 @@ actor NexusHostRuntimeManager: NexusHostModelServing {
         case .lmStudio:
             try await lmStudio.streamChat(
                 model: model,
-                messages: [.init(role: "user", content: prompt)],
+                messages: messages,
                 temperature: temperature,
                 maximumTokens: maximumTokens,
                 onDelta: onDelta
@@ -561,11 +561,10 @@ actor NexusHostServiceExecutor {
     }
 
     private func inference(_ payload: NexusInferencePayload, emitter: NexusWorkloadEmitter) async throws {
-        let prompt = payload.messages.map { "\($0.role): \($0.content)" }.joined(separator: "\n\n")
         let answer = try await models.streamChat(
             runtime: payload.runtime,
             model: payload.model,
-            prompt: prompt,
+            messages: payload.messages,
             temperature: payload.temperature,
             maximumTokens: payload.maximumTokens
         ) { delta, accumulated in
@@ -589,7 +588,7 @@ actor NexusHostServiceExecutor {
         let answer = try await models.streamChat(
             runtime: payload.runtime,
             model: payload.model,
-            prompt: prompt,
+            messages: [.init(role: "user", content: prompt)],
             temperature: nil,
             maximumTokens: nil
         ) { delta, accumulated in

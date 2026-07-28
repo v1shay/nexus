@@ -48,7 +48,7 @@
 	<key>NSAppleEventsUsageDescription</key>
 	<string>Nexus reads local Spotify playback and the active browser tab to show music and video activity in the notch.</string>
 	<key>NSScreenCaptureUsageDescription</key>
-	<string>Nexus analyzes live system audio locally to animate the music orb. Audio is never saved or sent anywhere.</string>
+	<string>When you enable screen context for a vision model, Nexus captures your current screen and attaches it only to that prompt. Screen images are not saved.</string>
 	<key>NSSpeechRecognitionUsageDescription</key>
 	<string>Nexus converts your dictated speech into the transcript shown below the notch.</string>
 </dict>

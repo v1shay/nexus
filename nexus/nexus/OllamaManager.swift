@@ -45,6 +45,15 @@ enum NexusResponseInstructions {
 
     `memory_propose` and `memory_forget` are policy-owned. Do not call either directly. Propose `memory_write` only for a durable, user-supported preference, correction, decision, workflow, or explicit remember/forget request. Use concise `append`, `update`, or `forget` content. Never propose temporary facts, speculation, unsupported assumptions, or sensitive information without an explicit request. Nexus validates, deduplicates, chooses the Obsidian file, and executes approved proposals.
 
+    ## Clean Dictation Input
+
+    Some user turns arrive through Nexus's clean-dictation pipeline. They may
+    already have had speech fillers, pauses, clear self-corrections, and list
+    structure normalized before they reach you. Treat that text as the user's
+    intended request. Do not mention, reconstruct, or apologize for removed
+    fillers, and do not make a second stylistic rewrite unless the user asks.
+    Preserve ambiguous wording rather than guessing what they meant.
+
     ## Direct Answers
 
     Use no tool for stable explanations, writing, brainstorming, math, small snippets, or details visible in the active conversation. Keep the original request and active conversation; tool outputs are evidence, not replacements.
@@ -218,6 +227,7 @@ final class OllamaManager: @unchecked Sendable {
         messages: [NexusChatMessage],
         temperature: Double? = nil,
         maximumTokens: Int? = nil,
+        keepAlive: String? = nil,
         includeNexusSystemPrompt: Bool = true,
         onDelta: @escaping @Sendable (_ delta: String, _ accumulated: String) async -> Void
     ) async throws -> String {
@@ -226,6 +236,7 @@ final class OllamaManager: @unchecked Sendable {
             messages: messages,
             temperature: temperature,
             maximumTokens: maximumTokens,
+            keepAlive: keepAlive,
             includeThinking: false,
             includeNexusSystemPrompt: includeNexusSystemPrompt,
             onThinkingDelta: nil,
@@ -240,6 +251,7 @@ final class OllamaManager: @unchecked Sendable {
         messages: [NexusChatMessage],
         temperature: Double? = nil,
         maximumTokens: Int? = nil,
+        keepAlive: String? = nil,
         includeThinking: Bool,
         includeNexusSystemPrompt: Bool = true,
         onThinkingDelta: (@Sendable (_ delta: String, _ accumulated: String) async -> Void)?,
@@ -253,9 +265,10 @@ final class OllamaManager: @unchecked Sendable {
         request.httpBody = try JSONEncoder().encode(
             OllamaChatRequest(
                 model: model,
-                messages: (includeNexusSystemPrompt ? [.init(role: "system", content: NexusResponseInstructions.completeSystemPrompt)] : [])
-                    + messages.map { .init(role: $0.role, content: $0.content) },
+                messages: (includeNexusSystemPrompt ? [.init(role: "system", content: NexusResponseInstructions.completeSystemPrompt, images: nil)] : [])
+                    + messages.map { .init(role: $0.role, content: $0.content, images: $0.imageBase64.map { [$0] }) },
                 stream: true,
+                keepAlive: keepAlive,
                 // `nil` lets thinking-capable models choose their own default.
                 // The notch control is an explicit user preference, so always
                 // send false when it is off rather than relying on that default.
@@ -303,6 +316,22 @@ final class OllamaManager: @unchecked Sendable {
         return answer
     }
 
+    /// Keeps a small auxiliary model resident while the user is dictating.
+    /// This is intentionally a no-op generation: it avoids paying model-load
+    /// time after the user releases the global dictation shortcut.
+    func keepModelWarm(_ model: String, for duration: String = "30m") async throws {
+        try await ensureServerRunning()
+        var request = URLRequest(url: Self.serverURL.appendingPathComponent("api/generate"))
+        request.httpMethod = "POST"
+        request.timeoutInterval = Self.inferenceRequestTimeout
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try JSONEncoder().encode(
+            OllamaWarmRequest(model: model, keepAlive: duration)
+        )
+        let (_, response) = try await session.data(for: request)
+        try Self.requireSuccess(response)
+    }
+
     /// Uses Ollama's native function-calling protocol when the selected model
     /// actually advertises that capability. Models without it keep the legacy
     /// JSON planning fallback; they are never told they searched when they did
@@ -331,8 +360,8 @@ final class OllamaManager: @unchecked Sendable {
         request.httpBody = try JSONEncoder().encode(
             OllamaToolPlanningRequest(
                 model: model,
-                messages: [.init(role: "system", content: NexusResponseInstructions.completeSystemPrompt)]
-                    + messages.map { .init(role: $0.role, content: $0.content) },
+                messages: [.init(role: "system", content: NexusResponseInstructions.completeSystemPrompt, images: nil)]
+                    + messages.map { .init(role: $0.role, content: $0.content, images: $0.imageBase64.map { [$0] }) },
                 stream: true,
                 think: false,
                 // Native calls can include model-internal reasoning before the
@@ -497,7 +526,11 @@ private struct OllamaTagsResponse: Decodable {
     let models: [Model]
 }
 private struct OllamaChatRequest: Encodable {
-    struct Message: Encodable { let role: String; let content: String }
+    struct Message: Encodable {
+        let role: String
+        let content: String
+        let images: [String]?
+    }
     struct Options: Encodable {
         let temperature: Double?
         let numPredict: Int?
@@ -510,11 +543,32 @@ private struct OllamaChatRequest: Encodable {
     let model: String
     let messages: [Message]
     let stream: Bool
+    let keepAlive: String?
     let think: Bool
     let options: Options
+
+    enum CodingKeys: String, CodingKey {
+        case model, messages, stream, think, options
+        case keepAlive = "keep_alive"
+    }
+}
+private struct OllamaWarmRequest: Encodable {
+    let model: String
+    let keepAlive: String
+    let prompt = ""
+    let stream = false
+
+    enum CodingKeys: String, CodingKey {
+        case model, prompt, stream
+        case keepAlive = "keep_alive"
+    }
 }
 private struct OllamaToolPlanningRequest: Encodable {
-    struct Message: Encodable { let role: String; let content: String }
+    struct Message: Encodable {
+        let role: String
+        let content: String
+        let images: [String]?
+    }
     struct Options: Encodable {
         let temperature: Double
         let numPredict: Int
@@ -767,7 +821,7 @@ final class LMStudioManager: @unchecked Sendable {
             OpenAIChatRequest(
                 model: resolvedModel,
                 messages: (includeNexusSystemPrompt ? [.init(role: "system", content: NexusResponseInstructions.completeSystemPrompt)] : [])
-                    + messages.map { .init(role: $0.role, content: $0.content) },
+                    + messages.map { .init(role: $0.role, content: $0.content, imageBase64: $0.imageBase64, imageMediaType: $0.imageMediaType) },
                 stream: true,
                 temperature: temperature,
                 maxTokens: maximumTokens
@@ -895,7 +949,43 @@ private struct LMStudioLocalModelRecord: Decodable {
 }
 
 private struct OpenAIChatRequest: Encodable {
-    struct Message: Encodable { let role: String; let content: String }
+    struct Message: Encodable {
+        private enum CodingKeys: String, CodingKey { case role, content }
+        private struct ImageURL: Encodable { let url: String }
+        private struct Part: Encodable {
+            let type: String
+            let text: String?
+            let imageURL: ImageURL?
+
+            enum CodingKeys: String, CodingKey { case type, text; case imageURL = "image_url" }
+        }
+
+        let role: String
+        let content: String
+        let imageBase64: String?
+        let imageMediaType: String?
+
+        init(role: String, content: String, imageBase64: String? = nil, imageMediaType: String? = nil) {
+            self.role = role
+            self.content = content
+            self.imageBase64 = imageBase64
+            self.imageMediaType = imageMediaType
+        }
+
+        func encode(to encoder: Encoder) throws {
+            var container = encoder.container(keyedBy: CodingKeys.self)
+            try container.encode(role, forKey: .role)
+            guard let imageBase64 else {
+                try container.encode(content, forKey: .content)
+                return
+            }
+            let mediaType = imageMediaType ?? "image/jpeg"
+            try container.encode([
+                Part(type: "text", text: content, imageURL: nil),
+                Part(type: "image_url", text: nil, imageURL: .init(url: "data:\(mediaType);base64,\(imageBase64)"))
+            ], forKey: .content)
+        }
+    }
     let model: String
     let messages: [Message]
     let stream: Bool

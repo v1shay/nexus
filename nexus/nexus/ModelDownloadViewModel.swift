@@ -27,6 +27,15 @@ final class ModelDownloadViewModel: ObservableObject {
     @Published var thinkingModeEnabled: Bool { didSet { persistThinkingMode() } }
     let apiProvider = NexusAPIProviderStore()
 
+    /// Image input is a property of the selected inference model, rather than
+    /// a blanket setting: Nexus must never capture a screen for a text-only
+    /// model.
+    var activeModelSupportsImageInput: Bool {
+        apiProvider.enabled
+            ? apiProvider.selectedModelSupportsImageInput
+            : activeModel?.supportsImageInput == true
+    }
+
     var memoryGB: Int {
         connect?.remoteMemoryGB ?? max(1, Int(ProcessInfo.processInfo.physicalMemory / 1_073_741_824))
     }
@@ -48,6 +57,14 @@ final class ModelDownloadViewModel: ObservableObject {
     private let activeModelDefaultsKey = "nexus.active-model"
     private let placementsDefaultsKey = "nexus.model-placements.v2"
     private let thinkingModeDefaultsKey = "nexus.thinking-mode-enabled"
+    /// This model is deliberately independent from the conversational model.
+    /// SmolLM2 1.7B is the smallest local model we measured that can clean
+    /// corrections and lists without routinely fabricating content. The
+    /// 135M, 360M, and Qwen 1.5B candidates were faster in isolation but did
+    /// not meet that correctness bar.
+    private let dictationRefinerModel = "smollm2:latest"
+    private var dictationRefinerAvailable: Bool?
+    private var dictationRefinerProvisioningTask: Task<Void, Never>?
 
     init(
         ollama: OllamaManager = .init(),
@@ -106,7 +123,67 @@ final class ModelDownloadViewModel: ObservableObject {
             await refreshCatalog(for: .ollama)
             await refreshCatalog(for: .lmStudio)
             await refreshActiveThinkingCapability()
+            await prepareDictationRefiner()
         }
+    }
+
+    /// Checks and warms the dedicated local refiner without changing the
+    /// user's selected chat model. The first use provisions it in the
+    /// background, while that utterance still pastes raw rather than making
+    /// the user wait for a model download.
+    func prepareDictationRefiner() async {
+        guard dictationRefinerAvailable != true else { return }
+        do {
+            let installed = try await ollama.installedModelNames()
+            guard installed.contains(where: { $0.caseInsensitiveCompare(dictationRefinerModel) == .orderedSame }) else {
+                dictationRefinerAvailable = false
+                provisionDictationRefinerIfNeeded()
+                return
+            }
+            dictationRefinerAvailable = true
+            try? await ollama.keepModelWarm(dictationRefinerModel)
+        } catch {
+            dictationRefinerAvailable = false
+        }
+    }
+
+    private func provisionDictationRefinerIfNeeded() {
+        guard dictationRefinerProvisioningTask == nil else { return }
+        let model = dictationRefinerModel
+        dictationRefinerProvisioningTask = Task { [weak self] in
+            defer { self?.dictationRefinerProvisioningTask = nil }
+            do {
+                try await self?.ollama.pull(model: model, progress: { _ in })
+                guard let self else { return }
+                self.dictationRefinerAvailable = true
+                try? await self.ollama.keepModelWarm(model)
+                NSLog("Nexus clean dictation model is ready locally.")
+            } catch {
+                self?.dictationRefinerAvailable = false
+                NSLog("Nexus could not prepare clean dictation model: %@", error.localizedDescription)
+            }
+        }
+    }
+
+    /// A tiny, streaming local pass for global clean dictation. It bypasses
+    /// the active assistant/provider so no cloud round-trip or agent prompt
+    /// can add latency or change the user's model selection.
+    func refineGlobalDictation(_ transcript: String) async throws -> String {
+        if dictationRefinerAvailable == nil {
+            await prepareDictationRefiner()
+        }
+        guard dictationRefinerAvailable == true else {
+            throw LocalModelError.invalidResponse("The clean dictation model is not installed")
+        }
+        return try await ollama.streamChat(
+            model: dictationRefinerModel,
+            messages: NexusDictationRefinementPrompt.messages(for: transcript),
+            temperature: 0,
+            maximumTokens: 56,
+            keepAlive: "30m",
+            includeNexusSystemPrompt: false,
+            onDelta: { _, _ in }
+        )
     }
 
     var recommended: [LocalModel] {
@@ -312,6 +389,7 @@ final class ModelDownloadViewModel: ObservableObject {
         messages: [NexusChatMessage],
         temperature: Double? = nil,
         maximumTokens: Int? = nil,
+        includeNexusSystemPrompt: Bool = true,
         onThinkingDelta: (@Sendable (_ delta: String, _ accumulated: String) async -> Void)? = nil,
         onDelta: @escaping @Sendable (_ delta: String, _ accumulated: String) async -> Void
     ) async throws -> String {
@@ -331,6 +409,7 @@ final class ModelDownloadViewModel: ObservableObject {
                     messages: messages,
                     temperature: temperature,
                     maximumTokens: maximumTokens,
+                    includeNexusSystemPrompt: includeNexusSystemPrompt,
                     onDelta: onDelta
                 )
             } catch is CancellationError {
@@ -364,6 +443,7 @@ final class ModelDownloadViewModel: ObservableObject {
                     temperature: temperature,
                     maximumTokens: maximumTokens,
                     includeThinking: thinkingModeEnabled && activeModelSupportsThinking,
+                    includeNexusSystemPrompt: includeNexusSystemPrompt,
                     onThinkingDelta: onThinkingDelta,
                     onDelta: onDelta
                 )
@@ -377,6 +457,7 @@ final class ModelDownloadViewModel: ObservableObject {
                     messages: messages,
                     temperature: temperature,
                     maximumTokens: maximumTokens,
+                    includeNexusSystemPrompt: includeNexusSystemPrompt,
                     onDelta: onDelta
                 )
             } catch {

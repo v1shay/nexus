@@ -256,7 +256,7 @@ private actor NexusHostModelStub: NexusHostModelServing {
     func streamChat(
         runtime: NexusRuntimeKind,
         model: String,
-        prompt: String,
+        messages: [NexusChatMessage],
         temperature: Double?,
         maximumTokens: Int?,
         onDelta: @escaping @Sendable (String, String) async -> Void

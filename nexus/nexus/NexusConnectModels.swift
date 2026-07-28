@@ -257,6 +257,23 @@ enum NexusRuntimeKind: String, Codable, Sendable {
 struct NexusChatMessage: Codable, Equatable, Sendable {
     let role: String
     let content: String
+    /// Base64-encoded image data for a single multimodal turn. Conversation
+    /// history stays text-only; this is intentionally ephemeral request
+    /// context such as the user's current screen.
+    let imageBase64: String?
+    let imageMediaType: String?
+
+    init(
+        role: String,
+        content: String,
+        imageBase64: String? = nil,
+        imageMediaType: String? = nil
+    ) {
+        self.role = role
+        self.content = content
+        self.imageBase64 = imageBase64
+        self.imageMediaType = imageMediaType
+    }
 }
 
 struct NexusInferencePayload: Codable, Equatable, Sendable {
