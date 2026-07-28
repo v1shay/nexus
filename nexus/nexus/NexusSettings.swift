@@ -110,6 +110,15 @@ final class NexusAppSettings: ObservableObject {
     @Published var duplexVoiceEngine: NexusDuplexVoiceEngine { didSet { persist() } }
     @Published var personaPlexRemoteEndpoint: String { didSet { persist() } }
     @Published var glassTheme: NexusGlassTheme { didSet { persist() } }
+    /// Hold Command once to enter a hands-free conversation. A double Command
+    /// leaves the session and returns the gesture to its normal behavior.
+    @Published var alwaysOnVoiceMode: Bool { didSet { persist() } }
+    /// When the selected local model advertises vision support, attach one
+    /// current-screen image to each new user request.
+    @Published var shareScreenWithVisionModels: Bool { didSet { persist() } }
+    /// Global, focused-field dictation. Accessibility permission is requested
+    /// only when the user actually invokes the Option-Command shortcut.
+    @Published var globalPasteDictationEnabled: Bool { didSet { persist() } }
 
     private let defaults = UserDefaults.standard
     private let key = "nexus.app.settings.v1"
@@ -124,6 +133,9 @@ final class NexusAppSettings: ObservableObject {
         duplexVoiceEngine = NexusDuplexVoiceEngine(rawValue: saved["duplexVoiceEngine"] as? String ?? "") ?? .disabled
         personaPlexRemoteEndpoint = saved["personaPlexRemoteEndpoint"] as? String ?? ""
         glassTheme = NexusGlassTheme(rawValue: saved["glassTheme"] as? String ?? "") ?? .graphite
+        alwaysOnVoiceMode = saved["alwaysOnVoiceMode"] as? Bool ?? false
+        shareScreenWithVisionModels = saved["shareScreenWithVisionModels"] as? Bool ?? false
+        globalPasteDictationEnabled = saved["globalPasteDictationEnabled"] as? Bool ?? true
     }
 
     private func persist() {
@@ -135,7 +147,10 @@ final class NexusAppSettings: ObservableObject {
             "localSpeechModel": localSpeechModel,
             "duplexVoiceEngine": duplexVoiceEngine.rawValue,
             "personaPlexRemoteEndpoint": personaPlexRemoteEndpoint,
-            "glassTheme": glassTheme.rawValue
+            "glassTheme": glassTheme.rawValue,
+            "alwaysOnVoiceMode": alwaysOnVoiceMode,
+            "shareScreenWithVisionModels": shareScreenWithVisionModels,
+            "globalPasteDictationEnabled": globalPasteDictationEnabled
         ], forKey: key)
     }
 }

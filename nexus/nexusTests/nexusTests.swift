@@ -345,6 +345,29 @@ final class NexusGeometryTests: XCTestCase {
         XCTAssertEqual(store.model, "gemini-2.5-flash")
     }
 
+    @MainActor
+    func testOpenAIPresetUsesDedicatedKeychainAndKeepsModelSelectable() throws {
+        let suite = "nexus-openai-provider-test-\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let secrets = NexusMemorySecretStore()
+        let store = NexusAPIProviderStore(defaults: defaults, secretStore: secrets, managedSecretStore: secrets)
+
+        store.selectKind(.openAI, replacing: .gemini)
+        store.model = "gpt-4.1"
+        store.apiKeyInput = "openai-test-key"
+        store.enabled = true
+        try store.save()
+
+        let configuration = try store.configuration()
+        XCTAssertEqual(configuration.kind, .openAI)
+        XCTAssertEqual(configuration.baseURL.absoluteString, "https://api.openai.com/v1")
+        XCTAssertEqual(configuration.model, "gpt-4.1")
+        XCTAssertEqual(try secrets.data(for: NexusAPIProviderKind.openAI.keyAccount), Data("openai-test-key".utf8))
+        XCTAssertNil(try secrets.data(for: NexusAPIProviderKind.openAICompatible.keyAccount))
+        XCTAssertTrue(NexusAPIProviderKind.supportedPresets.contains(.openAI))
+    }
+
     func testManagedCloudInferenceUsesInceptionThenNVIDIAWithKeysOutsideDefaults() throws {
         let secrets = NexusMemorySecretStore()
         let store = NexusManagedCloudInferenceStore(secrets: secrets)

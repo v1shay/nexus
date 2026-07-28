@@ -314,6 +314,24 @@ private struct NexusExperienceSettingsPage: View {
                     .frame(width: 210)
                 }
                 NexusHairline(axis: .horizontal)
+                NexusSettingsLine(label: "Always on") {
+                    Toggle("Hands-free voice", isOn: $settings.alwaysOnVoiceMode)
+                        .toggleStyle(.switch)
+                        .help("Hold Command once to start. Nexus sends after 0.7 seconds of silence, listens for interruptions, and double-Command exits the session.")
+                }
+                NexusHairline(axis: .horizontal)
+                NexusSettingsLine(label: "Global paste") {
+                    Toggle("Option-Command dictation", isOn: $settings.globalPasteDictationEnabled)
+                        .toggleStyle(.switch)
+                        .help("Hold Option-Command in any editable field, then release to paste clean dictation. Requires Accessibility permission.")
+                }
+                NexusHairline(axis: .horizontal)
+                NexusSettingsLine(label: "Screen context") {
+                    Toggle("Share with vision models", isOn: $settings.shareScreenWithVisionModels)
+                        .toggleStyle(.switch)
+                        .help("Attach the current screen to each prompt only when the selected model supports images.")
+                }
+                NexusHairline(axis: .horizontal)
                 NexusSettingsLine(label: "Duplex") {
                     Picker("Duplex voice", selection: $settings.duplexVoiceEngine) {
                         ForEach(NexusDuplexVoiceEngine.allCases) { engine in Text(engine.title).tag(engine) }
@@ -446,7 +464,7 @@ private struct NexusModelsPage: View {
                 Button("API") { isShowingAPISettings = true }
                     .buttonStyle(.plain)
                     .foregroundStyle(viewModel.apiProvider.enabled ? .green : .secondary)
-                    .help("Use an OpenAI-compatible or Gemini API model")
+                    .help("Choose and configure an OpenAI, Gemini, NVIDIA NIM, Groq, or OpenRouter API model")
             }
             .padding(.horizontal, 22)
             .frame(height: 28)
@@ -666,9 +684,17 @@ private struct NexusAPIProviderView: View {
                         .lineLimit(1)
                 }
                 LabeledContent("Model") {
-                    Text(store.model)
-                        .font(.system(.caption, design: .monospaced))
-                        .textSelection(.enabled)
+                    if store.kind == .openAI {
+                        TextField("OpenAI model ID", text: $store.model)
+                            .textFieldStyle(.roundedBorder)
+                            .font(.system(.caption, design: .monospaced))
+                            .frame(maxWidth: 250)
+                            .accessibilityIdentifier("nexus-openai-model-id")
+                    } else {
+                        Text(store.model)
+                            .font(.system(.caption, design: .monospaced))
+                            .textSelection(.enabled)
+                    }
                 }
             }
             SecureField(store.savedKey ? "API key (saved — enter to replace)" : "API key", text: $store.apiKeyInput)

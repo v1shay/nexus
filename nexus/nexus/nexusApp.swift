@@ -19,6 +19,8 @@ struct NexusApp: App {
 @MainActor
 final class NexusAppDelegate: NSObject, NSApplicationDelegate {
     private var notch: NotchController?
+    private var menuBarItem: NSStatusItem?
+    private var menuBarOrbView: NSHostingView<NexusMenuBarOrb>?
     private var automationWindow: NSWindow?
     private var connectHost: NexusConnectHostDaemon?
     private var nexCLIHost: NexCLIHostDaemon?
@@ -109,6 +111,7 @@ final class NexusAppDelegate: NSObject, NSApplicationDelegate {
             let notch = NotchController()
             self?.notch = notch
             notch.install()
+            self?.installMenuBarOrb(for: notch)
             await NexusDuplexVoiceRuntime.shared.reconcile(
                 with: notch.settings.duplexVoiceEngine,
                 personaPlexEndpoint: notch.settings.personaPlexRemoteEndpoint
@@ -122,6 +125,7 @@ final class NexusAppDelegate: NSObject, NSApplicationDelegate {
         connectHost?.stop()
         nexCLIHost?.stop()
         NexusDuplexVoiceRuntime.shared.stop()
+        if let menuBarItem { NSStatusBar.system.removeStatusItem(menuBarItem) }
     }
 
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
@@ -131,6 +135,27 @@ final class NexusAppDelegate: NSObject, NSApplicationDelegate {
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
         notch?.openModelAggregator()
         return true
+    }
+
+    private func installMenuBarOrb(for notch: NotchController) {
+        guard menuBarItem == nil else { return }
+        let item = NSStatusBar.system.statusItem(withLength: 28)
+        guard let button = item.button else { return }
+        button.title = ""
+        button.image = nil
+        button.target = self
+        button.action = #selector(openNexusFromMenuBar)
+        button.toolTip = "Nexus — Option-Command dictation"
+        let orb = NSHostingView(rootView: NexusMenuBarOrb(notch: notch))
+        orb.frame = NSRect(x: 4, y: 2, width: 20, height: 20)
+        orb.autoresizingMask = [.minXMargin, .maxXMargin, .minYMargin, .maxYMargin]
+        button.addSubview(orb)
+        menuBarItem = item
+        menuBarOrbView = orb
+    }
+
+    @objc private func openNexusFromMenuBar() {
+        notch?.openModelAggregator()
     }
 
     /// Xcode can launch a new debug build while the previous accessory app is
@@ -188,11 +213,28 @@ final class NexusAppDelegate: NSObject, NSApplicationDelegate {
     }
 }
 
+/// A visual-only menu-bar affordance. It deliberately contains no transcript
+/// or status copy: the animation alone communicates listening versus ready.
+private struct NexusMenuBarOrb: View {
+    @ObservedObject var notch: NotchController
+
+    var body: some View {
+        NexusOrbAnimation(
+            mode: (notch.isGlobalPasteDictating || notch.isListening) ? .composing : .thinkingCycle,
+            size: 18,
+            tint: .white
+        )
+        .frame(width: 20, height: 20)
+        .accessibilityLabel(notch.isGlobalPasteDictating ? "Nexus dictating" : "Nexus ready")
+    }
+}
+
 @MainActor
 final class NotchController: ObservableObject {
     @Published private var interaction = NotchInteractionState()
     @Published private(set) var currentSize = CGSize(width: 190, height: 32)
     @Published private(set) var isVoiceMuted = false
+    @Published private(set) var isGlobalPasteDictating = false
     @Published private(set) var selectedPet = NexusPetCatalog.pet(
         withID: UserDefaults.standard.string(forKey: "nexus.selectedPetID")
     )
@@ -288,10 +330,13 @@ final class NotchController: ObservableObject {
     private var screen: NSScreen?
     private var closeTask: Task<Void, Never>?
     private var commandHoldMonitor: NexusCommandHoldMonitor?
+    private var globalPasteDictationMonitor: NexusCommandHoldMonitor?
     private var pointerMonitor: PointerProximityMonitor?
     private var modelPanel: NSPanel?
     private var savedChatsPanel: NSPanel?
     private let speechTranscriber = SpeechTranscriber()
+    private var globalPasteSpeculationTask: Task<NexusSpeculativeDictation?, Never>?
+    private var globalPasteSpeculationRaw = ""
     private let wakePhraseListener = WakePhraseListener()
     private let connectController: NexusConnectController
     private let modelDownloadViewModel: ModelDownloadViewModel
@@ -343,6 +388,13 @@ final class NotchController: ObservableObject {
     private var wasShowingMusic = false
     private var pendingYouTubePlayback: MediaTab?
     private var pendingYouTubeFullscreen = false
+    /// A hands-free session begins with one Command hold and remains armed
+    /// across turns until the user double-presses Command.
+    private var alwaysOnVoiceSessionActive = false
+    /// Kept only for the live request. Screens are never written to the
+    /// conversation, memory, or saved-chat stores.
+    private var currentRequestScreenAttachment: NexusScreenAttachment?
+    private var globalPasteTarget: NexusFocusedTextTarget?
 
     init(connectController: NexusConnectController? = nil) {
         let resolvedConnectController = connectController ?? .shared
@@ -481,17 +533,48 @@ final class NotchController: ObservableObject {
     private func installCommandHoldMonitor() {
         let monitor = NexusCommandHoldMonitor(
             onPress: { [weak self] in
-                Task { @MainActor in await self?.startGlobalDictation() }
+                Task { @MainActor in
+                    guard let self else { return }
+                    if self.settings.alwaysOnVoiceMode {
+                        await self.startAlwaysOnVoiceSession()
+                    } else {
+                        await self.startGlobalDictation()
+                    }
+                }
             },
             onRelease: { [weak self] in
-                Task { @MainActor in await self?.finishGlobalDictation() }
+                Task { @MainActor in
+                    guard let self, !self.alwaysOnVoiceSessionActive else { return }
+                    await self.finishGlobalDictation()
+                }
             },
             onDoubleTap: { [weak self] in
-                Task { @MainActor in self?.quickDismiss() }
+                Task { @MainActor in
+                    guard let self else { return }
+                    if self.alwaysOnVoiceSessionActive {
+                        self.stopAlwaysOnVoiceSession()
+                    } else {
+                        self.quickDismiss()
+                    }
+                }
             }
         )
         commandHoldMonitor = monitor
         monitor.install()
+
+        let globalPasteMonitor = NexusCommandHoldMonitor(
+            requiresOption: true,
+            holdDuration: 0.10,
+            onPress: { [weak self] in
+                Task { @MainActor in await self?.startGlobalPasteDictation() }
+            },
+            onRelease: { [weak self] in
+                Task { @MainActor in await self?.finishGlobalPasteDictation() }
+            },
+            onDoubleTap: {}
+        )
+        globalPasteDictationMonitor = globalPasteMonitor
+        globalPasteMonitor.install()
     }
 
     /// Starts a new request before either speech or typed text is supplied.
@@ -513,6 +596,7 @@ final class NotchController: ObservableObject {
         responseGeneration = UUID()
         responseSpeechCursor = StreamedSpeechCursor()
         thinkingSentenceChunker = SpeechSentenceChunker()
+        currentRequestScreenAttachment = nil
         responseSpeaker.stop()
         hideThinkingModelMark()
         suppressAutomaticResponseReveal = false
@@ -535,6 +619,67 @@ final class NotchController: ObservableObject {
         }
     }
 
+    private func startAlwaysOnVoiceSession() async {
+        guard !alwaysOnVoiceSessionActive else { return }
+        alwaysOnVoiceSessionActive = true
+        await prepareForUserRequest()
+        beginAlwaysOnListening()
+    }
+
+    /// Keeps the microphone alive while Nex is thinking or speaking. The
+    /// transcriber owns the 0.7 s silence gate; its completion is also the
+    /// barge-in signal that immediately stops the current spoken response.
+    private func beginAlwaysOnListening() {
+        guard alwaysOnVoiceSessionActive else { return }
+        speechTranscriber.start(
+            engine: settings.speechEngine,
+            automaticallySubmitAfterSilence: 0.7,
+            onAutomaticSubmit: { [weak self] in
+                Task { @MainActor in await self?.finishAlwaysOnDictation() }
+            }
+        ) { [weak self] text in
+            Task { @MainActor in self?.interaction.updateTranscript(text) }
+        }
+    }
+
+    private func finishAlwaysOnDictation() async {
+        guard alwaysOnVoiceSessionActive else { return }
+        await interruptResponseForAlwaysOnVoice()
+        await finishGlobalDictation()
+    }
+
+    private func interruptResponseForAlwaysOnVoice() async {
+        wakePhraseListener.stop()
+        closeTask?.cancel()
+        memoryWriterTask?.cancel()
+        if responseIsStreaming, !responseSpeechCursor.text.isEmpty {
+            await conversationSession.appendAssistant(responseSpeechCursor.text, interrupted: true)
+            await memory.conversationDidChange()
+        }
+        responseIsStreaming = false
+        responseTask?.cancel()
+        responseGeneration = UUID()
+        responseSpeechCursor = StreamedSpeechCursor()
+        thinkingSentenceChunker = SpeechSentenceChunker()
+        responseSpeaker.stop()
+        hideThinkingModelMark()
+        suppressAutomaticResponseReveal = false
+    }
+
+    private func stopAlwaysOnVoiceSession() {
+        guard alwaysOnVoiceSessionActive else { return }
+        alwaysOnVoiceSessionActive = false
+        speechTranscriber.stop()
+        responseTask?.cancel()
+        responseGeneration = UUID()
+        responseIsStreaming = false
+        responseSpeaker.stop()
+        hideThinkingModelMark()
+        interaction.dismiss()
+        if let screen { resize(to: idleSize(for: screen), animated: true) }
+        armWakePhraseListener()
+    }
+
     private func finishGlobalDictation() async {
         // FluidAudio's current Parakeet API is batch transcription. Move out
         // of the listening screen while the local model finalizes audio so it
@@ -548,6 +693,92 @@ final class NotchController: ObservableObject {
             interaction.updateTranscript(endpointTranscript)
         }
         await submitFinalizedPrompt()
+    }
+
+    /// A separate path from Nexus conversation voice. It never opens an
+    /// assistant request: the finalized, cleaned utterance is inserted back
+    /// into the focused control in the app where the shortcut began.
+    private func startGlobalPasteDictation() async {
+        guard settings.globalPasteDictationEnabled,
+              !isGlobalPasteDictating,
+              !isListening,
+              !responseIsStreaming else { return }
+        guard let target = NexusFocusedTextTarget.requestingAccessIfNeeded() else { return }
+        globalPasteTarget = target
+        isGlobalPasteDictating = true
+        globalPasteSpeculationTask?.cancel()
+        globalPasteSpeculationTask = nil
+        globalPasteSpeculationRaw = ""
+        // Model loading happens while the user is speaking, never after they
+        // release the shortcut. It is a separate model from the agent.
+        Task { await modelDownloadViewModel.prepareDictationRefiner() }
+        speechTranscriber.start(engine: settings.speechEngine) { [weak self] partial in
+            Task { @MainActor in self?.speculateGlobalDictation(for: partial) }
+        }
+    }
+
+    private func finishGlobalPasteDictation() async {
+        guard isGlobalPasteDictating else { return }
+        isGlobalPasteDictating = false
+        defer {
+            globalPasteTarget = nil
+            globalPasteSpeculationTask?.cancel()
+            globalPasteSpeculationTask = nil
+            globalPasteSpeculationRaw = ""
+        }
+        guard let transcript = await speechTranscriber.stopAndTranscribe() else { return }
+        let raw = transcript.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard
+              !raw.isEmpty else { return }
+        let endpoint = Date()
+        let cleaned: String
+        if globalPasteSpeculationRaw.normalizedForDictationMatch == raw.normalizedForDictationMatch,
+           let candidate = await globalPasteSpeculationTask?.value,
+           candidate.raw.normalizedForDictationMatch == raw.normalizedForDictationMatch {
+            cleaned = candidate.cleaned
+        } else {
+            globalPasteSpeculationTask?.cancel()
+            cleaned = await refineGlobalDictation(raw)
+        }
+        guard !cleaned.isEmpty else { return }
+        if globalPasteTarget?.replaceSelectedText(with: cleaned) != true {
+            NSSound.beep()
+        }
+        let elapsedMilliseconds = Date().timeIntervalSince(endpoint) * 1_000
+        NSLog("Nexus global dictation cleanup and insertion: %.0f ms", elapsedMilliseconds)
+    }
+
+    /// The refiner is a single, short, no-tools completion. It runs only after
+    /// endpointing has finalized the utterance, which permits semantic cleanup
+    /// (lists and self-corrections) without repeatedly rewriting partial ASR.
+    private func refineGlobalDictation(_ raw: String) async -> String {
+        do {
+            let result = try await modelDownloadViewModel.refineGlobalDictation(raw)
+            return NexusDictationRefinementPrompt.sanitize(result, fallback: raw)
+        } catch {
+            // Dictation must always paste rather than fail because an optional
+            // cleaner is unavailable. The raw ASR result is the low-latency,
+            // lossless fallback.
+            return raw
+        }
+    }
+
+    /// Apple Speech delivers live chunks. Once a chunk has held still for a
+    /// beat, refine it in parallel with the remaining endpoint work. The
+    /// result is accepted only when it is the exact final transcript, so an
+    /// unfinished sentence can never be pasted as if it were complete.
+    private func speculateGlobalDictation(for partial: String) {
+        let candidate = partial.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard candidate.count >= 18 else { return }
+        globalPasteSpeculationTask?.cancel()
+        globalPasteSpeculationRaw = candidate
+        globalPasteSpeculationTask = Task { [weak self] in
+            try? await Task.sleep(for: .milliseconds(180))
+            guard !Task.isCancelled, let self else { return nil }
+            let cleaned = await self.refineGlobalDictation(candidate)
+            guard !Task.isCancelled else { return nil }
+            return NexusSpeculativeDictation(raw: candidate, cleaned: cleaned)
+        }
     }
 
     /// Typed input is deliberately not a parallel chat implementation.  It
@@ -568,20 +799,48 @@ final class NotchController: ObservableObject {
         if !finalizedPrompt.isEmpty, await conversationSession.appendUser(finalizedPrompt) != nil {
             await memory.conversationDidChange()
         }
+        currentRequestScreenAttachment = captureScreenAttachmentIfNeeded()
         automaticRevealIsWaitingForNotchVisit = true
         if let screen {
             resize(to: expandedSize(for: screen), animated: true)
         }
         startResponseIfPossible()
+        // `stopAndTranscribe()` releases the microphone before this point.
+        // Re-arm it immediately so a user can interrupt the spoken answer.
+        beginAlwaysOnListening()
     }
 
     private func armWakePhraseListener() {
-        guard !isListening, !responseIsStreaming else { return }
+        guard !alwaysOnVoiceSessionActive, !isListening, !responseIsStreaming else { return }
         wakePhraseListener.start { [weak self] phrase in
             guard let self else { return }
             NSLog("Nex heard wake phrase: %@", phrase.rawValue)
             Task { @MainActor in await self.startGlobalDictation(automaticallySubmitAfterSilence: true) }
         }
+    }
+
+    private func captureScreenAttachmentIfNeeded() -> NexusScreenAttachment? {
+        guard settings.shareScreenWithVisionModels,
+              modelDownloadViewModel.activeModelSupportsImageInput else { return nil }
+        guard let attachment = NexusScreenCapture.captureCurrentScreen() else {
+            NSLog("Nexus could not capture screen context; continuing without an image")
+            return nil
+        }
+        return attachment
+    }
+
+    private func applyingCurrentScreenAttachment(to messages: [NexusChatMessage]) -> [NexusChatMessage] {
+        guard let attachment = currentRequestScreenAttachment,
+              let userIndex = messages.lastIndex(where: { $0.role == "user" }) else { return messages }
+        var result = messages
+        let original = result[userIndex]
+        result[userIndex] = .init(
+            role: original.role,
+            content: original.content + "\n\nA current screenshot of the user's screen is attached. Use it only when it helps answer the request.",
+            imageBase64: attachment.base64,
+            imageMediaType: attachment.mediaType
+        )
+        return result
     }
 
     private func startResponseIfPossible() {
@@ -633,7 +892,9 @@ final class NotchController: ObservableObject {
             responseSpeaker.beginStreaming()
             responseIsStreaming = true
             do {
-                let baseMessages = await conversationSession.contextMessages()
+                let baseMessages = applyingCurrentScreenAttachment(
+                    to: await conversationSession.contextMessages()
+                )
                 requestAsyncStatusIfNeeded(prompt: prompt, generation: generation)
                 let presentationTask = Task { [weak self] in
                     try? await Task.sleep(for: .milliseconds(800))
@@ -732,9 +993,11 @@ final class NotchController: ObservableObject {
                         } && mediaOverlayTab != nil
                         if startedPlayback { break }
 
-                        let planningContext = await conversationSession.contextMessages(
-                            memoryLookupPerformed: memoryLookupPerformed,
-                            webContext: result.context
+                        let planningContext = applyingCurrentScreenAttachment(
+                            to: await conversationSession.contextMessages(
+                                memoryLookupPerformed: memoryLookupPerformed,
+                                webContext: result.context
+                            )
                         )
                         pendingPlan = try await modelDownloadViewModel.toolPlan(
                             messages: NexPrimaryToolPlanner.planningMessages(
@@ -758,9 +1021,11 @@ final class NotchController: ObservableObject {
                     responseSpeaker.setWebEvidenceActive(!result.webResponses.isEmpty)
                     interaction.beginThinking()
                     if let screen { resize(to: listeningSize(for: screen), animated: true) }
-                    let messages = await conversationSession.contextMessages(
-                        memoryLookupPerformed: memoryLookupPerformed,
-                        webContext: result.context
+                    let messages = applyingCurrentScreenAttachment(
+                        to: await conversationSession.contextMessages(
+                            memoryLookupPerformed: memoryLookupPerformed,
+                            webContext: result.context
+                        )
                     )
                     let answer = try await streamModelResponse(messages: messages, generation: generation)
                     let finalSpeechDelta = responseSpeechCursor.consume(delta: "", accumulated: answer)
@@ -1376,6 +1641,12 @@ final class NotchController: ObservableObject {
     private func resize(to size: CGSize, animated: Bool) {
         music.setNotchExpanded(interaction.presentation == .overlay)
         guard let panel, let screen else { return }
+        // NSPanel can be ordered out by another application's activation even
+        // when it remains alive. Re-ordering here is intentional: every
+        // public Nexus transition (hover, global hold-Command, a tool event,
+        // or streamed text) passes through this method. It keeps the notch
+        // above the frontmost app without activating Nexus or stealing focus.
+        panel.orderFrontRegardless()
         // Tool events, hover callbacks, and delayed SwiftUI layout can all
         // arrive after a fullscreen request. While the media player is the
         // active overlay, its fullscreen frame is the only valid target.
@@ -1535,6 +1806,130 @@ enum NexusMediaFullscreenSizing {
     }
 }
 
+private struct NexusScreenAttachment: Sendable {
+    let base64: String
+    let mediaType: String
+}
+
+/// Produces a bounded JPEG so enabling vision context does not turn an
+/// ordinary prompt into a multi-megabyte full-resolution desktop upload. macOS
+/// owns the Screen Recording permission prompt; a declined or unavailable
+/// permission simply leaves the request text-only.
+private enum NexusScreenCapture {
+    static func captureCurrentScreen() -> NexusScreenAttachment? {
+        guard CGPreflightScreenCaptureAccess() || CGRequestScreenCaptureAccess(),
+              let image = CGWindowListCreateImage(
+                .infinite,
+                .optionOnScreenOnly,
+                kCGNullWindowID,
+                [.bestResolution]
+              ) else { return nil }
+
+        let source = NSImage(cgImage: image, size: .init(width: image.width, height: image.height))
+        let longestEdge = CGFloat(max(image.width, image.height))
+        let scale = min(1, 1_920 / max(1, longestEdge))
+        let targetSize = NSSize(
+            width: max(1, CGFloat(image.width) * scale),
+            height: max(1, CGFloat(image.height) * scale)
+        )
+        let target = NSImage(size: targetSize)
+        target.lockFocus()
+        NSGraphicsContext.current?.imageInterpolation = .high
+        source.draw(in: NSRect(origin: .zero, size: targetSize))
+        target.unlockFocus()
+        guard let tiff = target.tiffRepresentation,
+              let bitmap = NSBitmapImageRep(data: tiff),
+              let jpeg = bitmap.representation(
+                using: .jpeg,
+                properties: [.compressionFactor: 0.68]
+              ) else { return nil }
+        return .init(base64: jpeg.base64EncodedString(), mediaType: "image/jpeg")
+    }
+}
+
+/// Stores the exact accessibility element focused at shortcut press, so a
+/// cleaned result cannot land in a different app if focus changes while the
+/// user is speaking.
+private final class NexusFocusedTextTarget: @unchecked Sendable {
+    private let element: AXUIElement
+
+    private init(element: AXUIElement) { self.element = element }
+
+    static func requestingAccessIfNeeded() -> NexusFocusedTextTarget? {
+        let options = [kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true] as CFDictionary
+        guard AXIsProcessTrustedWithOptions(options) else { return nil }
+        let systemWide = AXUIElementCreateSystemWide()
+        var focused: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(systemWide, kAXFocusedUIElementAttribute as CFString, &focused) == .success,
+              let focused else { return nil }
+        let element = focused as! AXUIElement
+        var settable = DarwinBoolean(false)
+        guard AXUIElementIsAttributeSettable(element, kAXSelectedTextAttribute as CFString, &settable) == .success,
+              settable.boolValue else { return nil }
+        return .init(element: element)
+    }
+
+    func replaceSelectedText(with text: String) -> Bool {
+        AXUIElementSetAttributeValue(
+            element,
+            kAXSelectedTextAttribute as CFString,
+            text as CFTypeRef
+        ) == .success
+    }
+}
+
+enum NexusDictationRefinementPrompt {
+    static func messages(for transcript: String) -> [NexusChatMessage] {
+        [
+            .init(
+                role: "system",
+                content: """
+                NEXUS_DICTATION_REFINEMENT
+                Transform one spoken utterance into polished text for insertion into the focused field. Preserve its meaning, names, numbers, quotes, code, and commands. Remove only clear verbal disfluencies and resolve unmistakable self-corrections. A correction marker is never part of the output: "actually", "make that", "scratch that", or "I mean". If one revises a preceding phrase or numbered item, discard the old phrase and marker; output only the replacement. Infer punctuation, paragraphs, and lists when the utterance strongly supports them. Do not summarize, answer, add commentary, labels, Markdown fences, or quotation marks around the result. If meaning is ambiguous, preserve the original wording.
+
+                Examples:
+                Spoken: "um schedule it for Tuesday actually Thursday"
+                Output: "Schedule it for Thursday."
+                Spoken: "one apples two actually make that bananas three oranges"
+                Output:
+                1. Apples
+                2. Bananas
+                3. Oranges
+                Spoken: "one finish onboarding screens two actually make that settings screens three ship the build by Friday"
+                Output:
+                1. Finish onboarding screens
+                2. Settings screens
+                3. Ship the build by Friday
+                """
+            ),
+            .init(role: "user", content: transcript)
+        ]
+    }
+
+    static func sanitize(_ result: String, fallback: String) -> String {
+        let cleaned = result.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !cleaned.isEmpty,
+              !cleaned.localizedCaseInsensitiveContains("NEXUS_DICTATION_REFINEMENT") else { return fallback }
+        return cleaned
+    }
+}
+
+private struct NexusSpeculativeDictation: Sendable {
+    let raw: String
+    let cleaned: String
+}
+
+private extension String {
+    /// Comparison only; it does not modify the text we eventually insert.
+    /// Apple Speech commonly changes capitalization or whitespace between its
+    /// final partial and endpoint result.
+    var normalizedForDictationMatch: String {
+        lowercased()
+            .split(whereSeparator: { $0.isWhitespace })
+            .joined(separator: " ")
+    }
+}
+
 enum CommandHoldTransition: Equatable {
     case began
     case ended
@@ -1640,10 +2035,14 @@ private final class NexusCommandHoldMonitor {
     private let onPress: () -> Void
     private let onRelease: () -> Void
     private let onDoubleTap: () -> Void
-    private var gesture = CommandHoldGestureState()
+    private let requiresOption: Bool
+    private var gesture: CommandHoldGestureState
     private var timer: DispatchSourceTimer?
     private var globalInputMonitor: Any?
     private var localInputMonitor: Any?
+    private var eventTap: CFMachPort?
+    private var eventTapSource: CFRunLoopSource?
+    private var observedFlags: CGEventFlags?
     private var disqualifiedByInput = false
 
     private static let modifierKeyCodes: Set<CGKeyCode> = [
@@ -1656,10 +2055,14 @@ private final class NexusCommandHoldMonitor {
     ]
 
     init(
+        requiresOption: Bool = false,
+        holdDuration: TimeInterval = CommandHoldGestureState.defaultHoldDuration,
         onPress: @escaping () -> Void,
         onRelease: @escaping () -> Void,
         onDoubleTap: @escaping () -> Void
     ) {
+        self.requiresOption = requiresOption
+        gesture = CommandHoldGestureState(holdDuration: holdDuration)
         self.onPress = onPress
         self.onRelease = onRelease
         self.onDoubleTap = onDoubleTap
@@ -1670,13 +2073,16 @@ private final class NexusCommandHoldMonitor {
         let cancellationEvents: NSEvent.EventTypeMask = [
             .keyDown, .leftMouseDown, .rightMouseDown, .otherMouseDown, .scrollWheel
         ]
-        globalInputMonitor = NSEvent.addGlobalMonitorForEvents(matching: cancellationEvents) { [weak self] _ in
-            self?.disqualifiedByInput = true
+        let watchedEvents = cancellationEvents.union(.flagsChanged)
+        globalInputMonitor = NSEvent.addGlobalMonitorForEvents(matching: watchedEvents) { [weak self] event in
+            self?.receive(event: event)
         }
-        localInputMonitor = NSEvent.addLocalMonitorForEvents(matching: cancellationEvents) { [weak self] event in
-            self?.disqualifiedByInput = true
+        localInputMonitor = NSEvent.addLocalMonitorForEvents(matching: watchedEvents) { [weak self] event in
+            self?.receive(event: event)
             return event
         }
+
+        installGlobalEventTapIfPossible()
 
         let timer = DispatchSource.makeTimerSource(queue: .main)
         timer.schedule(deadline: .now(), repeating: .milliseconds(20), leeway: .milliseconds(3))
@@ -1684,8 +2090,10 @@ private final class NexusCommandHoldMonitor {
         self.timer = timer
         timer.resume()
         NSLog(
-            "Nexus registered hold-Command dictation with a %d ms threshold",
-            Int(gesture.holdDuration * 1_000)
+            "Nexus registered %@ dictation with a %d ms threshold (event tap: %@)",
+            requiresOption ? "Option-Command" : "Command",
+            Int(gesture.holdDuration * 1_000),
+            eventTap == nil ? "unavailable" : "active"
         )
     }
 
@@ -1695,10 +2103,12 @@ private final class NexusCommandHoldMonitor {
     }
 
     private func poll() {
-        let flags = CGEventSource.flagsState(.combinedSessionState)
+        let flags = observedFlags ?? CGEventSource.flagsState(.combinedSessionState)
         let commandIsDown = flags.contains(.maskCommand)
+            && (!requiresOption || flags.contains(.maskAlternate))
         let otherModifiersAreDown = flags.contains(.maskShift)
             || flags.contains(.maskControl)
+            || (!requiresOption && flags.contains(.maskAlternate))
             || flags.contains(.maskAlternate)
         let otherKeyIsDown = (CGKeyCode(0)..<CGKeyCode(128)).contains { keyCode in
             !Self.modifierKeyCodes.contains(keyCode)
@@ -1718,11 +2128,98 @@ private final class NexusCommandHoldMonitor {
         }
     }
 
+    private func receive(event: NSEvent) {
+        if event.type == .flagsChanged {
+            observedFlags = Self.cgEventFlags(from: event.modifierFlags)
+        } else {
+            disqualifiedByInput = true
+        }
+        poll()
+    }
+
+    private static func cgEventFlags(from flags: NSEvent.ModifierFlags) -> CGEventFlags {
+        var result: CGEventFlags = []
+        if flags.contains(.command) { result.insert(.maskCommand) }
+        if flags.contains(.shift) { result.insert(.maskShift) }
+        if flags.contains(.control) { result.insert(.maskControl) }
+        if flags.contains(.option) { result.insert(.maskAlternate) }
+        return result
+    }
+
+    /// A modifier-only gesture cannot be registered with Carbon. A passive
+    /// CGEvent tap is the reliable macOS mechanism for observing it while a
+    /// different app is frontmost. It never consumes keystrokes. If macOS has
+    /// not granted Input Monitoring yet, keep the NSEvent/poll fallback and
+    /// ask once so the next hold works without requiring Nexus to be focused.
+    private func installGlobalEventTapIfPossible() {
+        if !CGPreflightListenEventAccess() {
+            let requestedKey = "NexusRequestedInputMonitoring.v1"
+            if !UserDefaults.standard.bool(forKey: requestedKey) {
+                UserDefaults.standard.set(true, forKey: requestedKey)
+                _ = CGRequestListenEventAccess()
+            }
+            NSLog("Nexus needs Input Monitoring for the global hold-Command gesture")
+            return
+        }
+
+        let eventMask: CGEventMask =
+            (CGEventMask(1) << CGEventType.flagsChanged.rawValue)
+            | (CGEventMask(1) << CGEventType.keyDown.rawValue)
+            | (CGEventMask(1) << CGEventType.leftMouseDown.rawValue)
+            | (CGEventMask(1) << CGEventType.rightMouseDown.rawValue)
+            | (CGEventMask(1) << CGEventType.otherMouseDown.rawValue)
+            | (CGEventMask(1) << CGEventType.scrollWheel.rawValue)
+        guard let tap = CGEvent.tapCreate(
+            tap: .cgSessionEventTap,
+            place: .headInsertEventTap,
+            options: .listenOnly,
+            eventsOfInterest: eventMask,
+            callback: Self.eventTapCallback,
+            userInfo: Unmanaged.passUnretained(self).toOpaque()
+        ) else {
+            NSLog("Nexus could not create its passive global key event tap")
+            return
+        }
+        let source = CFMachPortCreateRunLoopSource(kCFAllocatorDefault, tap, 0)
+        CFRunLoopAddSource(CFRunLoopGetMain(), source, .commonModes)
+        CGEvent.tapEnable(tap: tap, enable: true)
+        eventTap = tap
+        eventTapSource = source
+    }
+
+    private static let eventTapCallback: CGEventTapCallBack = { _, type, event, userInfo in
+        guard let userInfo else { return Unmanaged.passUnretained(event) }
+        let monitor = Unmanaged<NexusCommandHoldMonitor>
+            .fromOpaque(userInfo)
+            .takeUnretainedValue()
+        monitor.receive(type: type, flags: event.flags)
+        return Unmanaged.passUnretained(event)
+    }
+
+    private func receive(type: CGEventType, flags: CGEventFlags) {
+        observedFlags = flags
+        switch type {
+        case .flagsChanged:
+            break
+        case .keyDown, .leftMouseDown, .rightMouseDown, .otherMouseDown, .scrollWheel:
+            disqualifiedByInput = true
+        case .tapDisabledByTimeout, .tapDisabledByUserInput:
+            if let eventTap { CGEvent.tapEnable(tap: eventTap, enable: true) }
+        default:
+            break
+        }
+        poll()
+    }
+
     deinit {
         timer?.setEventHandler {}
         timer?.cancel()
         if let globalInputMonitor { NSEvent.removeMonitor(globalInputMonitor) }
         if let localInputMonitor { NSEvent.removeMonitor(localInputMonitor) }
+        if let eventTapSource {
+            CFRunLoopRemoveSource(CFRunLoopGetMain(), eventTapSource, .commonModes)
+        }
+        if let eventTap { CGEvent.tapEnable(tap: eventTap, enable: false) }
     }
 }
 
@@ -1755,6 +2252,8 @@ private final class NexusNotchPanel: NSPanel {
         backgroundColor = .clear
         hasShadow = false
         isMovable = false
+        hidesOnDeactivate = false
+        worksWhenModal = true
         acceptsMouseMovedEvents = true
         level = .mainMenu + 3
         collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary, .ignoresCycle]

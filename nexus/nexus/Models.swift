@@ -100,6 +100,7 @@ enum ModelProviderResolver {
         modelID: String,
         baseURL: String
     ) -> ModelProviderIdentity {
+        if kind == .openAI { return .openAI }
         if kind == .gemini { return .gemini }
         if kind == .nvidiaNIM { return .nvidia }
         if kind == .groq { return .groq }

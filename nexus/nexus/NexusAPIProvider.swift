@@ -2,20 +2,22 @@ import Foundation
 
 enum NexusAPIProviderKind: String, CaseIterable, Codable, Identifiable, Sendable {
     /// Kept for previously saved custom configurations and internal managed
-    /// OpenAI-compatible providers. The API sheet intentionally exposes only
-    /// the verified presets below.
+    /// OpenAI-compatible providers. New users should select the named OpenAI
+    /// preset instead of this legacy configuration.
     case openAICompatible
+    case openAI
     case gemini
     case nvidiaNIM
     case groq
     case openRouter
 
     var id: String { rawValue }
-    static let supportedPresets: [Self] = [.gemini, .nvidiaNIM, .groq, .openRouter]
+    static let supportedPresets: [Self] = [.openAI, .gemini, .nvidiaNIM, .groq, .openRouter]
 
     var title: String {
         switch self {
         case .openAICompatible: "OpenAI-compatible"
+        case .openAI: "OpenAI"
         case .gemini: "Gemini"
         case .nvidiaNIM: "NVIDIA NIM"
         case .groq: "Groq"
@@ -26,6 +28,7 @@ enum NexusAPIProviderKind: String, CaseIterable, Codable, Identifiable, Sendable
     var defaultBaseURL: String {
         switch self {
         case .openAICompatible: "https://api.openai.com/v1"
+        case .openAI: "https://api.openai.com/v1"
         // Gemini's OpenAI-compatible endpoint is deliberate. It is the path
         // that works with Nexus's streaming tool-plan and response transport.
         case .gemini: "https://generativelanguage.googleapis.com/v1beta/openai"
@@ -38,6 +41,10 @@ enum NexusAPIProviderKind: String, CaseIterable, Codable, Identifiable, Sendable
     var defaultModel: String {
         switch self {
         case .openAICompatible: ""
+        // This is a broadly available Chat Completions model. The API sheet
+        // keeps the model field editable because availability is per OpenAI
+        // project, so a user can enter any ChatGPT/OpenAI model ID they have.
+        case .openAI: "gpt-4.1-mini"
         case .gemini: "gemini-2.5-flash"
         case .nvidiaNIM: "openai/gpt-oss-120b"
         case .groq: "llama-3.3-70b-versatile"
@@ -50,6 +57,10 @@ enum NexusAPIProviderKind: String, CaseIterable, Codable, Identifiable, Sendable
     var keyAccount: String {
         switch self {
         case .openAICompatible: "primary-model-api-key.v1"
+        // Do not reuse the old generic account: it has historically held
+        // Gemini/custom-provider credentials. OpenAI gets its own Keychain
+        // item and is never written to UserDefaults or the vault.
+        case .openAI: "openai-api-key.v1"
         case .gemini: "gemini-api-key.v1"
         case .nvidiaNIM: "nvidia.nim.v1"
         case .groq: "groq-api-key.v1"
@@ -59,6 +70,8 @@ enum NexusAPIProviderKind: String, CaseIterable, Codable, Identifiable, Sendable
 
     var helpText: String {
         switch self {
+        case .openAI:
+            "OpenAI via the Chat Completions API. Enter an OpenAI API key and any model ID available to your API project."
         case .gemini:
             "Gemini via Google’s OpenAI-compatible endpoint. Use a Google AI Studio API key."
         case .nvidiaNIM:
@@ -89,6 +102,22 @@ final class NexusAPIProviderStore: ObservableObject {
     @Published var baseURL: String
     @Published var model: String
     @Published var apiKeyInput = ""
+
+    /// Provider presets do not expose a separate capabilities endpoint. Keep
+    /// this deliberately conservative so screen capture only happens for
+    /// models whose families are known to accept image content.
+    var selectedModelSupportsImageInput: Bool {
+        guard enabled else { return false }
+        let value = model.lowercased()
+        switch kind {
+        case .gemini:
+            return value.contains("gemini")
+        case .openAI, .openAICompatible:
+            return ["gpt-4o", "gpt-4.1", "gpt-5", "o3", "o4"].contains { value.contains($0) }
+        case .nvidiaNIM, .groq, .openRouter:
+            return value.contains("llava") || value.contains("vision") || value.contains("vl")
+        }
+    }
     @Published private(set) var savedKey = false
     @Published private(set) var errorMessage: String?
     @Published private(set) var connectionMessage: String?
@@ -126,6 +155,11 @@ final class NexusAPIProviderStore: ObservableObject {
                 inferredKind = .groq
             } else if storedBaseURL.localizedCaseInsensitiveContains("openrouter.ai") {
                 inferredKind = .openRouter
+            } else if storedBaseURL.localizedCaseInsensitiveContains("api.openai.com") {
+                // Preserve the old generic item as a separate legacy key; the
+                // named OpenAI preset intentionally requires a fresh key save
+                // in its dedicated Keychain account.
+                inferredKind = .openAI
             } else {
                 inferredKind = restoredKind
             }
@@ -141,7 +175,7 @@ final class NexusAPIProviderStore: ObservableObject {
             : inferredKind.defaultBaseURL
         self.model = inferredKind == .openAICompatible
             ? (storedModel.isEmpty ? inferredKind.defaultModel : storedModel)
-            : inferredKind.defaultModel
+            : (inferredKind == .openAI && !storedModel.isEmpty ? storedModel : inferredKind.defaultModel)
         self.savedKey = false
         self.savedKey = (try? self.keyData(for: inferredKind)) != nil
         if inferredKind != .openAICompatible { persist() }
@@ -264,7 +298,43 @@ final class NexusAPIProviderStore: ObservableObject {
 enum NexusAPIProviderClient {
     private static let inferenceRequestTimeout: TimeInterval = 7 * 24 * 60 * 60
     private struct OpenAIRequest: Encodable {
-        struct Message: Encodable { let role: String; let content: String }
+        struct Message: Encodable {
+            private enum CodingKeys: String, CodingKey { case role, content }
+            private struct ImageURL: Encodable { let url: String }
+            private struct Part: Encodable {
+                let type: String
+                let text: String?
+                let imageURL: ImageURL?
+
+                enum CodingKeys: String, CodingKey { case type, text; case imageURL = "image_url" }
+            }
+
+            let role: String
+            let content: String
+            let imageBase64: String?
+            let imageMediaType: String?
+
+            init(role: String, content: String, imageBase64: String? = nil, imageMediaType: String? = nil) {
+                self.role = role
+                self.content = content
+                self.imageBase64 = imageBase64
+                self.imageMediaType = imageMediaType
+            }
+
+            func encode(to encoder: Encoder) throws {
+                var container = encoder.container(keyedBy: CodingKeys.self)
+                try container.encode(role, forKey: .role)
+                guard let imageBase64 else {
+                    try container.encode(content, forKey: .content)
+                    return
+                }
+                let mediaType = imageMediaType ?? "image/jpeg"
+                try container.encode([
+                    Part(type: "text", text: content, imageURL: nil),
+                    Part(type: "image_url", text: nil, imageURL: .init(url: "data:\(mediaType);base64,\(imageBase64)"))
+                ], forKey: .content)
+            }
+        }
         let model: String
         let messages: [Message]
         let stream: Bool
@@ -286,7 +356,17 @@ enum NexusAPIProviderClient {
     }
 
     private struct GeminiRequest: Encodable {
-        struct Part: Encodable { let text: String }
+        struct Part: Encodable {
+            struct InlineData: Encodable {
+                let mimeType: String
+                let data: String
+                enum CodingKeys: String, CodingKey { case mimeType = "mime_type"; case data }
+            }
+
+            let text: String?
+            let inlineData: InlineData?
+            enum CodingKeys: String, CodingKey { case text; case inlineData = "inline_data" }
+        }
         struct Content: Encodable { let role: String?; let parts: [Part] }
         struct GenerationConfig: Encodable {
             struct ThinkingConfig: Encodable {
@@ -320,19 +400,20 @@ enum NexusAPIProviderClient {
         messages: [NexusChatMessage],
         temperature: Double?,
         maximumTokens: Int?,
+        includeNexusSystemPrompt: Bool = true,
         onDelta: @escaping @Sendable (String, String) async -> Void
     ) async throws -> String {
         switch configuration.kind {
-        case .openAICompatible, .nvidiaNIM, .groq, .openRouter:
-            try await openAICompatible(configuration, messages, temperature, maximumTokens, onDelta)
+        case .openAICompatible, .openAI, .nvidiaNIM, .groq, .openRouter:
+            try await openAICompatible(configuration, messages, temperature, maximumTokens, includeNexusSystemPrompt, onDelta)
         case .gemini:
             // The configured Gemini preset is Google's OpenAI-compatible API.
             // Keep native Gemini support for callers that supply the native
             // base URL programmatically.
             if isGeminiOpenAICompatibleEndpoint(configuration.baseURL) {
-                try await openAICompatible(configuration, messages, temperature, maximumTokens, onDelta)
+                try await openAICompatible(configuration, messages, temperature, maximumTokens, includeNexusSystemPrompt, onDelta)
             } else {
-                try await gemini(configuration, messages, temperature, maximumTokens, onDelta)
+                try await gemini(configuration, messages, temperature, maximumTokens, includeNexusSystemPrompt, onDelta)
             }
         }
     }
@@ -347,6 +428,7 @@ enum NexusAPIProviderClient {
         _ messages: [NexusChatMessage],
         _ temperature: Double?,
         _ maximumTokens: Int?,
+        _ includeNexusSystemPrompt: Bool,
         _ onDelta: @escaping @Sendable (String, String) async -> Void
     ) async throws -> String {
         // NVIDIA's GPT-OSS endpoint emits private reasoning before visible
@@ -367,8 +449,8 @@ enum NexusAPIProviderClient {
         request.setValue("Bearer \(configuration.apiKey)", forHTTPHeaderField: "Authorization")
         request.httpBody = try JSONEncoder().encode(OpenAIRequest(
             model: configuration.model,
-            messages: [.init(role: "system", content: NexusResponseInstructions.conciseSystemPrompt)]
-                + messages.map { .init(role: $0.role, content: $0.content) },
+            messages: (includeNexusSystemPrompt ? [.init(role: "system", content: NexusResponseInstructions.conciseSystemPrompt)] : [])
+                + messages.map { .init(role: $0.role, content: $0.content, imageBase64: $0.imageBase64, imageMediaType: $0.imageMediaType) },
             stream: true,
             temperature: temperature,
             maxTokens: resolvedMaximumTokens,
@@ -397,6 +479,7 @@ enum NexusAPIProviderClient {
         _ messages: [NexusChatMessage],
         _ temperature: Double?,
         _ maximumTokens: Int?,
+        _ includeNexusSystemPrompt: Bool,
         _ onDelta: @escaping @Sendable (String, String) async -> Void
     ) async throws -> String {
         var url = configuration.baseURL
@@ -408,13 +491,20 @@ enum NexusAPIProviderClient {
         request.timeoutInterval = inferenceRequestTimeout
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.setValue(configuration.apiKey, forHTTPHeaderField: "x-goog-api-key")
-        let system = ([NexusResponseInstructions.conciseSystemPrompt]
+        let system = ((includeNexusSystemPrompt ? [NexusResponseInstructions.conciseSystemPrompt] : [])
             + messages.filter { $0.role == "system" }.map(\.content)).joined(separator: "\n\n")
         let contents = messages.filter { $0.role != "system" }.map {
-            GeminiRequest.Content(role: $0.role == "assistant" ? "model" : "user", parts: [.init(text: $0.content)])
+            var parts: [GeminiRequest.Part] = [.init(text: $0.content, inlineData: nil)]
+            if let image = $0.imageBase64 {
+                parts.append(.init(
+                    text: nil,
+                    inlineData: .init(mimeType: $0.imageMediaType ?? "image/jpeg", data: image)
+                ))
+            }
+            return GeminiRequest.Content(role: $0.role == "assistant" ? "model" : "user", parts: parts)
         }
         request.httpBody = try JSONEncoder().encode(GeminiRequest(
-            systemInstruction: .init(role: nil, parts: [.init(text: system)]),
+            systemInstruction: .init(role: nil, parts: [.init(text: system, inlineData: nil)]),
             contents: contents,
             // Gemini 2.5 Flash reserves a hidden thinking budget by default.
             // Nexus does not surface that hidden chain of thought and users can
