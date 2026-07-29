@@ -2810,35 +2810,12 @@ enum NexusTCCService: String, CaseIterable {
     }
 }
 
-enum NexusPermissionIdentityPolicy {
-    enum RepairScope: Equatable {
-        case none
-        case deniedServices
-        case allServices
-    }
-
-    static func repairScope(
-        previousFingerprint: String?,
-        currentFingerprint: String,
-        hasLegacySettings: Bool,
-        migrationCompleted: Bool
-    ) -> RepairScope {
-        guard !currentFingerprint.isEmpty else { return .none }
-        if let previousFingerprint, previousFingerprint != currentFingerprint {
-            return .allServices
-        }
-        if previousFingerprint == nil, hasLegacySettings, !migrationCompleted {
-            return .deniedServices
-        }
-        return .none
-    }
-}
-
 /// TCC's System Settings rows are labels, not proof that macOS authorizes the
 /// currently running signature. This object checks the real permission APIs
 /// every launch/activation and associates grants with Nexus's designated
-/// signing requirement. It resets only Nexus records and only when an identity
-/// migration or an explicit user repair requires it.
+/// signing requirement. A launch check must never mutate TCC: automatic
+/// resets can erase a valid grant just after the user enables it. Repairs are
+/// available only through the explicit Settings action below.
 @MainActor
 final class NexusPermissionHealth: ObservableObject {
     static let shared = NexusPermissionHealth()
@@ -2848,43 +2825,21 @@ final class NexusPermissionHealth: ObservableObject {
 
     private let defaults = UserDefaults.standard
     private let fingerprintKey = "nexus.permission.designated-requirement.v1"
-    private let migrationKey = "nexus.permission.tcc-migration.v1"
-    private let legacySettingsKey = "nexus.app.settings.v1"
 
     private init() {}
 
     func validateAtLaunch() {
         let currentFingerprint = Self.designatedRequirementFingerprint()
         let previousFingerprint = defaults.string(forKey: fingerprintKey)
-        var repairMessage: String?
-        let scope = NexusPermissionIdentityPolicy.repairScope(
-            previousFingerprint: previousFingerprint,
-            currentFingerprint: currentFingerprint,
-            hasLegacySettings: defaults.object(forKey: legacySettingsKey) != nil,
-            migrationCompleted: defaults.bool(forKey: migrationKey)
-        )
-
-        switch scope {
-        case .none:
-            break
-        case .deniedServices:
-            let denied = NexusPermissionSnapshot.current.deniedServices
-            if !denied.isEmpty {
-                _ = reset(denied)
-                repairMessage = "Removed stale permissions from an older Nexus build."
-            }
-        case .allServices:
-            _ = reset(NexusTCCService.allCases)
-            repairMessage = "Nexus's signing identity changed; old permission records were removed."
-        }
 
         if !currentFingerprint.isEmpty {
             defaults.set(currentFingerprint, forKey: fingerprintKey)
         }
-        defaults.set(true, forKey: migrationKey)
         refresh()
-        if let repairMessage {
-            statusMessage = repairMessage + " " + Self.liveStatusMessage(for: snapshot)
+        if let previousFingerprint,
+           previousFingerprint != currentFingerprint,
+           !currentFingerprint.isEmpty {
+            statusMessage = "Nexus signing identity changed. " + Self.liveStatusMessage(for: snapshot)
         }
         NSLog(
             "[Nexus Permissions] launch check input=%@ accessibility=%@ screen=%@ identity=%@",
