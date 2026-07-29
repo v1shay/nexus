@@ -1,7 +1,57 @@
 import SwiftUI
 import AppKit
 import Combine
+import CryptoKit
 import Darwin
+import IOKit.hid
+import Security
+
+/// A durable, low-volume trace for the global surfaces that are hardest to
+/// diagnose from Console after another app becomes frontmost. The current and
+/// previous files are intentionally bounded so this can remain enabled in
+/// production without accumulating user data indefinitely.
+enum NexusDiagnostics {
+    static let logURL = FileManager.default.homeDirectoryForCurrentUser
+        .appendingPathComponent("Library/Logs/Nexus/diagnostics.log")
+
+    private static let queue = DispatchQueue(label: "na.nexus.diagnostics")
+    private static let maximumBytes: UInt64 = 1_048_576
+
+    static func record(_ message: String) {
+        NSLog("%@", message)
+        let timestamp = ISO8601DateFormatter().string(from: Date())
+        let line = "\(timestamp) pid=\(ProcessInfo.processInfo.processIdentifier) \(message)\n"
+        queue.async {
+            append(line)
+        }
+    }
+
+    private static func append(_ line: String) {
+        let manager = FileManager.default
+        let directory = logURL.deletingLastPathComponent()
+        try? manager.createDirectory(at: directory, withIntermediateDirectories: true)
+        if let attributes = try? manager.attributesOfItem(atPath: logURL.path),
+           let size = attributes[.size] as? NSNumber,
+           size.uint64Value >= maximumBytes {
+            let previous = directory.appendingPathComponent("diagnostics.previous.log")
+            try? manager.removeItem(at: previous)
+            try? manager.moveItem(at: logURL, to: previous)
+        }
+        guard let data = line.data(using: .utf8) else { return }
+        if !manager.fileExists(atPath: logURL.path) {
+            _ = manager.createFile(atPath: logURL.path, contents: data)
+            return
+        }
+        guard let handle = try? FileHandle(forWritingTo: logURL) else { return }
+        defer { try? handle.close() }
+        do {
+            try handle.seekToEnd()
+            try handle.write(contentsOf: data)
+        } catch {
+            return
+        }
+    }
+}
 
 @main
 struct NexusApp: App {
@@ -79,6 +129,57 @@ final class NexusAppDelegate: NSObject, NSApplicationDelegate {
             }
             return
         }
+        if CommandLine.arguments.contains("--nexus-permission-smoke") {
+            NSApp.setActivationPolicy(.prohibited)
+            let snapshot = NexusPermissionSnapshot.current
+            let output = """
+            {"inputMonitoring":\(snapshot.inputMonitoring),"accessibility":\(snapshot.accessibility),"screenRecording":\(snapshot.screenRecording),"identity":"\(NexusPermissionHealth.designatedRequirementFingerprint())"}
+
+            """
+            FileHandle.standardOutput.write(Data(output.utf8))
+            Foundation.exit(0)
+        }
+        if CommandLine.arguments.contains("--nexus-insertion-smoke") {
+            launchTask = Task { @MainActor in
+                let field = NSTextField(frame: NSRect(x: 20, y: 20, width: 420, height: 28))
+                field.stringValue = ""
+                let window = NSWindow(
+                    contentRect: NSRect(x: 0, y: 0, width: 460, height: 68),
+                    styleMask: [.titled],
+                    backing: .buffered,
+                    defer: false
+                )
+                window.contentView?.addSubview(field)
+                window.makeKeyAndOrderFront(nil)
+                NSApp.activate(ignoringOtherApps: true)
+                window.makeFirstResponder(field)
+                try? await Task.sleep(for: .milliseconds(250))
+                let target = NexusFocusedTextTarget.authorizedTarget()
+                let inserted = target?.replaceSelectedText(with: "Nexus insertion smoke") == true
+                try? await Task.sleep(for: .milliseconds(100))
+                let passed = inserted && field.stringValue == "Nexus insertion smoke"
+                let output = """
+                {"accessibility":\(NexusGlobalHotkeyAccess.hasAccessibility),"target":\(target != nil),"inserted":\(inserted),"valueMatched":\(field.stringValue == "Nexus insertion smoke")}
+
+                """
+                FileHandle.standardOutput.write(Data(output.utf8))
+                Foundation.exit(passed ? 0 : 1)
+            }
+            return
+        }
+        if CommandLine.arguments.contains("--nexus-compact-panel-smoke") {
+            launchTask = Task { @MainActor in
+                let notch = NotchController()
+                notch.install(startServices: false)
+                let passed = notch.runFirstCompactShowSmoke()
+                try? await Task.sleep(for: .milliseconds(150))
+                FileHandle.standardOutput.write(
+                    Data("Nexus first compact panel smoke: \(passed ? "passed" : "failed")\n".utf8)
+                )
+                Foundation.exit(passed ? 0 : 1)
+            }
+            return
+        }
         NSApp.setActivationPolicy(.regular)
         if CommandLine.arguments.contains("--nexus-ui-testing") {
             let notch = NotchController()
@@ -106,6 +207,7 @@ final class NexusAppDelegate: NSObject, NSApplicationDelegate {
         launchTask = Task { @MainActor [weak self] in
             await Self.retireOlderInstances()
             guard !Task.isCancelled else { return }
+            NexusPermissionHealth.shared.validateAtLaunch()
             _ = try? NexCLIWorkspaceManager.shared.prepareForNexusLaunch()
             try? NexCLIHostManager.shared.installAndStart()
             let notch = NotchController()
@@ -145,7 +247,7 @@ final class NexusAppDelegate: NSObject, NSApplicationDelegate {
         button.image = nil
         button.target = self
         button.action = #selector(openNexusFromMenuBar)
-        button.toolTip = "Nexus — Option-Command dictation"
+        button.toolTip = "Nexus — hold Globe/Fn to dictate into any app"
         let orb = NSHostingView(rootView: NexusMenuBarOrb(notch: notch))
         orb.frame = NSRect(x: 4, y: 2, width: 20, height: 20)
         orb.autoresizingMask = [.minXMargin, .maxXMargin, .minYMargin, .maxYMargin]
@@ -222,7 +324,10 @@ private struct NexusMenuBarOrb: View {
         NexusOrbAnimation(
             mode: (notch.isGlobalPasteDictating || notch.isListening) ? .composing : .thinkingCycle,
             size: 18,
-            tint: .white
+            // The menu bar can be either light or dark. Keep this affordance
+            // distinctly medium gray; the dark compact notch retains its
+            // existing white mark elsewhere in the app.
+            tint: Color(white: 0.42)
         )
         .frame(width: 20, height: 20)
         .accessibilityLabel(notch.isGlobalPasteDictating ? "Nexus dictating" : "Nexus ready")
@@ -341,7 +446,7 @@ final class NotchController: ObservableObject {
     private let connectController: NexusConnectController
     private let modelDownloadViewModel: ModelDownloadViewModel
     private var automaticRevealIsWaitingForNotchVisit = false
-    private let responseSpeaker = ResponseSpeaker()
+    private let responseSpeaker: ResponseSpeaker
     private var responseTask: Task<Void, Never>?
     private var memoryWriterTask: Task<Void, Never>?
     private var responseGeneration = UUID()
@@ -402,6 +507,7 @@ final class NotchController: ObservableObject {
         self.connectController = resolvedConnectController
         self.conversationSession = conversationSession
         settings = NexusAppSettings()
+        responseSpeaker = ResponseSpeaker(settings: settings)
         modelDownloadViewModel = ModelDownloadViewModel(connect: resolvedConnectController)
         memory = NexMemoryController(conversation: conversationSession)
         memoryObservation = memory.objectWillChange.sink { [weak self] _ in
@@ -423,6 +529,9 @@ final class NotchController: ObservableObject {
     func install(startServices: Bool = true) {
         guard panel == nil else { return }
         if startServices { connectController.start() }
+        // Permission prompts must be initiated deliberately from Settings.
+        // Starting Nexus must never turn a hotkey attempt into a repeating
+        // macOS privacy dialog.
         let screen = NSScreen.main ?? NSScreen.screens[0]
         self.screen = screen
         currentSize = closedSize(for: screen)
@@ -487,6 +596,9 @@ final class NotchController: ObservableObject {
             armWakePhraseListener()
             music.start()
         }
+        NexusDiagnostics.record(
+            "[Nexus Panel] installed frame=\(NSStringFromRect(panel.frame)) screen=\(screen.localizedName)"
+        )
         panel.orderFrontRegardless()
         NSLog("Nexus installed its panel, pointer monitor, and global hotkey")
 
@@ -505,6 +617,23 @@ final class NotchController: ObservableObject {
         guard NexusSecretStoreRuntime.usesSyntheticResponse else { return }
         interaction.showOverlay()
         if let screen { resize(to: expandedSize(for: screen), animated: false) }
+    }
+
+    /// Signed-app smoke coverage for the exact idle → first compact transition
+    /// that modifier holds use in production. This deliberately avoids opening
+    /// an expanded overlay first.
+    func runFirstCompactShowSmoke() -> Bool {
+        guard let panel, let screen else { return false }
+        interaction.beginDictation()
+        let expectedSize = listeningSize(for: screen)
+        resize(to: expectedSize, animated: true)
+        panel.displayIfNeeded()
+        return panel.isVisible
+            && interaction.presentation == .dictating
+            && abs(panel.frame.width - expectedSize.width) < 0.5
+            && abs(panel.frame.height - expectedSize.height) < 0.5
+            && abs((panel.contentView?.frame.width ?? 0) - expectedSize.width) < 0.5
+            && abs((panel.contentView?.frame.height ?? 0) - expectedSize.height) < 0.5
     }
 
     /// Watches a generous virtual region over the physical notch.  This means
@@ -532,6 +661,7 @@ final class NotchController: ObservableObject {
     /// gesture global without requiring a focused window or a Carbon key chord.
     private func installCommandHoldMonitor() {
         let monitor = NexusCommandHoldMonitor(
+            holdDuration: 0.30,
             onPress: { [weak self] in
                 Task { @MainActor in
                     guard let self else { return }
@@ -563,7 +693,7 @@ final class NotchController: ObservableObject {
         monitor.install()
 
         let globalPasteMonitor = NexusCommandHoldMonitor(
-            requiresOption: true,
+            requiresFunction: true,
             holdDuration: 0.10,
             onPress: { [weak self] in
                 Task { @MainActor in await self?.startGlobalPasteDictation() }
@@ -582,6 +712,7 @@ final class NotchController: ObservableObject {
     /// prior stream, preserve the same active conversation, and then enter the
     /// exact same finalization/response pipeline.
     private func prepareForUserRequest() async {
+        NexusDiagnostics.record("[Nexus Voice] preparing Command voice request")
         wakePhraseListener.stop()
         closeTask?.cancel()
         // Foreground speech always wins model capacity. If a prior background
@@ -699,13 +830,30 @@ final class NotchController: ObservableObject {
     /// assistant request: the finalized, cleaned utterance is inserted back
     /// into the focused control in the app where the shortcut began.
     private func startGlobalPasteDictation() async {
-        guard settings.globalPasteDictationEnabled,
-              !isGlobalPasteDictating,
-              !isListening,
-              !responseIsStreaming else { return }
-        guard let target = NexusFocusedTextTarget.requestingAccessIfNeeded() else { return }
-        globalPasteTarget = target
+        guard settings.globalPasteDictationEnabled else {
+            NexusDiagnostics.record("[Nexus Dictation] Fn hold ignored because global dictation is disabled")
+            return
+        }
+        guard !isGlobalPasteDictating, !isListening, !responseIsStreaming else {
+            NexusDiagnostics.record(
+                "[Nexus Dictation] Fn hold ignored active=\(isGlobalPasteDictating) listening=\(isListening) streaming=\(responseIsStreaming)"
+            )
+            return
+        }
+        // Accessibility is needed only for final insertion, never for
+        // listening. Do not prompt from a hotkey: if macOS has not authorized
+        // the current app identity yet, dictation still runs and leaves the
+        // cleaned text on the clipboard as a recoverable fallback.
+        globalPasteTarget = NexusFocusedTextTarget.authorizedTarget()
+        NexusDiagnostics.record(
+            "[Nexus Dictation] started inputMonitoring=\(NexusGlobalHotkeyAccess.hasInputMonitoring) accessibility=\(NexusGlobalHotkeyAccess.hasAccessibility) target=\(globalPasteTarget != nil)"
+        )
         isGlobalPasteDictating = true
+        // Global text-field dictation is still a first-class Nexus voice
+        // session. Show the compact notch and its shaping/listening orb while
+        // keeping its final result separate from the agent conversation.
+        interaction.beginDictation()
+        if let screen { resize(to: listeningSize(for: screen), animated: true) }
         globalPasteSpeculationTask?.cancel()
         globalPasteSpeculationTask = nil
         globalPasteSpeculationRaw = ""
@@ -713,23 +861,43 @@ final class NotchController: ObservableObject {
         // release the shortcut. It is a separate model from the agent.
         Task { await modelDownloadViewModel.prepareDictationRefiner() }
         speechTranscriber.start(engine: settings.speechEngine) { [weak self] partial in
-            Task { @MainActor in self?.speculateGlobalDictation(for: partial) }
+            Task { @MainActor in
+                self?.interaction.updateTranscript(partial)
+                self?.speculateGlobalDictation(for: partial)
+            }
         }
     }
 
     private func finishGlobalPasteDictation() async {
-        guard isGlobalPasteDictating else { return }
+        guard isGlobalPasteDictating else {
+            NexusDiagnostics.record("[Nexus Dictation] Fn release ignored because no dictation session is active")
+            return
+        }
         isGlobalPasteDictating = false
+        NexusDiagnostics.record("[Nexus Dictation] finalizing")
+        interaction.beginDictationFinalizing()
+        if let screen { resize(to: listeningSize(for: screen), animated: true) }
         defer {
             globalPasteTarget = nil
             globalPasteSpeculationTask?.cancel()
             globalPasteSpeculationTask = nil
             globalPasteSpeculationRaw = ""
+            // This shortcut inserts text into the frontmost app; it must not
+            // transition into agent thinking or leave the compact notch open.
+            interaction.dismiss()
+            if let screen { resize(to: idleSize(for: screen), animated: true) }
         }
-        guard let transcript = await speechTranscriber.stopAndTranscribe() else { return }
+        guard let transcript = await speechTranscriber.stopAndTranscribe() else {
+            NexusDiagnostics.record("[Nexus Dictation] final transcript unavailable")
+            return
+        }
         let raw = transcript.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard
-              !raw.isEmpty else { return }
+        guard !raw.isEmpty else {
+            NexusDiagnostics.record("[Nexus Dictation] final transcript was empty")
+            return
+        }
+        NexusDiagnostics.record("[Nexus Dictation] final transcript characters=\(raw.count)")
+        interaction.updateTranscript(raw)
         let endpoint = Date()
         let cleaned: String
         if globalPasteSpeculationRaw.normalizedForDictationMatch == raw.normalizedForDictationMatch,
@@ -740,26 +908,45 @@ final class NotchController: ObservableObject {
             globalPasteSpeculationTask?.cancel()
             cleaned = await refineGlobalDictation(raw)
         }
-        guard !cleaned.isEmpty else { return }
-        if globalPasteTarget?.replaceSelectedText(with: cleaned) != true {
-            NSSound.beep()
+        guard !cleaned.isEmpty else {
+            NexusDiagnostics.record("[Nexus Dictation] cleaner returned empty text")
+            return
+        }
+        if globalPasteTarget?.replaceSelectedText(with: cleaned) == true {
+            NexusDiagnostics.record("[Nexus Dictation] inserted through captured accessibility element")
+        } else if NexusClipboardPaster.insertIntoFocusedApplication(cleaned) {
+            NexusDiagnostics.record("[Nexus Dictation] inserted through Command-V fallback")
+        } else {
+            NexusDiagnostics.record(
+                "[Nexus Dictation] insertion failed accessibility=\(NexusGlobalHotkeyAccess.hasAccessibility); text remains on clipboard"
+            )
         }
         let elapsedMilliseconds = Date().timeIntervalSince(endpoint) * 1_000
-        NSLog("Nexus global dictation cleanup and insertion: %.0f ms", elapsedMilliseconds)
+        NexusDiagnostics.record(
+            "[Nexus Dictation] cleanup-and-insertion milliseconds=\(Int(elapsedMilliseconds.rounded()))"
+        )
     }
 
     /// The refiner is a single, short, no-tools completion. It runs only after
     /// endpointing has finalized the utterance, which permits semantic cleanup
     /// (lists and self-corrections) without repeatedly rewriting partial ASR.
     private func refineGlobalDictation(_ raw: String) async -> String {
-        do {
-            let result = try await modelDownloadViewModel.refineGlobalDictation(raw)
-            return NexusDictationRefinementPrompt.sanitize(result, fallback: raw)
-        } catch {
-            // Dictation must always paste rather than fail because an optional
-            // cleaner is unavailable. The raw ASR result is the low-latency,
-            // lossless fallback.
-            return raw
+        await withTaskGroup(of: String?.self) { group in
+            group.addTask { [modelDownloadViewModel] in
+                guard let result = try? await modelDownloadViewModel.refineGlobalDictation(raw) else {
+                    return nil
+                }
+                return NexusDictationRefinementPrompt.sanitize(result, fallback: raw)
+            }
+            group.addTask {
+                try? await Task.sleep(for: .milliseconds(900))
+                return nil
+            }
+            let first = await group.next() ?? nil
+            group.cancelAll()
+            // Smart cleanup is optional; raw ASR is always the bounded,
+            // lossless fallback and must paste within the latency budget.
+            return first ?? raw
         }
     }
 
@@ -799,7 +986,16 @@ final class NotchController: ObservableObject {
         if !finalizedPrompt.isEmpty, await conversationSession.appendUser(finalizedPrompt) != nil {
             await memory.conversationDidChange()
         }
+        let visionScreenRequired = settings.shareScreenWithVisionModels
+            && modelDownloadViewModel.activeModelSupportsImageInput
         currentRequestScreenAttachment = captureScreenAttachmentIfNeeded()
+        guard !visionScreenRequired || currentRequestScreenAttachment != nil else {
+            // Do not let a vision question silently degrade to text-only and
+            // make the model ask the user to describe a screen it never saw.
+            interaction.acknowledge("Enable Screen Recording to send the current screen to this vision model.")
+            if let screen { resize(to: expandedSize(for: screen), animated: true) }
+            return
+        }
         automaticRevealIsWaitingForNotchVisit = true
         if let screen {
             resize(to: expandedSize(for: screen), animated: true)
@@ -822,10 +1018,18 @@ final class NotchController: ObservableObject {
     private func captureScreenAttachmentIfNeeded() -> NexusScreenAttachment? {
         guard settings.shareScreenWithVisionModels,
               modelDownloadViewModel.activeModelSupportsImageInput else { return nil }
+        // The privacy toggle can be correct while CoreGraphics preflight is
+        // stale after an app replacement. Attempt the real capture first.
+        if let attachment = NexusScreenCapture.captureCurrentScreen() {
+            NSLog("[Nexus Vision] Encoded frontmost app window (%d base64 bytes)", attachment.base64.utf8.count)
+            return attachment
+        }
+        _ = NexusScreenCapture.requestAccess(prompt: true)
         guard let attachment = NexusScreenCapture.captureCurrentScreen() else {
-            NSLog("Nexus could not capture screen context; continuing without an image")
+            NSLog("[Nexus Vision] Screen capture unavailable; request is text-only")
             return nil
         }
+        NSLog("[Nexus Vision] Encoded frontmost app window (%d base64 bytes)", attachment.base64.utf8.count)
         return attachment
     }
 
@@ -836,10 +1040,11 @@ final class NotchController: ObservableObject {
         let original = result[userIndex]
         result[userIndex] = .init(
             role: original.role,
-            content: original.content + "\n\nA current screenshot of the user's screen is attached. Use it only when it helps answer the request.",
+            content: original.content + "\n\nAn image of the frontmost application window is attached to this message. Inspect it before answering and use its visible content as context even when the user does not explicitly mention the screen. If the user asks about what is on their screen, answer from the image and do not ask them to describe it.",
             imageBase64: attachment.base64,
             imageMediaType: attachment.mediaType
         )
+        NSLog("[Nexus Vision] Attached screen image to the user request")
         return result
     }
 
@@ -892,9 +1097,12 @@ final class NotchController: ObservableObject {
             responseSpeaker.beginStreaming()
             responseIsStreaming = true
             do {
-                let baseMessages = applyingCurrentScreenAttachment(
-                    to: await conversationSession.contextMessages()
-                )
+                // Do not make a vision model inspect the desktop just to plan
+                // tools. That doubled image inference (and could strand a
+                // small Gemma in the compact thinking state). The final
+                // answer below gets the image exactly once.
+                let plannerContext = await conversationSession.contextMessages()
+                let baseMessages = applyingCurrentScreenAttachment(to: plannerContext)
                 requestAsyncStatusIfNeeded(prompt: prompt, generation: generation)
                 let presentationTask = Task { [weak self] in
                     try? await Task.sleep(for: .milliseconds(800))
@@ -932,10 +1140,10 @@ final class NotchController: ObservableObject {
                 }
                 definitions.sort { $0.name < $1.name }
                 let planningMessages = NexPrimaryToolPlanner.planningMessages(
-                    context: baseMessages,
+                    context: plannerContext,
                     tools: definitions
                 )
-                let plan = try await modelDownloadViewModel.toolPlan(
+                let plan = try await toolPlanWithDeadline(
                     messages: planningMessages,
                     registeredTools: definitions
                 )
@@ -993,13 +1201,11 @@ final class NotchController: ObservableObject {
                         } && mediaOverlayTab != nil
                         if startedPlayback { break }
 
-                        let planningContext = applyingCurrentScreenAttachment(
-                            to: await conversationSession.contextMessages(
-                                memoryLookupPerformed: memoryLookupPerformed,
-                                webContext: result.context
-                            )
+                        let planningContext = await conversationSession.contextMessages(
+                            memoryLookupPerformed: memoryLookupPerformed,
+                            webContext: result.context
                         )
-                        pendingPlan = try await modelDownloadViewModel.toolPlan(
+                        pendingPlan = try await toolPlanWithDeadline(
                             messages: NexPrimaryToolPlanner.planningMessages(
                                 context: planningContext,
                                 tools: definitions
@@ -1155,6 +1361,10 @@ final class NotchController: ObservableObject {
                 // is active. Do not accept a result after the response ended.
                 guard responseIsStreaming else { return }
                 interaction.updateWorkingStatus(status)
+                // Status models run after the Piper stream is warm. Speak the
+                // generated line through that configured voice so it remains
+                // useful even when the compact UI moves on immediately.
+                responseSpeaker.speakImmediately(status)
             } catch {
                 // A status model is optional and never allowed to delay Nex.
             }
@@ -1215,6 +1425,38 @@ final class NotchController: ObservableObject {
         ) { [weak self] delta, accumulated in
             guard let self else { return }
             await self.receiveResponseDelta(delta, accumulated: accumulated, generation: generation)
+        }
+    }
+
+    /// Tool planning is advisory. A local model that is busy or malformed
+    /// must never leave dictation in an endless compact-thinking state before
+    /// the actual chat request has even begun.
+    private func toolPlanWithDeadline(
+        messages: [NexusChatMessage],
+        registeredTools: [NexRegisteredTool]
+    ) async throws -> NexPrimaryToolPlan {
+        do {
+            return try await withThrowingTaskGroup(of: NexPrimaryToolPlan.self) { group in
+                group.addTask { [modelDownloadViewModel] in
+                    try await modelDownloadViewModel.toolPlan(
+                        messages: messages,
+                        registeredTools: registeredTools
+                    )
+                }
+                group.addTask {
+                    try await Task.sleep(for: .seconds(12))
+                    try Task.checkCancellation()
+                    throw NexusToolPlanningDeadlineError()
+                }
+                defer { group.cancelAll() }
+                guard let first = try await group.next() else {
+                    return .fallback
+                }
+                return first
+            }
+        } catch is NexusToolPlanningDeadlineError {
+            NSLog("[Nexus Response] Tool planning exceeded 12 seconds; answering directly")
+            return .fallback
         }
     }
 
@@ -1641,12 +1883,6 @@ final class NotchController: ObservableObject {
     private func resize(to size: CGSize, animated: Bool) {
         music.setNotchExpanded(interaction.presentation == .overlay)
         guard let panel, let screen else { return }
-        // NSPanel can be ordered out by another application's activation even
-        // when it remains alive. Re-ordering here is intentional: every
-        // public Nexus transition (hover, global hold-Command, a tool event,
-        // or streamed text) passes through this method. It keeps the notch
-        // above the frontmost app without activating Nexus or stealing focus.
-        panel.orderFrontRegardless()
         // Tool events, hover callbacks, and delayed SwiftUI layout can all
         // arrive after a fullscreen request. While the media player is the
         // active overlay, its fullscreen frame is the only valid target.
@@ -1665,19 +1901,48 @@ final class NotchController: ObservableObject {
             || abs(panel.frame.width - targetFrame.width) > 0.5
             || abs(panel.frame.height - targetFrame.height) > 0.5
         currentSize = resolvedSize
+        let atomicCompactShow = NexusPanelPresentationPolicy.requiresAtomicCompactShow(
+            presentation: interaction.presentation
+        )
+        NexusDiagnostics.record(
+            "[Nexus Panel] resize presentation=\(interaction.presentation) requested=\(NSStringFromSize(size)) resolved=\(NSStringFromSize(resolvedSize)) current=\(NSStringFromRect(panel.frame)) target=\(NSStringFromRect(targetFrame)) atomic=\(atomicCompactShow)"
+        )
+
+        // Listening and finalizing are modifier-driven, transient surfaces.
+        // On the first hold, ordering the closed physical-notch frame before
+        // animating its width can leave SwiftUI occluded and unlaid-out until
+        // a later expanded overlay forces a full window render. Commit compact
+        // geometry and layout synchronously, then order it front. The shaping
+        // orb continues to animate inside the now-visible panel.
+        if atomicCompactShow {
+            panel.setFrame(targetFrame, display: true)
+            panel.contentView?.needsLayout = true
+            panel.contentView?.layoutSubtreeIfNeeded()
+            panel.displayIfNeeded()
+            panel.alphaValue = 1
+            panel.orderFrontRegardless()
+            NexusDiagnostics.record(
+                "[Nexus Panel] compact visible=\(panel.isVisible) frame=\(NSStringFromRect(panel.frame))"
+            )
+            return
+        }
+
         // Streaming tokens can arrive faster than the expansion animation.
         // Once the target size is requested, do not restart that animation for
         // every token just because the presentation layer is mid-flight.
-        guard animated ? requestedSizeChanged : frameChanged else { return }
-        if animated {
+        if animated, requestedSizeChanged {
             NSAnimationContext.runAnimationGroup { context in
                 context.duration = 0.30
                 context.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
                 panel.animator().setFrame(targetFrame, display: true)
             }
-        } else {
+        } else if !animated, frameChanged {
             panel.setFrame(targetFrame, display: true)
         }
+        // NSPanel can be ordered out by another application's activation even
+        // when it remains alive. Re-order after applying the target geometry
+        // so the very first visible frame is never the stale closed frame.
+        panel.orderFrontRegardless()
     }
 
     private func closedSize(for screen: NSScreen) -> CGSize {
@@ -1806,24 +2071,112 @@ enum NexusMediaFullscreenSizing {
     }
 }
 
+enum NexusPanelPresentationPolicy {
+    static func requiresAtomicCompactShow(presentation: NotchPresentation) -> Bool {
+        presentation == .dictating || presentation == .thinking
+    }
+}
+
 private struct NexusScreenAttachment: Sendable {
     let base64: String
     let mediaType: String
 }
 
-/// Produces a bounded JPEG so enabling vision context does not turn an
-/// ordinary prompt into a multi-megabyte full-resolution desktop upload. macOS
-/// owns the Screen Recording permission prompt; a declined or unavailable
-/// permission simply leaves the request text-only.
-private enum NexusScreenCapture {
-    static func captureCurrentScreen() -> NexusScreenAttachment? {
-        guard CGPreflightScreenCaptureAccess() || CGRequestScreenCaptureAccess(),
-              let image = CGWindowListCreateImage(
-                .infinite,
-                .optionOnScreenOnly,
-                kCGNullWindowID,
-                [.bestResolution]
-              ) else { return nil }
+struct NexusCaptureWindowCandidate: Equatable {
+    let windowID: CGWindowID
+    let ownerPID: pid_t
+    let bounds: CGRect
+    let listOrder: Int
+
+    var area: CGFloat { bounds.width * bounds.height }
+}
+
+enum NexusCaptureWindowSelection {
+    static func preferred(
+        from candidates: [NexusCaptureWindowCandidate],
+        frontmostPID: pid_t?,
+        nexusPID: pid_t
+    ) -> NexusCaptureWindowCandidate? {
+        if let frontmostPID, frontmostPID != nexusPID {
+            let frontmostWindows = candidates.filter { $0.ownerPID == frontmostPID }
+            if let largest = frontmostWindows.max(by: { $0.area < $1.area }) {
+                return largest
+            }
+        }
+        return candidates
+            .filter { $0.ownerPID != nexusPID }
+            .min(by: { $0.listOrder < $1.listOrder })
+    }
+}
+
+/// Captures only the frontmost application's principal window. Capturing the
+/// complete desktop can produce a wallpaper-only image when WindowServer
+/// redacts application layers, which is actively misleading for a vision
+/// model. If the real foreground window is unavailable, fail closed instead.
+enum NexusScreenCapture {
+    private static var didRequestAccessThisLaunch = false
+
+    static var hasAccess: Bool { CGPreflightScreenCaptureAccess() }
+
+    @discardableResult
+    static func requestAccess(prompt: Bool = false) -> Bool {
+        guard !CGPreflightScreenCaptureAccess() else { return true }
+        guard prompt, !didRequestAccessThisLaunch else { return false }
+        didRequestAccessThisLaunch = true
+        return CGRequestScreenCaptureAccess()
+    }
+
+    static func openScreenRecordingSettings() {
+        guard let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture") else { return }
+        NSWorkspace.shared.open(url)
+    }
+
+    fileprivate static func captureCurrentScreen() -> NexusScreenAttachment? {
+        let options: CGWindowListOption = [.optionOnScreenOnly, .excludeDesktopElements]
+        guard let windowInfo = CGWindowListCopyWindowInfo(options, kCGNullWindowID) as? [[String: Any]]
+        else { return nil }
+
+        let candidates = windowInfo.enumerated().compactMap { order, info -> NexusCaptureWindowCandidate? in
+            guard (info[kCGWindowLayer as String] as? NSNumber)?.intValue == 0,
+                  (info[kCGWindowAlpha as String] as? NSNumber)?.doubleValue ?? 1 > 0,
+                  let windowNumber = (info[kCGWindowNumber as String] as? NSNumber)?.uint32Value,
+                  let ownerPID = (info[kCGWindowOwnerPID as String] as? NSNumber)?.int32Value,
+                  let boundsValue = info[kCGWindowBounds as String],
+                  let bounds = CGRect(dictionaryRepresentation: boundsValue as! CFDictionary),
+                  bounds.width >= 240,
+                  bounds.height >= 160 else { return nil }
+            return .init(
+                windowID: windowNumber,
+                ownerPID: ownerPID,
+                bounds: bounds,
+                listOrder: order
+            )
+        }
+        let frontmostPID = NSWorkspace.shared.frontmostApplication?.processIdentifier
+        guard let selected = NexusCaptureWindowSelection.preferred(
+            from: candidates,
+            frontmostPID: frontmostPID,
+            nexusPID: ProcessInfo.processInfo.processIdentifier
+        ) else {
+            NSLog("[Nexus Vision] No eligible frontmost application window was found")
+            return nil
+        }
+        guard let image = CGWindowListCreateImage(
+            .null,
+            .optionIncludingWindow,
+            selected.windowID,
+            [.bestResolution, .boundsIgnoreFraming]
+        ) else {
+            NSLog("[Nexus Vision] Frontmost window %u could not be captured", selected.windowID)
+            return nil
+        }
+        NSLog(
+            "[Nexus Vision] Captured frontmost window %u owned by PID %d (%dx%d)",
+            selected.windowID,
+            selected.ownerPID,
+            image.width,
+            image.height
+        )
 
         let source = NSImage(cgImage: image, size: .init(width: image.width, height: image.height))
         let longestEdge = CGFloat(max(image.width, image.height))
@@ -1847,6 +2200,30 @@ private enum NexusScreenCapture {
     }
 }
 
+private struct NexusToolPlanningDeadlineError: Error {}
+
+/// Browser content-editables frequently reject kAXSelectedText even with
+/// Accessibility enabled. A real Command-V event targets the still-focused
+/// control and matches how system-wide dictation utilities insert text.
+private enum NexusClipboardPaster {
+    static func insertIntoFocusedApplication(_ text: String) -> Bool {
+        let pasteboard = NSPasteboard.general
+        pasteboard.clearContents()
+        guard pasteboard.setString(text, forType: .string),
+              NexusGlobalHotkeyAccess.hasAccessibility,
+              let source = CGEventSource(stateID: .hidSystemState),
+              let keyDown = CGEvent(keyboardEventSource: source, virtualKey: 9, keyDown: true),
+              let keyUp = CGEvent(keyboardEventSource: source, virtualKey: 9, keyDown: false) else {
+            return false
+        }
+        keyDown.flags = .maskCommand
+        keyUp.flags = .maskCommand
+        keyDown.post(tap: .cghidEventTap)
+        keyUp.post(tap: .cghidEventTap)
+        return true
+    }
+}
+
 /// Stores the exact accessibility element focused at shortcut press, so a
 /// cleaned result cannot land in a different app if focus changes while the
 /// user is speaking.
@@ -1855,9 +2232,8 @@ private final class NexusFocusedTextTarget: @unchecked Sendable {
 
     private init(element: AXUIElement) { self.element = element }
 
-    static func requestingAccessIfNeeded() -> NexusFocusedTextTarget? {
-        let options = [kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true] as CFDictionary
-        guard AXIsProcessTrustedWithOptions(options) else { return nil }
+    static func authorizedTarget() -> NexusFocusedTextTarget? {
+        guard NexusGlobalHotkeyAccess.hasAccessibility else { return nil }
         let systemWide = AXUIElementCreateSystemWide()
         var focused: CFTypeRef?
         guard AXUIElementCopyAttributeValue(systemWide, kAXFocusedUIElementAttribute as CFString, &focused) == .success,
@@ -1964,6 +2340,36 @@ struct CommandHoldGestureState {
         self.maximumTapDuration = maximumTapDuration
     }
 
+    static func hasDisqualifyingModifiers(
+        _ flags: CGEventFlags,
+        requiresOption: Bool,
+        requiresFunction: Bool = false
+    ) -> Bool {
+        if requiresFunction {
+            return flags.contains(.maskCommand)
+                || flags.contains(.maskAlternate)
+                || flags.contains(.maskShift)
+                || flags.contains(.maskControl)
+        }
+        return flags.contains(.maskShift)
+            || flags.contains(.maskControl)
+            || (!requiresOption && flags.contains(.maskAlternate))
+    }
+
+    /// Fn modifier events can omit the release event on some keyboards. A
+    /// recent down event bridges the tiny gap before physical key polling
+    /// catches up, but an old cached flag must never keep dictation active.
+    static func functionIsDown(
+        physicalKeyIsDown: Bool,
+        observedFlags: CGEventFlags?,
+        observedAge: TimeInterval,
+        eventFallbackWindow: TimeInterval = 0.18
+    ) -> Bool {
+        physicalKeyIsDown
+            || (observedAge <= eventFallbackWindow
+                && observedFlags?.contains(.maskSecondaryFn) == true)
+    }
+
     mutating func update(
         commandIsDown: Bool,
         hasDisqualifyingInput: Bool,
@@ -2036,32 +2442,30 @@ private final class NexusCommandHoldMonitor {
     private let onRelease: () -> Void
     private let onDoubleTap: () -> Void
     private let requiresOption: Bool
+    private let requiresFunction: Bool
     private var gesture: CommandHoldGestureState
     private var timer: DispatchSourceTimer?
     private var globalInputMonitor: Any?
     private var localInputMonitor: Any?
     private var eventTap: CFMachPort?
     private var eventTapSource: CFRunLoopSource?
+    private var hidManager: IOHIDManager?
+    private var pressedHIDModifiers: Set<UInt32> = []
     private var observedFlags: CGEventFlags?
+    private var observedFlagsUpdatedAt: TimeInterval = -.infinity
     private var disqualifiedByInput = false
-
-    private static let modifierKeyCodes: Set<CGKeyCode> = [
-        54, 55, // right and left Command
-        56, 60, // Shift
-        57,     // Caps Lock
-        58, 61, // Option
-        59, 62, // Control
-        63      // Function
-    ]
 
     init(
         requiresOption: Bool = false,
+        requiresFunction: Bool = false,
         holdDuration: TimeInterval = CommandHoldGestureState.defaultHoldDuration,
         onPress: @escaping () -> Void,
         onRelease: @escaping () -> Void,
         onDoubleTap: @escaping () -> Void
     ) {
+        precondition(!(requiresOption && requiresFunction))
         self.requiresOption = requiresOption
+        self.requiresFunction = requiresFunction
         gesture = CommandHoldGestureState(holdDuration: holdDuration)
         self.onPress = onPress
         self.onRelease = onRelease
@@ -2083,6 +2487,7 @@ private final class NexusCommandHoldMonitor {
         }
 
         installGlobalEventTapIfPossible()
+        installHIDModifierMonitor()
 
         let timer = DispatchSource.makeTimerSource(queue: .main)
         timer.schedule(deadline: .now(), repeating: .milliseconds(20), leeway: .milliseconds(3))
@@ -2090,10 +2495,11 @@ private final class NexusCommandHoldMonitor {
         self.timer = timer
         timer.resume()
         NSLog(
-            "Nexus registered %@ dictation with a %d ms threshold (event tap: %@)",
-            requiresOption ? "Option-Command" : "Command",
+            "Nexus registered %@ dictation with a %d ms threshold (event tap: %@, HID: %@)",
+            requiresFunction ? "Globe/Fn" : (requiresOption ? "Option-Command" : "Command"),
             Int(gesture.holdDuration * 1_000),
-            eventTap == nil ? "unavailable" : "active"
+            eventTap == nil ? "unavailable" : "active",
+            hidManager == nil ? "unavailable" : "active"
         )
     }
 
@@ -2103,34 +2509,58 @@ private final class NexusCommandHoldMonitor {
     }
 
     private func poll() {
+        let now = ProcessInfo.processInfo.systemUptime
         let flags = observedFlags ?? CGEventSource.flagsState(.combinedSessionState)
-        let commandIsDown = flags.contains(.maskCommand)
-            && (!requiresOption || flags.contains(.maskAlternate))
-        let otherModifiersAreDown = flags.contains(.maskShift)
-            || flags.contains(.maskControl)
-            || (!requiresOption && flags.contains(.maskAlternate))
-            || flags.contains(.maskAlternate)
-        let otherKeyIsDown = (CGKeyCode(0)..<CGKeyCode(128)).contains { keyCode in
-            !Self.modifierKeyCodes.contains(keyCode)
-                && CGEventSource.keyState(.combinedSessionState, key: keyCode)
+        let commandIsDown: Bool
+        if requiresFunction {
+            commandIsDown = CommandHoldGestureState.functionIsDown(
+                physicalKeyIsDown: CGEventSource.keyState(
+                    .combinedSessionState,
+                    key: CGKeyCode(63)
+                ),
+                observedFlags: observedFlags,
+                observedAge: now - observedFlagsUpdatedAt
+            )
+        } else {
+            commandIsDown = flags.contains(.maskCommand)
+                && (!requiresOption || flags.contains(.maskAlternate))
         }
+        let otherModifiersAreDown = CommandHoldGestureState.hasDisqualifyingModifiers(
+            flags,
+            requiresOption: requiresOption,
+            requiresFunction: requiresFunction
+        )
         let transition = gesture.update(
             commandIsDown: commandIsDown,
-            hasDisqualifyingInput: disqualifiedByInput || otherModifiersAreDown || otherKeyIsDown,
-            now: ProcessInfo.processInfo.systemUptime
+            // Non-modifier input is recorded by the actual event monitors.
+            // Polling every key here made an already-released/stuck system
+            // key cancel valid modifier holds before they began.
+            hasDisqualifyingInput: disqualifiedByInput || otherModifiersAreDown,
+            now: now
         )
         if !commandIsDown { disqualifiedByInput = false }
         switch transition {
-        case .began: onPress()
-        case .ended: onRelease()
-        case .doubleTapped: onDoubleTap()
+        case .began:
+            NexusDiagnostics.record("[Nexus Hotkey] \(hotkeyName) hold began")
+            onPress()
+        case .ended:
+            NexusDiagnostics.record("[Nexus Hotkey] \(hotkeyName) hold ended")
+            onRelease()
+        case .doubleTapped:
+            NexusDiagnostics.record("[Nexus Hotkey] \(hotkeyName) double tap")
+            onDoubleTap()
         case nil: break
         }
+    }
+
+    private var hotkeyName: String {
+        requiresFunction ? "Globe/Fn" : (requiresOption ? "Option-Command" : "Command")
     }
 
     private func receive(event: NSEvent) {
         if event.type == .flagsChanged {
             observedFlags = Self.cgEventFlags(from: event.modifierFlags)
+            observedFlagsUpdatedAt = ProcessInfo.processInfo.systemUptime
         } else {
             disqualifiedByInput = true
         }
@@ -2143,22 +2573,16 @@ private final class NexusCommandHoldMonitor {
         if flags.contains(.shift) { result.insert(.maskShift) }
         if flags.contains(.control) { result.insert(.maskControl) }
         if flags.contains(.option) { result.insert(.maskAlternate) }
+        if flags.contains(.function) { result.insert(.maskSecondaryFn) }
         return result
     }
 
     /// A modifier-only gesture cannot be registered with Carbon. A passive
     /// CGEvent tap is the reliable macOS mechanism for observing it while a
-    /// different app is frontmost. It never consumes keystrokes. If macOS has
-    /// not granted Input Monitoring yet, keep the NSEvent/poll fallback and
-    /// ask once so the next hold works without requiring Nexus to be focused.
+    /// different app is frontmost. It never consumes keystrokes.
     private func installGlobalEventTapIfPossible() {
-        if !CGPreflightListenEventAccess() {
-            let requestedKey = "NexusRequestedInputMonitoring.v1"
-            if !UserDefaults.standard.bool(forKey: requestedKey) {
-                UserDefaults.standard.set(true, forKey: requestedKey)
-                _ = CGRequestListenEventAccess()
-            }
-            NSLog("Nexus needs Input Monitoring for the global hold-Command gesture")
+        if !NexusGlobalHotkeyAccess.hasInputMonitoring {
+            NSLog("[Nexus Hotkey] Global event tap unavailable: Input Monitoring is not authorized")
             return
         }
 
@@ -2177,7 +2601,7 @@ private final class NexusCommandHoldMonitor {
             callback: Self.eventTapCallback,
             userInfo: Unmanaged.passUnretained(self).toOpaque()
         ) else {
-            NSLog("Nexus could not create its passive global key event tap")
+            NSLog("[Nexus Hotkey] Could not create the passive global key event tap")
             return
         }
         let source = CFMachPortCreateRunLoopSource(kCFAllocatorDefault, tap, 0)
@@ -2185,6 +2609,7 @@ private final class NexusCommandHoldMonitor {
         CGEvent.tapEnable(tap: tap, enable: true)
         eventTap = tap
         eventTapSource = source
+        NSLog("[Nexus Hotkey] Passive global event tap active")
     }
 
     private static let eventTapCallback: CGEventTapCallBack = { _, type, event, userInfo in
@@ -2197,10 +2622,10 @@ private final class NexusCommandHoldMonitor {
     }
 
     private func receive(type: CGEventType, flags: CGEventFlags) {
-        observedFlags = flags
         switch type {
         case .flagsChanged:
-            break
+            observedFlags = flags
+            observedFlagsUpdatedAt = ProcessInfo.processInfo.systemUptime
         case .keyDown, .leftMouseDown, .rightMouseDown, .otherMouseDown, .scrollWheel:
             disqualifiedByInput = true
         case .tapDisabledByTimeout, .tapDisabledByUserInput:
@@ -2208,6 +2633,57 @@ private final class NexusCommandHoldMonitor {
         default:
             break
         }
+        poll()
+    }
+
+    /// AppKit's global modifier events have been unreliable on some recent
+    /// macOS configurations even after Input Monitoring is enabled. HID is a
+    /// second, passive source for the physical left/right Command and Option
+    /// keys; it feeds the exact same gesture state machine and never consumes
+    /// an input event.
+    private func installHIDModifierMonitor() {
+        guard hidManager == nil else { return }
+        let manager = IOHIDManagerCreate(kCFAllocatorDefault, IOOptionBits(kIOHIDOptionsTypeNone))
+        let matching: [String: Any] = [
+            kIOHIDDeviceUsagePageKey as String: kHIDPage_GenericDesktop,
+            kIOHIDDeviceUsageKey as String: kHIDUsage_GD_Keyboard
+        ]
+        IOHIDManagerSetDeviceMatching(manager, matching as CFDictionary)
+        IOHIDManagerRegisterInputValueCallback(
+            manager,
+            Self.hidInputCallback,
+            Unmanaged.passUnretained(self).toOpaque()
+        )
+        IOHIDManagerScheduleWithRunLoop(manager, CFRunLoopGetMain(), CFRunLoopMode.commonModes.rawValue)
+        guard IOHIDManagerOpen(manager, IOOptionBits(kIOHIDOptionsTypeNone)) == kIOReturnSuccess else {
+            IOHIDManagerUnscheduleFromRunLoop(manager, CFRunLoopGetMain(), CFRunLoopMode.commonModes.rawValue)
+            return
+        }
+        hidManager = manager
+    }
+
+    private static let hidInputCallback: IOHIDValueCallback = { context, _, _, value in
+        guard let context else { return }
+        let monitor = Unmanaged<NexusCommandHoldMonitor>
+            .fromOpaque(context)
+            .takeUnretainedValue()
+        let element = IOHIDValueGetElement(value)
+        guard IOHIDElementGetUsagePage(element) == UInt32(kHIDPage_KeyboardOrKeypad) else { return }
+        monitor.receiveHIDModifier(
+            usage: IOHIDElementGetUsage(element),
+            isDown: IOHIDValueGetIntegerValue(value) != 0
+        )
+    }
+
+    private func receiveHIDModifier(usage: UInt32, isDown: Bool) {
+        guard NexusHIDModifierFlags.recognizes(usage) else { return }
+        if isDown {
+            pressedHIDModifiers.insert(usage)
+        } else {
+            pressedHIDModifiers.remove(usage)
+        }
+        observedFlags = NexusHIDModifierFlags.eventFlags(for: pressedHIDModifiers)
+        observedFlagsUpdatedAt = ProcessInfo.processInfo.systemUptime
         poll()
     }
 
@@ -2220,6 +2696,282 @@ private final class NexusCommandHoldMonitor {
             CFRunLoopRemoveSource(CFRunLoopGetMain(), eventTapSource, .commonModes)
         }
         if let eventTap { CGEvent.tapEnable(tap: eventTap, enable: false) }
+        if let hidManager {
+            IOHIDManagerUnscheduleFromRunLoop(hidManager, CFRunLoopGetMain(), CFRunLoopMode.commonModes.rawValue)
+            IOHIDManagerClose(hidManager, IOOptionBits(kIOHIDOptionsTypeNone))
+        }
+    }
+}
+
+enum NexusHIDModifierFlags {
+    static let leftControl: UInt32 = 0xE0
+    static let leftShift: UInt32 = 0xE1
+    static let leftOption: UInt32 = 0xE2
+    static let leftCommand: UInt32 = 0xE3
+    static let rightControl: UInt32 = 0xE4
+    static let rightShift: UInt32 = 0xE5
+    static let rightOption: UInt32 = 0xE6
+    static let rightCommand: UInt32 = 0xE7
+
+    static func recognizes(_ usage: UInt32) -> Bool {
+        [leftControl, leftShift, leftOption, leftCommand, rightControl, rightShift, rightOption, rightCommand]
+            .contains(usage)
+    }
+
+    static func eventFlags(for usages: Set<UInt32>) -> CGEventFlags {
+        var flags: CGEventFlags = []
+        if !usages.isDisjoint(with: [leftCommand, rightCommand]) { flags.insert(.maskCommand) }
+        if !usages.isDisjoint(with: [leftOption, rightOption]) { flags.insert(.maskAlternate) }
+        if !usages.isDisjoint(with: [leftShift, rightShift]) { flags.insert(.maskShift) }
+        if !usages.isDisjoint(with: [leftControl, rightControl]) { flags.insert(.maskControl) }
+        return flags
+    }
+}
+
+/// Centralizes the two TCC permissions that the global dictation flow uses.
+/// Input Monitoring gates detection of Command/Option-Command outside Nexus;
+/// Accessibility gates insertion into another app's focused text control.
+enum NexusGlobalHotkeyAccess {
+    private static var didRequestInputMonitoringThisLaunch = false
+    private static var didRequestAccessibilityThisLaunch = false
+
+    static var hasInputMonitoring: Bool { CGPreflightListenEventAccess() }
+    static var hasAccessibility: Bool { AXIsProcessTrusted() }
+
+    @discardableResult
+    static func requestInputMonitoringIfNeeded(prompt: Bool = false) -> Bool {
+        guard !CGPreflightListenEventAccess() else { return true }
+        guard prompt, !didRequestInputMonitoringThisLaunch else { return false }
+        didRequestInputMonitoringThisLaunch = true
+        _ = CGRequestListenEventAccess()
+        return CGPreflightListenEventAccess()
+    }
+
+    static func openInputMonitoringSettings() {
+        openPrivacyPane("Privacy_ListenEvent")
+    }
+
+    /// Accessibility permission is requested only by an explicit Settings
+    /// action. A hotkey must never generate a privacy prompt.
+    @discardableResult
+    static func requestAccessibilityIfNeeded(prompt: Bool = false) -> Bool {
+        guard !AXIsProcessTrusted() else { return true }
+        guard prompt, !didRequestAccessibilityThisLaunch else { return false }
+        didRequestAccessibilityThisLaunch = true
+        let options = [kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true] as CFDictionary
+        return AXIsProcessTrustedWithOptions(options)
+    }
+
+    static func openAccessibilitySettings() {
+        openPrivacyPane("Privacy_Accessibility")
+    }
+
+    private static func openPrivacyPane(_ anchor: String) {
+        guard let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?\(anchor)") else { return }
+        NSWorkspace.shared.open(url)
+    }
+}
+
+struct NexusPermissionSnapshot: Equatable {
+    let inputMonitoring: Bool
+    let accessibility: Bool
+    let screenRecording: Bool
+
+    static var current: NexusPermissionSnapshot {
+        .init(
+            inputMonitoring: NexusGlobalHotkeyAccess.hasInputMonitoring,
+            accessibility: NexusGlobalHotkeyAccess.hasAccessibility,
+            screenRecording: NexusScreenCapture.hasAccess
+        )
+    }
+
+    var deniedServices: [NexusTCCService] {
+        var services: [NexusTCCService] = []
+        if !inputMonitoring { services.append(.listenEvent) }
+        if !accessibility { services.append(.accessibility) }
+        if !screenRecording { services.append(.screenCapture) }
+        return services
+    }
+}
+
+enum NexusTCCService: String, CaseIterable {
+    case listenEvent = "ListenEvent"
+    case accessibility = "Accessibility"
+    case screenCapture = "ScreenCapture"
+
+    var displayName: String {
+        switch self {
+        case .listenEvent: "Input Monitoring"
+        case .accessibility: "Accessibility"
+        case .screenCapture: "Screen Recording"
+        }
+    }
+}
+
+enum NexusPermissionIdentityPolicy {
+    enum RepairScope: Equatable {
+        case none
+        case deniedServices
+        case allServices
+    }
+
+    static func repairScope(
+        previousFingerprint: String?,
+        currentFingerprint: String,
+        hasLegacySettings: Bool,
+        migrationCompleted: Bool
+    ) -> RepairScope {
+        guard !currentFingerprint.isEmpty else { return .none }
+        if let previousFingerprint, previousFingerprint != currentFingerprint {
+            return .allServices
+        }
+        if previousFingerprint == nil, hasLegacySettings, !migrationCompleted {
+            return .deniedServices
+        }
+        return .none
+    }
+}
+
+/// TCC's System Settings rows are labels, not proof that macOS authorizes the
+/// currently running signature. This object checks the real permission APIs
+/// every launch/activation and associates grants with Nexus's designated
+/// signing requirement. It resets only Nexus records and only when an identity
+/// migration or an explicit user repair requires it.
+@MainActor
+final class NexusPermissionHealth: ObservableObject {
+    static let shared = NexusPermissionHealth()
+
+    @Published private(set) var snapshot = NexusPermissionSnapshot.current
+    @Published private(set) var statusMessage = "Checked against the running Nexus process."
+
+    private let defaults = UserDefaults.standard
+    private let fingerprintKey = "nexus.permission.designated-requirement.v1"
+    private let migrationKey = "nexus.permission.tcc-migration.v1"
+    private let legacySettingsKey = "nexus.app.settings.v1"
+
+    private init() {}
+
+    func validateAtLaunch() {
+        let currentFingerprint = Self.designatedRequirementFingerprint()
+        let previousFingerprint = defaults.string(forKey: fingerprintKey)
+        var repairMessage: String?
+        let scope = NexusPermissionIdentityPolicy.repairScope(
+            previousFingerprint: previousFingerprint,
+            currentFingerprint: currentFingerprint,
+            hasLegacySettings: defaults.object(forKey: legacySettingsKey) != nil,
+            migrationCompleted: defaults.bool(forKey: migrationKey)
+        )
+
+        switch scope {
+        case .none:
+            break
+        case .deniedServices:
+            let denied = NexusPermissionSnapshot.current.deniedServices
+            if !denied.isEmpty {
+                _ = reset(denied)
+                repairMessage = "Removed stale permissions from an older Nexus build."
+            }
+        case .allServices:
+            _ = reset(NexusTCCService.allCases)
+            repairMessage = "Nexus's signing identity changed; old permission records were removed."
+        }
+
+        if !currentFingerprint.isEmpty {
+            defaults.set(currentFingerprint, forKey: fingerprintKey)
+        }
+        defaults.set(true, forKey: migrationKey)
+        refresh()
+        if let repairMessage {
+            statusMessage = repairMessage + " " + Self.liveStatusMessage(for: snapshot)
+        }
+        NSLog(
+            "[Nexus Permissions] launch check input=%@ accessibility=%@ screen=%@ identity=%@",
+            snapshot.inputMonitoring.description,
+            snapshot.accessibility.description,
+            snapshot.screenRecording.description,
+            currentFingerprint.isEmpty ? "unavailable" : String(currentFingerprint.prefix(12))
+        )
+    }
+
+    func refresh() {
+        snapshot = .current
+        statusMessage = Self.liveStatusMessage(for: snapshot)
+    }
+
+    func repairDeniedPermissions() {
+        refresh()
+        let denied = snapshot.deniedServices
+        guard !denied.isEmpty else {
+            statusMessage = "All permissions are authorized for this running Nexus build."
+            return
+        }
+        let succeeded = reset(denied)
+        refresh()
+        statusMessage = succeeded
+            ? "Cleared denied Nexus records. Grant each listed permission once."
+            : "macOS could not clear one or more Nexus permission records."
+        openSettings(for: denied.first)
+    }
+
+    private func reset(_ services: [NexusTCCService]) -> Bool {
+        guard let bundleIdentifier = Bundle.main.bundleIdentifier, !bundleIdentifier.isEmpty else {
+            return false
+        }
+        var allSucceeded = true
+        for service in services {
+            let process = Process()
+            process.executableURL = URL(fileURLWithPath: "/usr/bin/tccutil")
+            process.arguments = ["reset", service.rawValue, bundleIdentifier]
+            process.standardOutput = FileHandle.nullDevice
+            process.standardError = FileHandle.nullDevice
+            do {
+                try process.run()
+                process.waitUntilExit()
+                allSucceeded = allSucceeded && process.terminationStatus == 0
+            } catch {
+                allSucceeded = false
+            }
+        }
+        return allSucceeded
+    }
+
+    private func openSettings(for service: NexusTCCService?) {
+        switch service {
+        case .listenEvent:
+            NexusGlobalHotkeyAccess.openInputMonitoringSettings()
+        case .accessibility:
+            NexusGlobalHotkeyAccess.openAccessibilitySettings()
+        case .screenCapture:
+            NexusScreenCapture.openScreenRecordingSettings()
+        case nil:
+            break
+        }
+    }
+
+    static func designatedRequirementFingerprint() -> String {
+        var dynamicCode: SecCode?
+        guard SecCodeCopySelf([], &dynamicCode) == errSecSuccess,
+              let dynamicCode else { return "" }
+        var staticCode: SecStaticCode?
+        guard SecCodeCopyStaticCode(dynamicCode, [], &staticCode) == errSecSuccess,
+              let staticCode else { return "" }
+        var requirement: SecRequirement?
+        guard SecCodeCopyDesignatedRequirement(staticCode, [], &requirement) == errSecSuccess,
+              let requirement else { return "" }
+        var requirementData: CFData?
+        guard SecRequirementCopyData(requirement, [], &requirementData) == errSecSuccess,
+              let requirementData else { return "" }
+        return SHA256.hash(data: requirementData as Data)
+            .map { String(format: "%02x", $0) }
+            .joined()
+    }
+
+    private static func liveStatusMessage(for snapshot: NexusPermissionSnapshot) -> String {
+        let denied = snapshot.deniedServices.map(\.displayName)
+        guard !denied.isEmpty else {
+            return "Live check: all permissions authorize this running Nexus build."
+        }
+        return "Live check: macOS currently denies " + denied.joined(separator: ", ") + "."
     }
 }
 

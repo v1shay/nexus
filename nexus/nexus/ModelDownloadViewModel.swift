@@ -1,14 +1,6 @@
 import Foundation
 import Combine
 
-struct RemoteRuntimeInstallRequest: Identifiable, Equatable {
-    let id = UUID()
-    let model: LocalModel
-    let nodeIDs: [UUID]
-    let deviceNames: [String]
-    let targets: Set<NexusDownloadTarget>
-}
-
 @MainActor
 final class ModelDownloadViewModel: ObservableObject {
     @Published var query = ""
@@ -19,7 +11,6 @@ final class ModelDownloadViewModel: ObservableObject {
     @Published private(set) var states: [String: ModelDownloadState] = [:]
     @Published private(set) var catalogMessage = "Loading the model registry…"
     @Published var pendingOllamaInstall: LocalModel?
-    @Published var pendingRemoteRuntimeInstall: RemoteRuntimeInstallRequest?
     @Published private(set) var activeModel: LocalModel?
     @Published private(set) var activeModelSupportsThinking = false
     @Published fileprivate(set) var activeCloudProvider: NexusManagedCloudProvider?
@@ -299,20 +290,6 @@ final class ModelDownloadViewModel: ObservableObject {
             pendingOllamaInstall = model
             return
         }
-        if let missing = remoteTargetsMissingRuntime(model: model, targets: targets), !missing.isEmpty {
-            guard model.backend == .ollama else {
-                let names = missing.compactMap(nodeName).joined(separator: ", ")
-                states[model.id] = .failed("LM Studio is not installed on \(names). Select Ollama for automatic provisioning, or install LM Studio there.")
-                return
-            }
-            pendingRemoteRuntimeInstall = .init(
-                model: model,
-                nodeIDs: missing,
-                deviceNames: missing.compactMap(nodeName),
-                targets: targets
-            )
-            return
-        }
         startDownload(model, targets: targets, installOllamaFirst: false)
     }
 
@@ -321,31 +298,6 @@ final class ModelDownloadViewModel: ObservableObject {
         pendingOllamaInstall = nil
         let targets = pendingResolvedTargets.removeValue(forKey: model.id) ?? selectedDownloadTargets
         startDownload(model, targets: targets, installOllamaFirst: true)
-    }
-
-    func installRemoteRuntimeAndContinue() {
-        guard let request = pendingRemoteRuntimeInstall else { return }
-        pendingRemoteRuntimeInstall = nil
-        let targets = request.targets
-        states[request.model.id] = .preparing("Installing Ollama on selected host\(request.nodeIDs.count == 1 ? "" : "s")…")
-        let task = Task { [weak self] in
-            guard let self, let connect else { return }
-            do {
-                for nodeID in request.nodeIDs {
-                    _ = try await connect.provisionDefaultRuntime(
-                        on: nodeID,
-                        preferred: .ollama,
-                        userConfirmed: true
-                    )
-                }
-                downloadTasks[request.model.id] = nil
-                startDownload(request.model, targets: targets, installOllamaFirst: false)
-            } catch {
-                states[request.model.id] = .failed(error.localizedDescription)
-                downloadTasks[request.model.id] = nil
-            }
-        }
-        downloadTasks[request.model.id] = task
     }
 
     func cancel(_ model: LocalModel) {
@@ -717,23 +669,6 @@ final class ModelDownloadViewModel: ObservableObject {
 
     private var selectedDownloadTargets: Set<NexusDownloadTarget> {
         connect?.downloadTargets ?? [.thisMac]
-    }
-
-    private func remoteTargetsMissingRuntime(
-        model: LocalModel,
-        targets: Set<NexusDownloadTarget>
-    ) -> [UUID]? {
-        guard let connect else { return nil }
-        let runtime: NexusRuntimeKind = model.backend == .ollama ? .ollama : .lmStudio
-        return targets.compactMap { target in
-            guard case .pairedNode(let id) = target,
-                  let node = connect.pairedNodes.first(where: { $0.id == id }) else { return nil }
-            guard node.status == .online else { return nil }
-            // Protocol-v1 hosts do not advertise runtime inventory. Preserve
-            // their existing pull behavior and let their clear host error win.
-            guard node.capabilities.contains(.runtimeStatus) else { return nil }
-            return node.runtimes.contains(where: { $0.kind == runtime }) ? nil : id
-        }
     }
 
     private func reconcileRemoteInventories() {

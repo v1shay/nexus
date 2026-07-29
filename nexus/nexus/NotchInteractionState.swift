@@ -226,6 +226,15 @@ struct NotchInteractionState: Equatable {
         presentation = .overlay
     }
 
+    /// Global text-field dictation uses the shaping orb while Apple Speech
+    /// finalizes and the low-latency cleaner resolves. This state is allowed
+    /// even before a partial transcript arrives.
+    mutating func beginDictationFinalizing() {
+        toolActivity = nil
+        thinkingSentence = nil
+        presentation = .thinking
+    }
+
     mutating func beginThinking() {
         guard !transcript.isEmpty else { return }
         toolActivity = nil

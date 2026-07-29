@@ -1,6 +1,7 @@
 import AppKit
 import SceneKit
 import SwiftUI
+import UniformTypeIdentifiers
 
 enum Nexus3DLayout {
     static let computerCameraDistance: Float = 2.55
@@ -56,14 +57,6 @@ struct ModelAggregatorView: View {
                 title: Text("Install Ollama?"),
                 message: Text("Nexus will install the official Ollama app, then download \(model.name)."),
                 primaryButton: .default(Text("Install"), action: viewModel.installOllamaAndContinue),
-                secondaryButton: .cancel()
-            )
-        }
-        .alert(item: $viewModel.pendingRemoteRuntimeInstall) { request in
-            Alert(
-                title: Text("Install Ollama on \(request.deviceNames.joined(separator: ", "))?"),
-                message: Text("The model will download directly to the selected Mac."),
-                primaryButton: .default(Text("Install"), action: viewModel.installRemoteRuntimeAndContinue),
                 secondaryButton: .cancel()
             )
         }
@@ -275,6 +268,9 @@ private struct NexusExperienceSettingsPage: View {
     @ObservedObject var settings: NexusAppSettings
     @ObservedObject var viewModel: ModelDownloadViewModel
     @ObservedObject private var duplexRuntime = NexusDuplexVoiceRuntime.shared
+    @ObservedObject private var permissionHealth = NexusPermissionHealth.shared
+    @State private var piperVoices: [PiperVoice] = []
+    @State private var isImportingPiperVoice = false
 
     var body: some View {
         ScrollView {
@@ -314,6 +310,22 @@ private struct NexusExperienceSettingsPage: View {
                     .frame(width: 210)
                 }
                 NexusHairline(axis: .horizontal)
+                NexusSettingsLine(label: "Response voice") {
+                    HStack(spacing: 8) {
+                        Picker("Response voice", selection: $settings.piperVoiceModelPath) {
+                            Text("Automatic").tag("")
+                            ForEach(piperVoices) { voice in
+                                Text(voice.displayName).tag(voice.model.path)
+                            }
+                        }
+                        .labelsHidden()
+                        .frame(width: 180)
+                        Button("Add…") { isImportingPiperVoice = true }
+                        Button("Refresh") { refreshPiperVoices() }
+                    }
+                    .help("Choose a local Piper voice. Each voice needs its .onnx model and matching .onnx.json config file.")
+                }
+                NexusHairline(axis: .horizontal)
                 NexusSettingsLine(label: "Always on") {
                     Toggle("Hands-free voice", isOn: $settings.alwaysOnVoiceMode)
                         .toggleStyle(.switch)
@@ -321,15 +333,73 @@ private struct NexusExperienceSettingsPage: View {
                 }
                 NexusHairline(axis: .horizontal)
                 NexusSettingsLine(label: "Global paste") {
-                    Toggle("Option-Command dictation", isOn: $settings.globalPasteDictationEnabled)
+                    Toggle("Hold Globe/Fn to dictate", isOn: $settings.globalPasteDictationEnabled)
                         .toggleStyle(.switch)
-                        .help("Hold Option-Command in any editable field, then release to paste clean dictation. Requires Accessibility permission.")
+                        .help("Hold Globe/Fn in any editable field, then release to paste clean dictation.")
+                }
+                NexusHairline(axis: .horizontal)
+                NexusSettingsLine(label: "Hotkey access") {
+                    VStack(alignment: .trailing, spacing: 7) {
+                        HStack(spacing: 8) {
+                            permissionBadge(
+                                "Input",
+                                enabled: permissionHealth.snapshot.inputMonitoring
+                            )
+                            permissionBadge(
+                                "Paste",
+                                enabled: permissionHealth.snapshot.accessibility
+                            )
+                            Button("Refresh") {
+                                permissionHealth.refresh()
+                            }
+                        }
+                        HStack(spacing: 8) {
+                            Button(permissionHealth.snapshot.inputMonitoring ? "Input settings" : "Enable input") {
+                                if !NexusGlobalHotkeyAccess.requestInputMonitoringIfNeeded(prompt: true) {
+                                    NexusGlobalHotkeyAccess.openInputMonitoringSettings()
+                                }
+                                permissionHealth.refresh()
+                            }
+                            Button(permissionHealth.snapshot.accessibility ? "Paste settings" : "Enable paste") {
+                                if !NexusGlobalHotkeyAccess.requestAccessibilityIfNeeded(prompt: true) {
+                                    NexusGlobalHotkeyAccess.openAccessibilitySettings()
+                                }
+                                permissionHealth.refresh()
+                            }
+                            if !permissionHealth.snapshot.deniedServices.isEmpty {
+                                Button("Repair stale records") {
+                                    permissionHealth.repairDeniedPermissions()
+                                }
+                            }
+                        }
+                        Text(permissionHealth.statusMessage)
+                            .font(.system(size: 10.5, weight: .medium))
+                            .foregroundStyle(.secondary)
+                            .multilineTextAlignment(.trailing)
+                            .frame(maxWidth: 390, alignment: .trailing)
+                    }
+                    .font(.caption)
+                    .help("Input Monitoring lets Nexus detect both global holds. Accessibility lets Globe/Fn dictation insert the cleaned text into another app.")
                 }
                 NexusHairline(axis: .horizontal)
                 NexusSettingsLine(label: "Screen context") {
-                    Toggle("Share with vision models", isOn: $settings.shareScreenWithVisionModels)
-                        .toggleStyle(.switch)
-                        .help("Attach the current screen to each prompt only when the selected model supports images.")
+                    VStack(alignment: .trailing, spacing: 7) {
+                        HStack(spacing: 8) {
+                            Toggle("Share with vision models", isOn: $settings.shareScreenWithVisionModels)
+                                .toggleStyle(.switch)
+                            permissionBadge(
+                                "Screen",
+                                enabled: permissionHealth.snapshot.screenRecording
+                            )
+                        }
+                        Button(permissionHealth.snapshot.screenRecording ? "Screen settings" : "Enable screen access") {
+                            if !NexusScreenCapture.requestAccess(prompt: true) {
+                                NexusScreenCapture.openScreenRecordingSettings()
+                            }
+                            permissionHealth.refresh()
+                        }
+                    }
+                    .help("Nexus attaches the current screen to every prompt for a vision-capable model. Screen Recording permission is required.")
                 }
                 NexusHairline(axis: .horizontal)
                 NexusSettingsLine(label: "Duplex") {
@@ -391,6 +461,40 @@ private struct NexusExperienceSettingsPage: View {
             .nexusGlassPanel(theme: settings.glassTheme, role: .content, radius: 10)
             .padding(.top, 18)
         }
+        .fileImporter(
+            isPresented: $isImportingPiperVoice,
+            allowedContentTypes: [UTType(filenameExtension: "onnx") ?? .data],
+            allowsMultipleSelection: false
+        ) { result in
+            guard case .success(let urls) = result, let model = urls.first else { return }
+            let config = URL(fileURLWithPath: model.path + ".json")
+            guard FileManager.default.fileExists(atPath: config.path) else { return }
+            let directory = model.deletingLastPathComponent().path
+            if !settings.piperVoiceDirectories.contains(directory) {
+                settings.piperVoiceDirectories.append(directory)
+            }
+            settings.piperVoiceModelPath = model.path
+            refreshPiperVoices()
+        }
+        .onAppear {
+            refreshPiperVoices()
+            permissionHealth.refresh()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
+            permissionHealth.refresh()
+        }
+    }
+
+    private func permissionBadge(_ label: String, enabled: Bool) -> some View {
+        Label(enabled ? "\(label) allowed" : "\(label) denied", systemImage: enabled ? "checkmark.circle.fill" : "exclamationmark.triangle.fill")
+            .foregroundStyle(enabled ? Color.green : Color.orange)
+            .help("This is the permission reported by the running Nexus process, not the visual toggle shown by System Settings.")
+    }
+
+    private func refreshPiperVoices() {
+        piperVoices = PiperVoiceCatalog.voices(
+            additionalDirectories: settings.piperVoiceDirectories
+        )
     }
 }
 

@@ -154,32 +154,56 @@ final class NexusConnectHostDaemon {
     }
 
     func start() async {
+        let identity: NexusDeviceIdentity
         do {
-            let identity = try vault.loadOrCreateIdentity()
-            let executor = NexusHostServiceExecutor(
-                nodeID: identity.deviceID,
-                nodeName: Host.current().localizedName ?? "Nexus Host"
-            )
-            let listener = NexusConnectHostListener(
-                vault: vault,
-                trustStore: trustStore,
-                executor: executor
-            )
-            self.listener = listener
-            writeStatus(nodeID: identity.deviceID, state: "starting", detail: nil)
-            try await listener.start()
-            writeStatus(nodeID: identity.deviceID, state: "ready", detail: nil)
-            heartbeat = Task { [weak self] in
-                while !Task.isCancelled {
-                    try? await Task.sleep(for: .seconds(5))
-                    guard !Task.isCancelled else { return }
-                    self?.writeStatus(nodeID: identity.deviceID, state: "ready", detail: nil)
+            identity = try vault.loadOrCreateIdentity()
+        } catch {
+            writeStatus(nodeID: UUID(), state: "failed", detail: error.localizedDescription)
+            NSLog("NexusConnectHost identity failed: %@", error.localizedDescription)
+            return
+        }
+
+        while !Task.isCancelled {
+            do {
+                let executor = NexusHostServiceExecutor(
+                    nodeID: identity.deviceID,
+                    nodeName: Host.current().localizedName ?? "Nexus Host"
+                )
+                let listener = NexusConnectHostListener(
+                    vault: vault,
+                    trustStore: trustStore,
+                    executor: executor
+                )
+                self.listener = listener
+                writeStatus(nodeID: identity.deviceID, state: "starting", detail: nil)
+                let snapshot = try await NexusTailscaleDiscovery().snapshot()
+                guard snapshot.backendState.caseInsensitiveCompare("Running") == .orderedSame,
+                      let localAddress = snapshot.localAddresses.first(where: NexusConnectHostListener.isTailnetAddress) else {
+                    throw NexusConnectError.unavailable("Tailscale is not connected or did not report a local tailnet address")
+                }
+                // Bind to the Tailscale interface itself. Source filtering and
+                // the Nexus authenticated channel remain independent defenses.
+                try await listener.start(localTailnetAddress: localAddress)
+                writeStatus(nodeID: identity.deviceID, state: "ready", detail: nil)
+                heartbeat = Task { [weak self] in
+                    while !Task.isCancelled {
+                        try? await Task.sleep(for: .seconds(5))
+                        guard !Task.isCancelled else { return }
+                        self?.writeStatus(nodeID: identity.deviceID, state: "ready", detail: nil)
+                    }
+                }
+                return
+            } catch {
+                listener?.stop()
+                listener = nil
+                writeStatus(nodeID: identity.deviceID, state: "waiting", detail: error.localizedDescription)
+                NSLog("NexusConnectHost waiting for Tailscale: %@", error.localizedDescription)
+                do {
+                    try await Task.sleep(for: .seconds(5))
+                } catch {
+                    return
                 }
             }
-        } catch {
-            let nodeID = (try? vault.loadOrCreateIdentity().deviceID) ?? UUID()
-            writeStatus(nodeID: nodeID, state: "failed", detail: error.localizedDescription)
-            NSLog("NexusConnectHost failed: %@", error.localizedDescription)
         }
     }
 

@@ -522,9 +522,22 @@ final class NexusConnectHostListener: @unchecked Sendable {
         self.executor = executor
     }
 
-    func start() async throws {
+    func start(localTailnetAddress: String? = nil) async throws {
         let port = NWEndpoint.Port(rawValue: NexusConnectProtocol.servicePort)!
-        let newListener = try NWListener(using: .tcp, on: port)
+        let newListener: NWListener
+        if let localTailnetAddress {
+            guard Self.isTailnetAddress(localTailnetAddress) else {
+                throw NexusConnectError.unavailable("refusing to bind Nexus Connect outside the Tailscale interface")
+            }
+            let parameters = NWParameters.tcp
+            parameters.requiredLocalEndpoint = .hostPort(
+                host: NWEndpoint.Host(localTailnetAddress),
+                port: port
+            )
+            newListener = try NWListener(using: parameters)
+        } else {
+            newListener = try NWListener(using: .tcp, on: port)
+        }
         try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
             let gate = NexusContinuationGate(continuation)
             newListener.stateUpdateHandler = { state in
@@ -593,6 +606,11 @@ final class NexusConnectHostListener: @unchecked Sendable {
     static func isTailnetEndpoint(_ endpoint: NWEndpoint) -> Bool {
         guard case .hostPort(let host, _) = endpoint else { return false }
         let value = "\(host)".lowercased().trimmingCharacters(in: CharacterSet(charactersIn: "[]"))
+        return isTailnetAddress(value)
+    }
+
+    static func isTailnetAddress(_ address: String) -> Bool {
+        let value = address.lowercased().trimmingCharacters(in: CharacterSet(charactersIn: "[]"))
         if value.hasSuffix(".ts.net") || value.hasPrefix("fd7a:115c:a1e0:") { return true }
         let octets = value.split(separator: ".").compactMap { UInt8($0) }
         return octets.count == 4 && octets[0] == 100 && (64...127).contains(octets[1])

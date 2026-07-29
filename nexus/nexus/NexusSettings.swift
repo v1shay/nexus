@@ -119,6 +119,12 @@ final class NexusAppSettings: ObservableObject {
     /// Global, focused-field dictation. Accessibility permission is requested
     /// only when the user actually invokes the Option-Command shortcut.
     @Published var globalPasteDictationEnabled: Bool { didSet { persist() } }
+    /// Empty keeps the automatic Jarvis/Piper discovery behavior. A non-empty
+    /// value is the absolute path to a user-selected Piper ONNX model.
+    @Published var piperVoiceModelPath: String { didSet { persist() } }
+    /// Folders explicitly added through Settings in addition to Nexus Voice
+    /// and Downloads. These are local paths; no voice is uploaded or copied.
+    @Published var piperVoiceDirectories: [String] { didSet { persist() } }
 
     private let defaults = UserDefaults.standard
     private let key = "nexus.app.settings.v1"
@@ -134,8 +140,16 @@ final class NexusAppSettings: ObservableObject {
         personaPlexRemoteEndpoint = saved["personaPlexRemoteEndpoint"] as? String ?? ""
         glassTheme = NexusGlassTheme(rawValue: saved["glassTheme"] as? String ?? "") ?? .graphite
         alwaysOnVoiceMode = saved["alwaysOnVoiceMode"] as? Bool ?? false
-        shareScreenWithVisionModels = saved["shareScreenWithVisionModels"] as? Bool ?? false
+        // Screen context shipped disabled in early builds. Migrate that old
+        // default to enabled once, while still honoring a deliberate choice
+        // made in a current build.
+        let screenContextVersion = saved["screenContextVersion"] as? Int ?? 0
+        shareScreenWithVisionModels = screenContextVersion >= 2
+            ? (saved["shareScreenWithVisionModels"] as? Bool ?? true)
+            : true
         globalPasteDictationEnabled = saved["globalPasteDictationEnabled"] as? Bool ?? true
+        piperVoiceModelPath = saved["piperVoiceModelPath"] as? String ?? ""
+        piperVoiceDirectories = saved["piperVoiceDirectories"] as? [String] ?? []
     }
 
     private func persist() {
@@ -150,7 +164,10 @@ final class NexusAppSettings: ObservableObject {
             "glassTheme": glassTheme.rawValue,
             "alwaysOnVoiceMode": alwaysOnVoiceMode,
             "shareScreenWithVisionModels": shareScreenWithVisionModels,
-            "globalPasteDictationEnabled": globalPasteDictationEnabled
+            "screenContextVersion": 2,
+            "globalPasteDictationEnabled": globalPasteDictationEnabled,
+            "piperVoiceModelPath": piperVoiceModelPath,
+            "piperVoiceDirectories": piperVoiceDirectories
         ], forKey: key)
     }
 }

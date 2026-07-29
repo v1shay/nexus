@@ -4,6 +4,26 @@ import XCTest
 @testable import nexus
 
 extension NexusGeometryTests {
+    func testRuntimeInventoryDiagnosticsRemainBackwardCompatible() throws {
+        let legacy = #"{"runtimes":[],"defaultRuntime":null}"#.data(using: .utf8)!
+        let decoded = try JSONDecoder().decode(NexusRuntimeInventoryPayload.self, from: legacy)
+
+        XCTAssertTrue(decoded.runtimes.isEmpty)
+        XCTAssertNil(decoded.defaultRuntime)
+        XCTAssertNil(decoded.detectedRuntimeNames)
+
+        let current = NexusRuntimeInventoryPayload(
+            runtimes: [.init(kind: .ollama, isManagedByNexus: false)],
+            defaultRuntime: .ollama,
+            detectedRuntimeNames: ["ollama", "mlx"]
+        )
+        let roundTrip = try JSONDecoder().decode(
+            NexusRuntimeInventoryPayload.self,
+            from: JSONEncoder().encode(current)
+        )
+        XCTAssertEqual(roundTrip, current)
+    }
+
     func testHostStreamsInferenceAndCompletesWithTypedEvents() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)

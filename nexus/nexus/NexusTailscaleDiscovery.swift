@@ -200,7 +200,10 @@ struct NexusTailscalePeer: Codable, Equatable, Identifiable, Sendable {
 
 struct NexusTailscaleSnapshot: Equatable, Sendable {
     let backendState: String
+    let localNodeID: String
     let localNodeName: String
+    let localDNSName: String
+    let localAddresses: [String]
     let peers: [NexusTailscalePeer]
 }
 
@@ -263,7 +266,10 @@ struct NexusTailscaleDiscovery: NexusStudioDiscovering, Sendable {
         }
         return NexusTailscaleSnapshot(
             backendState: status.backendState,
+            localNodeID: status.localNode?.id ?? "",
             localNodeName: status.localNode?.hostName ?? "",
+            localDNSName: status.localNode?.dnsName ?? "",
+            localAddresses: status.localNode?.addresses ?? [],
             peers: peers.sorted { $0.hostName.localizedCaseInsensitiveCompare($1.hostName) == .orderedAscending }
         )
     }

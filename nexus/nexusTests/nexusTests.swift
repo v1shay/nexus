@@ -525,6 +525,40 @@ final class NexusGeometryTests: XCTestCase {
         XCTAssertGreaterThan(Nexus3DLayout.connectDeviceCameraDistance, 3.70)
     }
 
+    func testPiperVoiceCatalogRequiresMatchingConfigAndDeduplicatesFolders() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("nexus-piper-voice-test-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+
+        let model = root.appendingPathComponent("jarvis-medium.onnx")
+        FileManager.default.createFile(atPath: model.path, contents: Data())
+        try Data(#"{"audio":{"sample_rate":22050}}"#.utf8)
+            .write(to: URL(fileURLWithPath: model.path + ".json"))
+        FileManager.default.createFile(
+            atPath: root.appendingPathComponent("missing-config.onnx").path,
+            contents: Data()
+        )
+
+        let voices = PiperVoiceCatalog.discover(in: [root, root])
+
+        XCTAssertEqual(voices.count, 1)
+        XCTAssertEqual(voices.first?.model.standardizedFileURL, model.standardizedFileURL)
+        XCTAssertEqual(voices.first?.displayName, "Jarvis Medium")
+        XCTAssertEqual(PiperVoiceCatalog.voice(at: model.path)?.config.path, model.path + ".json")
+    }
+
+    func testVisionDetectionRecognizesHyphenatedGemma3Identifiers() {
+        let gemma = LocalModel(
+            customIdentifier: "google/gemma-3-4b-it-qat",
+            backend: .ollama
+        )
+        let textOnly = LocalModel(customIdentifier: "qwen2.5:7b", backend: .ollama)
+
+        XCTAssertTrue(gemma.supportsImageInput)
+        XCTAssertFalse(textOnly.supportsImageInput)
+    }
+
     func testNexCLIHostLaunchAgentContainsNoWorkerCredential() throws {
         let home = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
         let manager = NexCLIHostManager(
@@ -594,6 +628,21 @@ final class NexusGeometryTests: XCTestCase {
         let physicalNotch = CGSize(width: 190, height: 32)
         XCTAssertEqual(NotchGeometry.compactHeight(for: physicalNotch), 32)
         XCTAssertEqual(NotchGeometry.compactTextHeight(for: physicalNotch), 56)
+    }
+
+    func testModifierDrivenCompactStatesRenderAtomicallyOnFirstShow() {
+        XCTAssertTrue(
+            NexusPanelPresentationPolicy.requiresAtomicCompactShow(presentation: .dictating)
+        )
+        XCTAssertTrue(
+            NexusPanelPresentationPolicy.requiresAtomicCompactShow(presentation: .thinking)
+        )
+        XCTAssertFalse(
+            NexusPanelPresentationPolicy.requiresAtomicCompactShow(presentation: .idle)
+        )
+        XCTAssertFalse(
+            NexusPanelPresentationPolicy.requiresAtomicCompactShow(presentation: .overlay)
+        )
     }
 
     func testDictationReleaseSavesTextAndOpensOverlay() {
@@ -1343,6 +1392,153 @@ final class NexusGeometryTests: XCTestCase {
             gesture.update(commandIsDown: false, hasDisqualifyingInput: false, now: 10.75),
             .ended
         )
+    }
+
+    func testOptionCommandDoesNotDisqualifyGlobalPasteDictation() {
+        let optionCommand: CGEventFlags = [.maskCommand, .maskAlternate]
+        XCTAssertFalse(
+            CommandHoldGestureState.hasDisqualifyingModifiers(
+                optionCommand,
+                requiresOption: true
+            )
+        )
+        XCTAssertTrue(
+            CommandHoldGestureState.hasDisqualifyingModifiers(
+                optionCommand,
+                requiresOption: false
+            )
+        )
+
+        var gesture = CommandHoldGestureState(holdDuration: 0.10)
+        XCTAssertNil(gesture.update(commandIsDown: true, hasDisqualifyingInput: false, now: 10))
+        XCTAssertEqual(
+            gesture.update(commandIsDown: true, hasDisqualifyingInput: false, now: 10.10),
+            .began
+        )
+    }
+
+    func testGlobeFnDoesNotDisqualifyGlobalPasteDictation() {
+        XCTAssertFalse(
+            CommandHoldGestureState.hasDisqualifyingModifiers(
+                [.maskSecondaryFn],
+                requiresOption: false,
+                requiresFunction: true
+            )
+        )
+        XCTAssertTrue(
+            CommandHoldGestureState.hasDisqualifyingModifiers(
+                [.maskSecondaryFn, .maskCommand],
+                requiresOption: false,
+                requiresFunction: true
+            )
+        )
+    }
+
+    func testStaleFnDownEventCannotPreventRelease() {
+        XCTAssertTrue(
+            CommandHoldGestureState.functionIsDown(
+                physicalKeyIsDown: false,
+                observedFlags: [.maskSecondaryFn],
+                observedAge: 0.05
+            )
+        )
+        XCTAssertFalse(
+            CommandHoldGestureState.functionIsDown(
+                physicalKeyIsDown: false,
+                observedFlags: [.maskSecondaryFn],
+                observedAge: 0.19
+            )
+        )
+        XCTAssertTrue(
+            CommandHoldGestureState.functionIsDown(
+                physicalKeyIsDown: true,
+                observedFlags: [],
+                observedAge: 10
+            )
+        )
+    }
+
+    func testPermissionIdentityPolicyRepairsOnlyWhenNeeded() {
+        XCTAssertEqual(
+            NexusPermissionIdentityPolicy.repairScope(
+                previousFingerprint: "stable",
+                currentFingerprint: "stable",
+                hasLegacySettings: true,
+                migrationCompleted: true
+            ),
+            .none
+        )
+        XCTAssertEqual(
+            NexusPermissionIdentityPolicy.repairScope(
+                previousFingerprint: "old",
+                currentFingerprint: "new",
+                hasLegacySettings: true,
+                migrationCompleted: true
+            ),
+            .allServices
+        )
+        XCTAssertEqual(
+            NexusPermissionIdentityPolicy.repairScope(
+                previousFingerprint: nil,
+                currentFingerprint: "stable",
+                hasLegacySettings: true,
+                migrationCompleted: false
+            ),
+            .deniedServices
+        )
+        XCTAssertEqual(
+            NexusPermissionIdentityPolicy.repairScope(
+                previousFingerprint: nil,
+                currentFingerprint: "stable",
+                hasLegacySettings: false,
+                migrationCompleted: false
+            ),
+            .none
+        )
+    }
+
+    func testVisionCapturePrefersLargestFrontmostAppWindow() {
+        let candidates = [
+            NexusCaptureWindowCandidate(
+                windowID: 1,
+                ownerPID: 20,
+                bounds: CGRect(x: 0, y: 0, width: 400, height: 300),
+                listOrder: 0
+            ),
+            NexusCaptureWindowCandidate(
+                windowID: 2,
+                ownerPID: 20,
+                bounds: CGRect(x: 0, y: 0, width: 1_200, height: 800),
+                listOrder: 1
+            ),
+            NexusCaptureWindowCandidate(
+                windowID: 3,
+                ownerPID: 30,
+                bounds: CGRect(x: 0, y: 0, width: 1_500, height: 900),
+                listOrder: 2
+            )
+        ]
+
+        XCTAssertEqual(
+            NexusCaptureWindowSelection.preferred(
+                from: candidates,
+                frontmostPID: 20,
+                nexusPID: 99
+            )?.windowID,
+            2
+        )
+    }
+
+    func testHIDModifierFallbackMapsBothLeftAndRightKeys() {
+        let flags = NexusHIDModifierFlags.eventFlags(for: [
+            NexusHIDModifierFlags.leftCommand,
+            NexusHIDModifierFlags.rightOption
+        ])
+        XCTAssertTrue(flags.contains(.maskCommand))
+        XCTAssertTrue(flags.contains(.maskAlternate))
+        XCTAssertFalse(flags.contains(.maskShift))
+        XCTAssertTrue(NexusHIDModifierFlags.recognizes(NexusHIDModifierFlags.leftCommand))
+        XCTAssertFalse(NexusHIDModifierFlags.recognizes(0x04))
     }
 
     func testDoubleCommandTapRequestsAQuickDismiss() {

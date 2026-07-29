@@ -41,7 +41,7 @@ The MacBook stores a `NexusPairedNode` roster in Keychain. Every node retains:
 - last successful health check and honest connection status;
 - available memory/disk, installed runtimes, and model inventory.
 
-Each node's 256-bit pairing secret is a separate non-synchronizing Keychain item. Forgetting Studio does not affect iMac.
+Each node's 256-bit pairing secret is a separate non-synchronizing Keychain item. New invitations carry the exact MagicDNS endpoint and Tailscale node ID observed on the host, so reconnect does not depend on a display-name guess. Forgetting Studio does not affect iMac.
 
 Hosts keep a separate `NexusHostTrustStore`. Every invitation has a signed pairing selector, an independent Keychain secret, and a client identity pinned on first authenticated use. Older v2 clients without the selector are matched by their HMAC against active secrets; identity pinning still applies. Revocation deletes that invitation's secret and leaves unrelated clients authorized.
 
@@ -56,6 +56,7 @@ Tailscale provides reachability and WireGuard transport encryption. Nexus adds i
 - HKDF-SHA256 session derivation;
 - ChaCha20-Poly1305 frames with direction and sequence binding;
 - replay, clock-skew, frame-size, non-tailnet-source, and identity-mismatch rejection.
+- a production listener bound to the host's reported Tailscale interface rather than a wildcard LAN interface.
 
 No identity mismatch or incompatible protocol is silently downgraded.
 
@@ -81,7 +82,7 @@ Routing is explicit:
 - A named paired node must be authenticated and online before inference begins.
 - **Automatic** prefers an online node that already has the model, then considers reported free memory/disk for placement. Safe idempotent inference may fall back locally before remote output begins; explicit remote pulls never do.
 
-`NexusHostRuntimeManager` provides a uniform host API for runtime inventory, model list, pull, delete, and streamed inference. It detects Ollama and LM Studio. With one client-side confirmation it can install Nexus's supported default Ollama runtime directly on the host. Pull bytes go provider-to-host, not provider-to-MacBook-to-host.
+`NexusHostRuntimeManager` provides a uniform host API for runtime inventory, model list, pull, delete, and streamed inference. It detects Ollama and LM Studio and includes MLX in missing-runtime diagnostics. A model-download click is the explicit authorization for that destination: Nexus re-probes the host at operation time, uses an existing compatible runtime immediately, and installs Nexus's supported default Ollama runtime directly on the host when an Ollama pull needs it. Pull bytes go provider-to-host, not provider-to-MacBook-to-host. Nexus does not silently reinterpret an LM Studio model as Ollama or MLX.
 
 Ollama deletion uses its HTTP API. LM Studio currently exposes model discovery/download through `lms` but no documented delete command, so Nexus resolves an exact `lms ls --json` record and deletes only a verified path beneath `~/.lmstudio/models`.
 
@@ -90,10 +91,16 @@ Ollama deletion uses its HTTP API. LM Studio currently exposes model discovery/d
 Host-owned model pulls, URL downloads, and runtime provisioning enter `NexusHostBackgroundJobRegistry`. A dropped client stream or closed MacBook UI does not cancel them. An explicit cancel request does.
 
 - Powered-off/sleeping/offline host: shown offline; explicit remote work fails clearly.
-- Host restarts: LaunchAgent returns, saved clients reconnect without a code.
+- Host restarts: LaunchAgent returns, waits if Tailscale is still starting, and saved clients reconnect without a code.
 - MacBook UI closes during a remote pull: host job continues and inventory reconciles on reconnect.
 - Remote model absent: Automatic may use another online owner; an explicitly selected host reports the error.
 - Local Connect disabled: existing local Ollama/LM Studio behavior remains available.
+
+## Why a destination service remains necessary
+
+Tailscale authenticates devices and carries encrypted packets; it does not execute programs, expose a model API, install software, or start a powered-off Mac. A destination therefore needs a narrow service that can receive an authenticated request and perform inference. Nexus uses the persistent Connect host for that purpose instead of exposing the unauthenticated Ollama or LM Studio HTTP ports to the whole tailnet.
+
+The destination does not need the Nexus window open and does not need to run the same app version. Compatible protocol versions negotiate the highest common version. Removing the destination helper entirely would require either enabling another remote-execution service such as SSH or exposing a runtime API, both of which add prerequisites and weaken the stated security boundary.
 
 ## Security scope
 

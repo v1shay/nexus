@@ -327,6 +327,20 @@ struct NexusRuntimeProvisionPayload: Codable, Equatable, Sendable {
 struct NexusRuntimeInventoryPayload: Codable, Equatable, Sendable {
     let runtimes: Set<NexusRuntimeAvailability>
     let defaultRuntime: NexusRuntimeKind?
+    /// Additive diagnostic field. MLX is reported here until Nexus has a
+    /// first-class MLX model descriptor and streaming adapter; older peers
+    /// safely ignore it.
+    let detectedRuntimeNames: Set<String>?
+
+    init(
+        runtimes: Set<NexusRuntimeAvailability>,
+        defaultRuntime: NexusRuntimeKind?,
+        detectedRuntimeNames: Set<String>? = nil
+    ) {
+        self.runtimes = runtimes
+        self.defaultRuntime = defaultRuntime
+        self.detectedRuntimeNames = detectedRuntimeNames
+    }
 }
 
 struct NexusModelDescriptor: Codable, Equatable, Hashable, Sendable {

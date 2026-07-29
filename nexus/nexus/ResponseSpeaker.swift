@@ -26,8 +26,10 @@ final class ResponseSpeaker {
     private var pipelineGeneration = UUID()
     private var orderedPCM = OrderedDataChunkBuffer()
     private var suppressCitationSpeech = false
+    private weak var settings: NexusAppSettings?
 
-    init() {
+    init(settings: NexusAppSettings? = nil) {
+        self.settings = settings
         audioEngine.attach(playerNode)
     }
 
@@ -37,7 +39,10 @@ final class ResponseSpeaker {
         chunker = SpeechSentenceChunker()
         markdownFilter = StreamingSpeechMarkdownFilter()
         guard !isMuted, piperProcess == nil,
-              let configuration = PiperVoiceConfiguration.detect() else { return }
+              let configuration = PiperVoiceConfiguration.detect(
+                  preferredModelPath: settings?.piperVoiceModelPath ?? "",
+                  additionalVoiceDirectories: settings?.piperVoiceDirectories ?? []
+              ) else { return }
         piperConfiguration = configuration
         do {
             try startPiperStream(configuration)
@@ -624,16 +629,91 @@ enum SpeechSanitizer {
     }
 }
 
+/// A locally installed Piper voice. Piper needs both the ONNX weights and its
+/// sidecar JSON; a raw ONNX file by itself does not define audio parameters or
+/// phoneme metadata and cannot be safely treated as a voice.
+struct PiperVoice: Identifiable, Hashable, Sendable {
+    let model: URL
+    let config: URL
+
+    var id: String { model.standardizedFileURL.path }
+
+    var displayName: String {
+        let raw = model.deletingPathExtension().lastPathComponent
+        let words = raw
+            .replacingOccurrences(of: "_", with: " ")
+            .replacingOccurrences(of: "-", with: " ")
+            .split(whereSeparator: { $0.isWhitespace })
+        return words.isEmpty ? raw : words.map(String.init).joined(separator: " ").capitalized
+    }
+}
+
+enum PiperVoiceCatalog {
+    static func defaultDirectories(fileManager: FileManager = .default) -> [URL] {
+        let nexusSupport = fileManager.homeDirectoryForCurrentUser
+            .appendingPathComponent("Library/Application Support/Nexus", isDirectory: true)
+        return [
+            nexusSupport.appendingPathComponent("Voice", isDirectory: true),
+            nexusSupport.appendingPathComponent("Voices", isDirectory: true),
+            fileManager.homeDirectoryForCurrentUser.appendingPathComponent("Downloads", isDirectory: true)
+        ]
+    }
+
+    static func voices(
+        additionalDirectories: [String] = [],
+        fileManager: FileManager = .default
+    ) -> [PiperVoice] {
+        let added = additionalDirectories.map { URL(fileURLWithPath: $0, isDirectory: true) }
+        return discover(in: defaultDirectories(fileManager: fileManager) + added, fileManager: fileManager)
+    }
+
+    /// Searches one folder level only. Voice packs stay fast to enumerate and
+    /// pointing Nexus at Downloads never walks unrelated project directories.
+    static func discover(in directories: [URL], fileManager: FileManager = .default) -> [PiperVoice] {
+        var seen = Set<String>()
+        var result: [PiperVoice] = []
+        for directory in directories {
+            guard let files = try? fileManager.contentsOfDirectory(
+                at: directory,
+                includingPropertiesForKeys: [.isRegularFileKey],
+                options: [.skipsHiddenFiles, .skipsSubdirectoryDescendants]
+            ) else { continue }
+            for model in files where model.pathExtension.lowercased() == "onnx" {
+                let config = URL(fileURLWithPath: model.path + ".json")
+                let canonicalPath = model.standardizedFileURL.path
+                guard fileManager.fileExists(atPath: config.path), seen.insert(canonicalPath).inserted else { continue }
+                result.append(PiperVoice(model: model, config: config))
+            }
+        }
+        return result.sorted {
+            $0.displayName.localizedCaseInsensitiveCompare($1.displayName) == .orderedAscending
+        }
+    }
+
+    static func voice(at path: String, fileManager: FileManager = .default) -> PiperVoice? {
+        guard !path.isEmpty else { return nil }
+        let model = URL(fileURLWithPath: path)
+        let config = URL(fileURLWithPath: model.path + ".json")
+        guard fileManager.fileExists(atPath: model.path), fileManager.fileExists(atPath: config.path) else {
+            return nil
+        }
+        return PiperVoice(model: model, config: config)
+    }
+}
+
 struct PiperVoiceConfiguration: Sendable, Equatable {
     let executable: URL
     let model: URL
     let config: URL
     let sampleRate: Double
 
-    static func detect(fileManager: FileManager = .default) -> PiperVoiceConfiguration? {
+    static func detect(
+        preferredModelPath: String = "",
+        additionalVoiceDirectories: [String] = [],
+        fileManager: FileManager = .default
+    ) -> PiperVoiceConfiguration? {
         let home = fileManager.homeDirectoryForCurrentUser
         let voiceDirectory = home.appendingPathComponent("Library/Application Support/Nexus/Voice", isDirectory: true)
-        let downloads = home.appendingPathComponent("Downloads", isDirectory: true)
         let executableCandidates = [
             voiceDirectory.appendingPathComponent("piper"),
             URL(fileURLWithPath: "/opt/homebrew/bin/piper"),
@@ -646,23 +726,16 @@ struct PiperVoiceConfiguration: Sendable, Equatable {
             return nil
         }
 
-        var voicePairs: [(URL, URL)] = [
-            (voiceDirectory.appendingPathComponent("voice.onnx"), voiceDirectory.appendingPathComponent("voice.onnx.json")),
-            (downloads.appendingPathComponent("jarvis-medium.onnx"), downloads.appendingPathComponent("jarvis-medium.onnx.json"))
-        ]
-        if let files = try? fileManager.contentsOfDirectory(at: downloads, includingPropertiesForKeys: nil) {
-            voicePairs += files.filter { $0.pathExtension == "onnx" }.map {
-                ($0, URL(fileURLWithPath: $0.path + ".json"))
-            }
-        }
-        guard let pair = voicePairs.first(where: {
-            fileManager.fileExists(atPath: $0.0.path) && fileManager.fileExists(atPath: $0.1.path)
-        }) else { return nil }
+        let preferred = PiperVoiceCatalog.voice(at: preferredModelPath, fileManager: fileManager)
+        guard let voice = preferred ?? PiperVoiceCatalog.voices(
+            additionalDirectories: additionalVoiceDirectories,
+            fileManager: fileManager
+        ).first else { return nil }
         return PiperVoiceConfiguration(
             executable: executable,
-            model: pair.0,
-            config: pair.1,
-            sampleRate: sampleRate(from: pair.1, fileManager: fileManager)
+            model: voice.model,
+            config: voice.config,
+            sampleRate: sampleRate(from: voice.config, fileManager: fileManager)
         )
     }
 

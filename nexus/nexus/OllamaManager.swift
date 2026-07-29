@@ -258,6 +258,10 @@ final class OllamaManager: @unchecked Sendable {
         onDelta: @escaping @Sendable (_ delta: String, _ accumulated: String) async -> Void
     ) async throws -> String {
         try await ensureServerRunning()
+        let imageCount = messages.reduce(into: 0) { count, message in
+            if message.imageBase64 != nil { count += 1 }
+        }
+        NSLog("[Nexus Vision] Ollama /api/chat model %@ with %d image message(s)", model, imageCount)
         var request = URLRequest(url: Self.serverURL.appendingPathComponent("api/chat"))
         request.httpMethod = "POST"
         request.timeoutInterval = Self.inferenceRequestTimeout
