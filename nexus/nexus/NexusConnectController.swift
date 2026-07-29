@@ -45,7 +45,28 @@ struct NexusPairingInvitation: Codable, Equatable, Sendable {
     let secret: Data
     let displayName: String
     let endpoint: String
+    let tailscaleNodeID: String?
     let protocolRange: NexusProtocolVersionRange
+
+    init(
+        invitationID: UUID,
+        hostNodeID: UUID,
+        hostSigningPublicKey: Data,
+        secret: Data,
+        displayName: String,
+        endpoint: String,
+        tailscaleNodeID: String? = nil,
+        protocolRange: NexusProtocolVersionRange
+    ) {
+        self.invitationID = invitationID
+        self.hostNodeID = hostNodeID
+        self.hostSigningPublicKey = hostSigningPublicKey
+        self.secret = secret
+        self.displayName = displayName
+        self.endpoint = endpoint
+        self.tailscaleNodeID = tailscaleNodeID
+        self.protocolRange = protocolRange
+    }
 }
 
 enum NexusPairingCode {
@@ -60,7 +81,8 @@ enum NexusPairingCode {
     static func generateInvitation(
         identity: NexusDeviceIdentity,
         displayName: String,
-        endpoint: String
+        endpoint: String,
+        tailscaleNodeID: String? = nil
     ) throws -> (material: NexusPairingMaterial, invitation: NexusPairingInvitation, code: String) {
         let invitationID = UUID()
         let material = try NexusPairingMaterial.fresh(pairingID: invitationID)
@@ -71,6 +93,7 @@ enum NexusPairingCode {
             secret: material.secret,
             displayName: displayName,
             endpoint: endpoint,
+            tailscaleNodeID: tailscaleNodeID,
             protocolRange: .local
         )
         let payload = try NexusPayloadCoder.encoder.encode(invitation)
@@ -176,6 +199,7 @@ final class NexusConnectController: ObservableObject {
     private let hostVault: NexusIdentityVault
     private let hostTrust: NexusHostTrustStore
     private let roster: NexusPairedNodeStore
+    private let discovery: any NexusNodeDiscovering
     private let router: NexusMultiNodeWorkloadRouter
     private let coordinator: NexusPairedNodeCoordinator
     private let persistentHost: any NexusPersistentHostManaging
@@ -209,6 +233,7 @@ final class NexusConnectController: ObservableObject {
         self.hostVault = hostVault
         self.hostTrust = hostTrust
         self.roster = roster
+        self.discovery = discovery
         self.persistentHost = persistentHost
 
         if let migrated = try? roster.migrateLegacyPairing(
@@ -331,15 +356,25 @@ final class NexusConnectController: ObservableObject {
         return .thisMac
     }
 
-    func createPairingCode() {
+    func createPairingCode() async {
         do {
             if role == .studioHost {
                 let identity = try hostVault.loadOrCreateIdentity()
-                let name = Host.current().localizedName ?? "Nexus Mac"
+                let snapshot = try await discovery.snapshot()
+                guard snapshot.backendState.caseInsensitiveCompare("Running") == .orderedSame else {
+                    throw NexusConnectError.unavailable("Tailscale must be connected before creating a pairing code")
+                }
+                let name = snapshot.localNodeName.isEmpty
+                    ? (Host.current().localizedName ?? "Nexus Mac")
+                    : snapshot.localNodeName
+                let endpoint = (snapshot.localDNSName.isEmpty ? nil : snapshot.localDNSName)
+                    ?? snapshot.localAddresses.first(where: NexusConnectHostListener.isTailnetAddress)
+                    ?? name
                 let generated = try NexusPairingCode.generateInvitation(
                     identity: identity,
                     displayName: name,
-                    endpoint: name
+                    endpoint: endpoint,
+                    tailscaleNodeID: snapshot.localNodeID.isEmpty ? nil : snapshot.localNodeID
                 )
                 try hostTrust.registerInvitation(pairing: generated.material)
                 authorizedClients = try hostTrust.load()
@@ -376,6 +411,7 @@ final class NexusConnectController: ObservableObject {
                     pinnedPublicIdentityKey: invitation.hostSigningPublicKey,
                     displayName: invitation.displayName,
                     endpoint: invitation.endpoint,
+                    tailscaleNodeID: invitation.tailscaleNodeID,
                     protocolRange: invitation.protocolRange
                 )
                 try roster.upsert(node, pairing: pairing)
@@ -548,6 +584,7 @@ final class NexusConnectController: ObservableObject {
             let name = pairedNodes.first(where: { $0.id == targetID })?.displayName ?? "Selected device"
             throw NexusConnectError.unavailable("\(name) is not connected; the download was not moved to this Mac")
         }
+        try await prepareRuntimeForModelDownload(model, on: targetID)
         let request = try NexusWorkloadRequest(
             kind: .modelPull,
             priority: .utility,
@@ -570,6 +607,38 @@ final class NexusConnectController: ObservableObject {
             ))
         }
         try await refreshInventory(nodeID: targetID)
+    }
+
+    /// A download is already an explicit request to mutate the selected
+    /// destination. Probe the host at operation time so stale cached
+    /// inventory cannot cause an unnecessary prompt. If Ollama is absent, the
+    /// same authenticated operation provisions it before pulling the model.
+    private func prepareRuntimeForModelDownload(_ model: LocalModel, on nodeID: UUID) async throws {
+        guard let node = pairedNodes.first(where: { $0.id == nodeID }),
+              node.capabilities.contains(.runtimeStatus) else {
+            // Protocol-v1 hosts perform their own authoritative probe.
+            return
+        }
+        let requested: NexusRuntimeKind = model.backend == .ollama ? .ollama : .lmStudio
+        let inventory = try await runtimeInventory(on: nodeID)
+        if inventory.runtimes.contains(where: { $0.kind == requested }) { return }
+
+        if requested == .ollama, node.capabilities.contains(.runtimeProvision) {
+            _ = try await provisionDefaultRuntime(
+                on: nodeID,
+                preferred: .ollama,
+                userConfirmed: true
+            )
+            return
+        }
+
+        let detected = (inventory.detectedRuntimeNames ?? Set(inventory.runtimes.map(\.kind.rawValue)))
+            .sorted()
+            .joined(separator: ", ")
+        let suffix = detected.isEmpty ? "No supported runtime was detected." : "Detected: \(detected)."
+        throw NexusConnectError.requestFailed(
+            "LM Studio is not installed on \(node.displayName). \(suffix) Install LM Studio there or download an Ollama model, which Nexus can provision automatically."
+        )
     }
 
     func installedStudioModels(runtime: NexusRuntimeKind? = nil) async throws -> [NexusModelDescriptor] {

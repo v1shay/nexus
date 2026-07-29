@@ -159,6 +159,10 @@ extension NexusGeometryTests {
         XCTAssertFalse(NexusConnectHostListener.isTailnetEndpoint(
             .hostPort(host: "8.8.8.8", port: 49_718)
         ))
+        XCTAssertTrue(NexusConnectHostListener.isTailnetAddress("100.100.1.2"))
+        XCTAssertTrue(NexusConnectHostListener.isTailnetAddress("fd7a:115c:a1e0::1"))
+        XCTAssertFalse(NexusConnectHostListener.isTailnetAddress("0.0.0.0"))
+        XCTAssertFalse(NexusConnectHostListener.isTailnetAddress("127.0.0.1"))
     }
 
     private static func sessionTestPeer() -> NexusTailscalePeer {

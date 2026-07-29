@@ -22,12 +22,20 @@ struct LocalModel: Identifiable, Hashable, Codable, Sendable {
 
     var supportsImageInput: Bool {
         let value = "\(name) \(identifier) \(family)".lowercased()
+        let normalizedValue = value
+            .replacingOccurrences(of: "-", with: " ")
+            .replacingOccurrences(of: "_", with: " ")
+            .replacingOccurrences(of: ":", with: " ")
         let knownVisionFamilies = [
             "llava", "bakllava", "moondream", "minicpm-v", "minicpmv",
             "qwen2-vl", "qwen2.5-vl", "qwen3-vl", "qwen-vl", "vision",
             "llama3.2-vision", "llama 3.2 vision", "gemma3", "gemma 3"
         ]
-        return knownVisionFamilies.contains(where: value.contains)
+        return knownVisionFamilies.contains { family in
+            value.contains(family) || normalizedValue.contains(
+                family.replacingOccurrences(of: "-", with: " ")
+            )
+        }
     }
 
     init(name: String, identifier: String, family: String, backend: ModelBackend, minimumRAMGB: Int, quantization: String? = nil) {

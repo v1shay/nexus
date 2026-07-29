@@ -24,7 +24,10 @@ extension NexusGeometryTests {
         )
         let snapshot = NexusTailscaleSnapshot(
             backendState: "Running",
+            localNodeID: "air",
             localNodeName: "Air",
+            localDNSName: "air.tail.ts.net.",
+            localAddresses: ["100.64.0.1"],
             peers: [fakeStudio, imac]
         )
 
@@ -379,7 +382,14 @@ private struct NexusMultiNodeDiscoveryStub: NexusNodeDiscovering {
     let peers: [NexusTailscalePeer]
 
     func snapshot() async throws -> NexusTailscaleSnapshot {
-        .init(backendState: "Running", localNodeName: "Air", peers: peers)
+        .init(
+            backendState: "Running",
+            localNodeID: "air",
+            localNodeName: "Air",
+            localDNSName: "air.tail.ts.net.",
+            localAddresses: ["100.64.0.1"],
+            peers: peers
+        )
     }
 
     func routeSample(to peer: NexusTailscalePeer) async throws -> NexusTailscaleRouteSample {

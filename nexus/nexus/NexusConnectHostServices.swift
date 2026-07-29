@@ -156,7 +156,13 @@ actor NexusHostRuntimeManager: NexusHostModelServing {
         let defaultRuntime: NexusRuntimeKind? = runtimes.contains(where: { $0.kind == .ollama })
             ? .ollama
             : (runtimes.contains(where: { $0.kind == .lmStudio }) ? .lmStudio : nil)
-        return .init(runtimes: runtimes, defaultRuntime: defaultRuntime)
+        var detected = Set(runtimes.map(\.kind.rawValue))
+        if Self.mlxExecutableURL() != nil { detected.insert("mlx") }
+        return .init(
+            runtimes: runtimes,
+            defaultRuntime: defaultRuntime,
+            detectedRuntimeNames: detected
+        )
     }
 
     func provisionDefaultRuntime(
@@ -176,7 +182,8 @@ actor NexusHostRuntimeManager: NexusHostModelServing {
         let managed = NexusRuntimeAvailability(kind: .ollama, isManagedByNexus: true)
         result = .init(
             runtimes: result.runtimes.filter { $0.kind != .ollama }.union([managed]),
-            defaultRuntime: .ollama
+            defaultRuntime: .ollama,
+            detectedRuntimeNames: (result.detectedRuntimeNames ?? []).union(["ollama"])
         )
         return result
     }
@@ -204,15 +211,21 @@ actor NexusHostRuntimeManager: NexusHostModelServing {
     ) async throws {
         switch runtime {
         case .ollama:
+            if ollama.executableURL() == nil {
+                // An authenticated model-pull is itself an explicit install
+                // action. This also supports older clients without runtime
+                // preflight instead of making them fail on a stale inventory.
+                try await ollama.installOfficialMacApp()
+            }
             guard ollama.executableURL() != nil else {
-                throw NexusConnectError.requestFailed("Ollama is not installed on this host. Confirm runtime installation and retry.")
+                throw NexusConnectError.requestFailed(Self.runtimeProbeFailure(requested: "Ollama"))
             }
             try await ollama.pull(model: model) { update in
                 NexusLocalModelService.awaitProgress(update, handler: progress)
             }
         case .lmStudio:
             guard lmStudio.executableURL() != nil else {
-                throw NexusConnectError.requestFailed("LM Studio is not installed on this host. Install it or provision Nexus's default Ollama runtime.")
+                throw NexusConnectError.requestFailed(Self.runtimeProbeFailure(requested: "LM Studio"))
             }
             let localModel = LocalModel(
                 name: model,
@@ -226,6 +239,28 @@ actor NexusHostRuntimeManager: NexusHostModelServing {
                 NexusLocalModelService.awaitProgress(update, handler: progress)
             }
         }
+    }
+
+    private nonisolated static func runtimeProbeFailure(requested: String) -> String {
+        let mlxDetected = mlxExecutableURL() != nil
+        let mlxDetail = mlxDetected
+            ? " MLX was detected, but this model targets a different runtime and Nexus will not silently translate it."
+            : " Ollama, LM Studio, and MLX were probed."
+        return "\(requested) is not installed on this host.\(mlxDetail)"
+    }
+
+    private nonisolated static func mlxExecutableURL() -> URL? {
+        let fileManager = FileManager.default
+        let home = fileManager.homeDirectoryForCurrentUser.path
+        return [
+            "\(home)/.local/bin/mlx_lm.chat",
+            "\(home)/.local/bin/mlx_lm.generate",
+            "/opt/homebrew/bin/mlx_lm.chat",
+            "/opt/homebrew/bin/mlx_lm.generate",
+            "/usr/local/bin/mlx_lm.chat",
+            "/usr/local/bin/mlx_lm.generate"
+        ].first(where: fileManager.isExecutableFile(atPath:))
+            .map(URL.init(fileURLWithPath:))
     }
 
     func delete(runtime: NexusRuntimeKind, model: String) async throws {

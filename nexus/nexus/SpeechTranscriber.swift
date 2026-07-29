@@ -45,6 +45,33 @@ final class SpeechTranscriber: NSObject, @unchecked Sendable {
         latestAppleTranscript = ""
         appleRecognitionFinished = false
 
+        let microphoneStatus = AVCaptureDevice.authorizationStatus(for: .audio)
+        NexusDiagnostics.record(
+            "[Nexus Speech] start microphone=\(microphoneStatus.rawValue) speech=\(SFSpeechRecognizer.authorizationStatus().rawValue) engine=\(engine.rawValue)"
+        )
+        switch microphoneStatus {
+        case .authorized:
+            startAfterMicrophoneAuthorization(engine: engine)
+        case .notDetermined:
+            AVCaptureDevice.requestAccess(for: .audio) { [weak self] granted in
+                DispatchQueue.main.async {
+                    guard let self, self.wantsRecording else { return }
+                    if granted {
+                        self.startAfterMicrophoneAuthorization(engine: engine)
+                    } else {
+                        self.onUpdate?("Microphone permission is required in System Settings.")
+                    }
+                }
+            }
+        case .denied, .restricted:
+            onUpdate("Microphone permission is required in System Settings.")
+        @unknown default:
+            onUpdate("Microphone access is unavailable on this Mac.")
+        }
+    }
+
+    private func startAfterMicrophoneAuthorization(engine: NexusSpeechEngine) {
+        guard wantsRecording else { return }
         if engine == .parakeetLocal {
             startLocalParakeetRecording()
             return
@@ -65,9 +92,9 @@ final class SpeechTranscriber: NSObject, @unchecked Sendable {
                 }
             }
         case .denied, .restricted:
-            onUpdate("Speech recognition permission is required in System Settings.")
+            onUpdate?("Speech recognition permission is required in System Settings.")
         @unknown default:
-            onUpdate("Speech recognition is unavailable on this Mac.")
+            onUpdate?("Speech recognition is unavailable on this Mac.")
         }
     }
 
@@ -88,6 +115,7 @@ final class SpeechTranscriber: NSObject, @unchecked Sendable {
     /// model. Apple Speech is asked to finalize before returning, so endpoint
     /// words cannot be visible in the overlay but missing from the prompt.
     func stopAndTranscribe() async -> String? {
+        NexusDiagnostics.record("[Nexus Speech] stop-and-transcribe requested")
         wantsRecording = false
         cancelAutomaticSubmit()
         if localRecordingURL != nil {
@@ -128,6 +156,7 @@ final class SpeechTranscriber: NSObject, @unchecked Sendable {
         recognitionTask = recognizer?.recognitionTask(with: request) { [weak self] result, error in
             if let text = result?.bestTranscription.formattedString, !text.isEmpty {
                 self?.latestAppleTranscript = text
+                NexusDiagnostics.record("[Nexus Speech] partial characters=\(text.count)")
                 DispatchQueue.main.async { [weak self] in
                     guard self?.dictationSessionID == session else { return }
                     self?.onUpdate?(text)
@@ -138,6 +167,7 @@ final class SpeechTranscriber: NSObject, @unchecked Sendable {
                 self?.completeAppleRecognition()
             }
             if error != nil {
+                NexusDiagnostics.record("[Nexus Speech] recognition error=\(error!.localizedDescription)")
                 DispatchQueue.main.async { [weak self] in
                     guard let self, self.wantsRecording else { return }
                     self.onUpdate?("Speech recognition stopped unexpectedly.")
@@ -150,6 +180,7 @@ final class SpeechTranscriber: NSObject, @unchecked Sendable {
             try audioEngine.start()
         } catch {
             removeInputTap()
+            NexusDiagnostics.record("[Nexus Speech] microphone start failed=\(error.localizedDescription)")
             onUpdate?("Nexus could not start the microphone.")
         }
     }
@@ -172,12 +203,28 @@ final class SpeechTranscriber: NSObject, @unchecked Sendable {
             removeInputTap()
             recognitionRequest?.endAudio()
             if recognitionTask == nil { completeAppleRecognition() }
+
+            // Apple Speech occasionally never emits its final callback after
+            // `endAudio()`. Never strand a hold-to-talk session waiting for
+            // that callback: return the latest stable partial after a short
+            // endpoint grace period.
+            let session = dictationSessionID
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) { [weak self] in
+                guard let self,
+                      self.dictationSessionID == session,
+                      self.appleFinalContinuation != nil else { return }
+                NexusDiagnostics.record("[Nexus Speech] final callback timed out; using latest partial")
+                self.completeAppleRecognition()
+            }
         }
     }
 
     private func completeAppleRecognition() {
         guard !appleRecognitionFinished else { return }
         appleRecognitionFinished = true
+        NexusDiagnostics.record(
+            "[Nexus Speech] finalized characters=\(latestAppleTranscript.trimmingCharacters(in: .whitespacesAndNewlines).count)"
+        )
         recognitionRequest = nil
         recognitionTask = nil
         resolveAppleFinalTranscript(

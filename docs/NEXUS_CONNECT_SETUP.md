@@ -10,8 +10,9 @@ Pairing is a one-time operation. Restarting Nexus or either Mac does not require
 - Sign all devices into the same Tailscale tailnet.
 - A host must be powered on, awake enough to accept network traffic, connected to Tailscale, and running the Nexus Connect LaunchAgent.
 - The visible Nexus window does **not** need to remain open on a host.
-- A sleeping, powered-off, offline, or never-installed Mac is shown as offline; Nexus cannot wake or reach it by pretending otherwise.
+- A sleeping, powered-off, offline, or never-installed Mac is shown as offline; Nexus cannot wake or reach it by pretending otherwise. Tailscale itself cannot power on a Mac. Wake-on-LAN needs a separate always-on device on the destination LAN and compatible Mac power settings, so it is not treated as a safe baseline capability.
 - Compatible Nexus versions can connect even when their commits differ. A feature introduced by a newer protocol is disabled when necessary. Only a complete lack of protocol overlap requires an upgrade.
+- The host LaunchAgent waits and retries when Tailscale is temporarily stopped or still starting during login.
 
 Nexus finds the Tailscale CLI in `/opt/homebrew/bin`, `/usr/local/bin`, or the Tailscale app bundle.
 
@@ -64,7 +65,7 @@ Automatic first chooses a healthy node that already owns the selected model. If 
 
 For a selected remote destination, model bytes travel from the model provider directly to that host's disk. They are never proxied through the MacBook. A remote pull never falls back to the MacBook.
 
-If a host has neither Ollama nor LM Studio, Nexus offers one confirmation on the MacBook and provisions the supported default Ollama runtime on that host. The headless helper does not display an invisible permission dialog. Existing Ollama or LM Studio installations are detected and used. Inventory refreshes after every pull or delete.
+Every remote download re-probes the destination rather than trusting cached inventory. Existing compatible Ollama or LM Studio installations are used immediately. If an explicit Ollama download finds neither runtime, that same download action provisions the supported default Ollama runtime and continues—there is no second confirmation. Missing-runtime errors include the Ollama, LM Studio, and MLX probe result. Nexus never silently changes the selected model's runtime. Inventory refreshes after every pull or delete.
 
 ## Status meanings
 

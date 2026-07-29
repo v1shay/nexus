@@ -296,7 +296,7 @@ extension NexusGeometryTests {
     }
 
     @MainActor
-    func testClosingHostUIDoesNotStopPersistentConnectHost() throws {
+    func testClosingHostUIDoesNotStopPersistentConnectHost() async throws {
         let suiteName = "NexusPersistentHostLifecycle.\(UUID().uuidString)"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
         defer { defaults.removePersistentDomain(forName: suiteName) }
@@ -304,10 +304,11 @@ extension NexusGeometryTests {
         let controller = NexusConnectController(
             defaults: defaults,
             secretStore: NexusMemorySecretStore(),
+            discovery: NexusRunningDiscoveryStub(),
             persistentHost: manager
         )
         controller.setRole(.studioHost)
-        controller.createPairingCode()
+        await controller.createPairingCode()
         controller.setEnabled(true)
 
         XCTAssertEqual(manager.installCount, 1)
@@ -330,15 +331,22 @@ extension NexusGeometryTests {
     }
 
     @MainActor
-    func testOnePairingCodeConfiguresClientAndHostWithoutStartingWhenDisabled() throws {
+    func testOnePairingCodeConfiguresClientAndHostWithoutStartingWhenDisabled() async throws {
         let suiteName = "NexusConnectControllerTests.\(UUID().uuidString)"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
         defer { defaults.removePersistentDomain(forName: suiteName) }
         let store = NexusMemorySecretStore()
-        let host = NexusConnectController(defaults: defaults, secretStore: store)
+        let host = NexusConnectController(
+            defaults: defaults,
+            secretStore: store,
+            discovery: NexusRunningDiscoveryStub()
+        )
         host.setRole(.studioHost)
-        host.createPairingCode()
+        await host.createPairingCode()
         let code = host.pairingCode
+        let invitation = try NexusPairingCode.decodeInvitation(code)
+        XCTAssertEqual(invitation.endpoint, "test-studio.example.ts.net.")
+        XCTAssertEqual(invitation.tailscaleNodeID, "host-tailnet-id")
         XCTAssertTrue(host.isPaired)
         XCTAssertEqual(host.state, .off)
 
@@ -351,6 +359,8 @@ extension NexusGeometryTests {
         client.applyPairingCode()
 
         XCTAssertTrue(client.isPaired)
+        XCTAssertEqual(client.pairedNodes.first?.endpoint, "test-studio.example.ts.net")
+        XCTAssertEqual(client.pairedNodes.first?.tailscaleNodeID, "host-tailnet-id")
         XCTAssertFalse(client.enabled)
         XCTAssertEqual(client.state, .off)
         client.shutdown()
@@ -373,6 +383,23 @@ private final class NexusPersistentHostManagerSpy: NexusPersistentHostManaging, 
             protocolRange: .local,
             updatedAt: Date()
         )
+    }
+}
+
+private struct NexusRunningDiscoveryStub: NexusNodeDiscovering {
+    func snapshot() async throws -> NexusTailscaleSnapshot {
+        .init(
+            backendState: "Running",
+            localNodeID: "host-tailnet-id",
+            localNodeName: "Test Studio",
+            localDNSName: "test-studio.example.ts.net.",
+            localAddresses: ["100.72.31.42"],
+            peers: []
+        )
+    }
+
+    func routeSample(to peer: NexusTailscalePeer) async throws -> NexusTailscaleRouteSample {
+        .init(route: .direct, roundTripMilliseconds: 1, description: "test")
     }
 }
 

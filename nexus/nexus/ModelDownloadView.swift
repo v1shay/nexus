@@ -51,14 +51,6 @@ struct ModelDownloadView: View {
                 secondaryButton: .cancel()
             )
         }
-        .alert(item: $viewModel.pendingRemoteRuntimeInstall) { request in
-            Alert(
-                title: Text("Install Ollama remotely?"),
-                message: Text("Nexus will install its supported Ollama runtime directly on \(request.deviceNames.joined(separator: ", ")). Model bytes will download from the internet to those Macs, never through this Mac."),
-                primaryButton: .default(Text("Install and Continue"), action: viewModel.installRemoteRuntimeAndContinue),
-                secondaryButton: .cancel()
-            )
-        }
     }
 
     private var selectedModel: LocalModel? {
@@ -216,7 +208,9 @@ private struct NexusConnectSetupView: View {
                     }
                 } else {
                     HStack {
-                        Button("Create one-time pairing code", action: controller.createPairingCode)
+                        Button("Create one-time pairing code") {
+                            Task { await controller.createPairingCode() }
+                        }
                         Button("Copy", action: controller.copyPairingCode)
                             .disabled(controller.pairingCode.isEmpty)
                         Button("Refresh devices", action: controller.refreshAuthorizedClients)
