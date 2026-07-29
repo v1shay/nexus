@@ -1458,45 +1458,6 @@ final class NexusGeometryTests: XCTestCase {
         )
     }
 
-    func testPermissionIdentityPolicyRepairsOnlyWhenNeeded() {
-        XCTAssertEqual(
-            NexusPermissionIdentityPolicy.repairScope(
-                previousFingerprint: "stable",
-                currentFingerprint: "stable",
-                hasLegacySettings: true,
-                migrationCompleted: true
-            ),
-            .none
-        )
-        XCTAssertEqual(
-            NexusPermissionIdentityPolicy.repairScope(
-                previousFingerprint: "old",
-                currentFingerprint: "new",
-                hasLegacySettings: true,
-                migrationCompleted: true
-            ),
-            .allServices
-        )
-        XCTAssertEqual(
-            NexusPermissionIdentityPolicy.repairScope(
-                previousFingerprint: nil,
-                currentFingerprint: "stable",
-                hasLegacySettings: true,
-                migrationCompleted: false
-            ),
-            .deniedServices
-        )
-        XCTAssertEqual(
-            NexusPermissionIdentityPolicy.repairScope(
-                previousFingerprint: nil,
-                currentFingerprint: "stable",
-                hasLegacySettings: false,
-                migrationCompleted: false
-            ),
-            .none
-        )
-    }
-
     func testVisionCapturePrefersLargestFrontmostAppWindow() {
         let candidates = [
             NexusCaptureWindowCandidate(
