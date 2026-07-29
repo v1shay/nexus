@@ -1904,9 +1904,11 @@ final class NotchController: ObservableObject {
         let atomicCompactShow = NexusPanelPresentationPolicy.requiresAtomicCompactShow(
             presentation: interaction.presentation
         )
-        NexusDiagnostics.record(
-            "[Nexus Panel] resize presentation=\(interaction.presentation) requested=\(NSStringFromSize(size)) resolved=\(NSStringFromSize(resolvedSize)) current=\(NSStringFromRect(panel.frame)) target=\(NSStringFromRect(targetFrame)) atomic=\(atomicCompactShow)"
-        )
+        if atomicCompactShow || requestedSizeChanged || frameChanged {
+            NexusDiagnostics.record(
+                "[Nexus Panel] resize presentation=\(interaction.presentation) requested=\(NSStringFromSize(size)) resolved=\(NSStringFromSize(resolvedSize)) current=\(NSStringFromRect(panel.frame)) target=\(NSStringFromRect(targetFrame)) atomic=\(atomicCompactShow)"
+            )
+        }
 
         // Listening and finalizing are modifier-driven, transient surfaces.
         // On the first hold, ordering the closed physical-notch frame before
