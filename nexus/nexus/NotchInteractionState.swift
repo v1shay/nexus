@@ -178,10 +178,6 @@ enum CodexProgressAssets {
         .appendingPathComponent("Downloads", isDirectory: true)
 
     static let avatarURL = downloadsURL.appendingPathComponent("codex-removebg-preview.png")
-    static let codexMark = loadIcon(
-        named: "codex.svg",
-        fallbackSystemName: CodexProgressKind.thinking.fallbackSymbol
-    )
 
     static func icon(for kind: CodexProgressKind) -> ToolIconSource {
         let fileName: String = switch kind {

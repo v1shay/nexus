@@ -514,10 +514,10 @@ private struct CodexSessionPicker: View {
                     reduceMotion: reduceMotion,
                     select: { notch.selectCodexSession(session.id) }
                 )
-                .offset(x: CGFloat(reversedIndex) * 17)
+                .offset(x: CGFloat(reversedIndex) * 13)
             }
         }
-        .frame(width: 60, height: 27, alignment: .leading)
+        .frame(width: 50, height: 24, alignment: .leading)
         .contentShape(Rectangle())
         .contextMenu {
             Button("Show Codex usage") {
@@ -553,26 +553,20 @@ private struct CodexSessionMark: View {
 
     var body: some View {
         Button(action: select) {
-            ZStack {
-                if isSelected {
-                    Circle()
-                        .stroke(.white.opacity(0.75), lineWidth: 1)
-                        .frame(width: 25, height: 25)
-                }
-                LinearGradient(
-                    colors: palette.colors,
-                    startPoint: .topLeading,
-                    endPoint: .bottomTrailing
-                )
-                .mask(ToolIconView(source: CodexProgressAssets.codexMark, size: 21))
-            }
-            .frame(width: 26, height: 26)
-            .shadow(
-                color: isLive ? palette.glow.opacity(isSelected ? 0.95 : 0.68) : .clear,
-                radius: isLive ? (reduceMotion ? 3 : 5) : 0
+            LinearGradient(
+                colors: palette.colors,
+                startPoint: .topLeading,
+                endPoint: .bottomTrailing
             )
-            .scaleEffect(isSelected ? 1 : 0.92)
-            .opacity(session.isComplete ? 0.55 : 1)
+            // This is the exact original compact Codex mark, used as an alpha
+            // mask so the logo keeps its proper shape while the colors change.
+            .mask(CodexLogoMask())
+            .frame(width: 22, height: 22)
+            .shadow(
+                color: isLive ? palette.glow.opacity(reduceMotion ? 0.25 : 0.42) : .clear,
+                radius: isLive ? 2.5 : 0
+            )
+            .opacity(session.isComplete ? 0.42 : (isSelected ? 1 : 0.82))
         }
         .buttonStyle(.plain)
         .accessibilityLabel("Show Codex task: \(session.title)\(isLive ? ", running" : ", complete")")
@@ -605,7 +599,7 @@ private struct CodexUsagePopover: View {
     }
 }
 
-private struct CodexAvatarView: View {
+private struct CodexLogoMask: View {
     var body: some View {
         Group {
             if let image = NSImage(contentsOf: CodexProgressAssets.avatarURL) {
@@ -614,10 +608,6 @@ private struct CodexAvatarView: View {
                 Image(systemName: "chevron.left.forwardslash.chevron.right").resizable().scaledToFit()
             }
         }
-        .frame(width: 22, height: 22)
-        .clipShape(Circle())
-        .shadow(color: .blue.opacity(0.9), radius: 6)
-        .accessibilityLabel("Codex")
     }
 }
 
