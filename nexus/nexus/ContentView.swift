@@ -492,42 +492,91 @@ private struct NexCLIActivityMark: View {
 
 private struct CodexSessionPicker: View {
     @EnvironmentObject private var notch: NotchController
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     let selectedSessionID: String?
     @State private var isUsagePopoverPresented = false
 
-    var body: some View {
-        HStack(spacing: 6) {
-            Button {
-                isUsagePopoverPresented.toggle()
-            } label: {
-                CodexAvatarView()
-            }
-            .buttonStyle(.plain)
-            .popover(isPresented: $isUsagePopoverPresented, arrowEdge: .top) {
-                CodexUsagePopover(usage: notch.codexUsageLimit)
-            }
-            .accessibilityLabel("Show Codex usage")
+    private var latestSessions: [CodexSessionProgress] {
+        Array(notch.codexSessions.prefix(3))
+    }
 
-            if notch.codexSessions.count > 1 {
-                HStack(spacing: 4) {
-                    ForEach(Array(notch.codexSessions.prefix(2).enumerated()), id: \.element.id) { index, session in
-                        Button {
-                            notch.selectCodexSession(session.id)
-                        } label: {
-                            Text("\(index + 1)")
-                                .font(.system(size: 8, weight: .bold, design: .rounded))
-                                .foregroundStyle(session.id == selectedSessionID ? .white : .white.opacity(0.62))
-                                .frame(width: 12, height: 12)
-                                .background(session.id == selectedSessionID ? Color.blue.opacity(0.9) : Color.white.opacity(0.12))
-                                .clipShape(Circle())
-                        }
-                        .buttonStyle(.plain)
-                        .accessibilityLabel("Show Codex task \(index + 1): \(session.title)")
-                    }
-                }
+    var body: some View {
+        ZStack(alignment: .leading) {
+            // Draw the oldest mark first so the newest task stays visible on
+            // top at the right edge. Each exposed mark remains a separate
+            // button, preserving direct session switching in the compact notch.
+            ForEach(Array(latestSessions.reversed().enumerated()), id: \.element.id) { reversedIndex, session in
+                let paletteIndex = latestSessions.count - reversedIndex - 1
+                CodexSessionMark(
+                    session: session,
+                    isSelected: session.id == selectedSessionID,
+                    palette: CodexSessionPalette.all[paletteIndex % CodexSessionPalette.all.count],
+                    reduceMotion: reduceMotion,
+                    select: { notch.selectCodexSession(session.id) }
+                )
+                .offset(x: CGFloat(reversedIndex) * 17)
             }
         }
-        .frame(width: 96, height: 25, alignment: .center)
+        .frame(width: 60, height: 27, alignment: .leading)
+        .contentShape(Rectangle())
+        .contextMenu {
+            Button("Show Codex usage") {
+                isUsagePopoverPresented = true
+            }
+        }
+        .popover(isPresented: $isUsagePopoverPresented, arrowEdge: .top) {
+            CodexUsagePopover(usage: notch.codexUsageLimit)
+        }
+        .accessibilityLabel("Codex tasks. Showing \(latestSessions.count) most recent tasks.")
+    }
+}
+
+private struct CodexSessionPalette {
+    let colors: [Color]
+    let glow: Color
+
+    static let all: [CodexSessionPalette] = [
+        .init(colors: [.cyan.opacity(0.95), .blue, .indigo.opacity(0.94)], glow: .blue),
+        .init(colors: [.mint.opacity(0.95), .green, .teal.opacity(0.94)], glow: .green),
+        .init(colors: [.orange.opacity(0.96), .pink, .purple.opacity(0.94)], glow: .pink)
+    ]
+}
+
+private struct CodexSessionMark: View {
+    let session: CodexSessionProgress
+    let isSelected: Bool
+    let palette: CodexSessionPalette
+    let reduceMotion: Bool
+    let select: () -> Void
+
+    private var isLive: Bool { !session.isComplete }
+
+    var body: some View {
+        Button(action: select) {
+            ZStack {
+                if isSelected {
+                    Circle()
+                        .stroke(.white.opacity(0.75), lineWidth: 1)
+                        .frame(width: 25, height: 25)
+                }
+                LinearGradient(
+                    colors: palette.colors,
+                    startPoint: .topLeading,
+                    endPoint: .bottomTrailing
+                )
+                .mask(ToolIconView(source: CodexProgressAssets.codexMark, size: 21))
+            }
+            .frame(width: 26, height: 26)
+            .shadow(
+                color: isLive ? palette.glow.opacity(isSelected ? 0.95 : 0.68) : .clear,
+                radius: isLive ? (reduceMotion ? 3 : 5) : 0
+            )
+            .scaleEffect(isSelected ? 1 : 0.92)
+            .opacity(session.isComplete ? 0.55 : 1)
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Show Codex task: \(session.title)\(isLive ? ", running" : ", complete")")
+        .help(session.title)
     }
 }
 

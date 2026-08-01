@@ -178,6 +178,10 @@ enum CodexProgressAssets {
         .appendingPathComponent("Downloads", isDirectory: true)
 
     static let avatarURL = downloadsURL.appendingPathComponent("codex-removebg-preview.png")
+    static let codexMark = loadIcon(
+        named: "codex.svg",
+        fallbackSystemName: CodexProgressKind.thinking.fallbackSymbol
+    )
 
     static func icon(for kind: CodexProgressKind) -> ToolIconSource {
         let fileName: String = switch kind {
@@ -188,11 +192,15 @@ enum CodexProgressAssets {
         case .image: "image-01-svgrepo-com.svg"
         case .git: "code-merge-svgrepo-com.svg"
         }
+        return loadIcon(named: fileName, fallbackSystemName: kind.fallbackSymbol)
+    }
+
+    private static func loadIcon(named fileName: String, fallbackSystemName: String) -> ToolIconSource {
         let url = downloadsURL.appendingPathComponent(fileName)
         if let data = try? Data(contentsOf: url) {
-            return .svg(data: data, fallbackSystemName: kind.fallbackSymbol)
+            return .svg(data: data, fallbackSystemName: fallbackSystemName)
         }
-        return .systemSymbol(kind.fallbackSymbol)
+        return .systemSymbol(fallbackSystemName)
     }
 }
 

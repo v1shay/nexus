@@ -1740,13 +1740,13 @@ final class NotchController: ObservableObject {
 
     private func handleCodexProgress(_ update: CodexProgressUpdate, sessions: [CodexSessionProgress]) {
         codexSessions = sessions
-        let selectedSessionIsComplete = sessions.first(where: { $0.id == selectedCodexSessionID })?.isComplete ?? false
-        if selectedCodexSessionID == nil
-            || !sessions.contains(where: { $0.id == selectedCodexSessionID })
-            || (selectedSessionIsComplete && update.phase != .completed && update.phase != .failed) {
+        // A new Codex action should always take over the compact stream. The
+        // session marks still let people return to another recent task, but a
+        // command, patch, or commentary event should never keep showing a
+        // stale task while another one is actively doing work.
+        if selectedCodexSessionID == nil || update.phase == .started || update.phase == .progress {
             selectedCodexSessionID = update.sessionID
         }
-        guard selectedCodexSessionID == update.sessionID else { return }
 
         // Never let an external developer task obscure live dictation, a Nex
         // response, or a user-opened answer. Codex resumes appearing as soon
