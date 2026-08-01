@@ -53,6 +53,37 @@ enum NexusDiagnostics {
     }
 }
 
+/// `na.nexus` was also used by an abandoned build, so macOS can associate its
+/// stale TCC rows with the wrong signing requirement. The desktop app now has
+/// a permanent, distinct bundle identifier. Copy the old preference domain
+/// once so that model, voice, and UI choices survive the identity change.
+enum NexusLegacyPreferenceMigration {
+    private static let legacyDomain = "na.nexus"
+    private static let marker = "nexus.migration.na-nexus-desktop.v1"
+    private static let obsoletePermissionFingerprint = "nexus.permission.designated-requirement.v1"
+
+    static func run() {
+        guard let currentDomain = Bundle.main.bundleIdentifier,
+              currentDomain != legacyDomain else { return }
+
+        let defaults = UserDefaults.standard
+        var current = defaults.persistentDomain(forName: currentDomain) ?? [:]
+        guard current[marker] == nil else { return }
+
+        let legacy = defaults.persistentDomain(forName: legacyDomain) ?? [:]
+        for (key, value) in legacy
+        where current[key] == nil && key != obsoletePermissionFingerprint {
+            current[key] = value
+        }
+        current[marker] = true
+        defaults.setPersistentDomain(current, forName: currentDomain)
+        NexusDiagnostics.record(
+            "[Nexus Migration] copied \(legacy.count) legacy preference candidates "
+                + "from \(legacyDomain) to \(currentDomain)"
+        )
+    }
+}
+
 @main
 struct NexusApp: App {
     @NSApplicationDelegateAdaptor(NexusAppDelegate.self) private var appDelegate
@@ -139,6 +170,33 @@ final class NexusAppDelegate: NSObject, NSApplicationDelegate {
             FileHandle.standardOutput.write(Data(output.utf8))
             Foundation.exit(0)
         }
+        if CommandLine.arguments.contains("--nexus-voice-smoke") {
+            NSApp.setActivationPolicy(.prohibited)
+            let voices = PiperVoiceCatalog.voices()
+            let configuration = PiperVoiceConfiguration.detect()
+            let output: [String: Any] = [
+                "count": voices.count,
+                "models": voices.map { $0.model.path },
+                "selectedModel": configuration?.model.path ?? "",
+                "executable": configuration?.executable.path ?? ""
+            ]
+            if let data = try? JSONSerialization.data(withJSONObject: output),
+               let line = String(data: data, encoding: .utf8) {
+                FileHandle.standardOutput.write(Data((line + "\n").utf8))
+            }
+            Foundation.exit(voices.isEmpty || configuration == nil ? 1 : 0)
+        }
+        if let index = CommandLine.arguments.firstIndex(of: "--nexus-request-permission-smoke"),
+           CommandLine.arguments.indices.contains(index + 1),
+           let service = NexusTCCService(rawValue: CommandLine.arguments[index + 1]) {
+            // Signed-build diagnostic for the real TCC request path. Unlike
+            // the read-only smoke test above, this deliberately presents the
+            // native macOS consent UI and keeps the app alive for the reply.
+            NSApp.setActivationPolicy(.regular)
+            NSApp.activate(ignoringOtherApps: true)
+            NexusPermissionHealth.shared.requestFreshPermission(service)
+            return
+        }
         if CommandLine.arguments.contains("--nexus-insertion-smoke") {
             launchTask = Task { @MainActor in
                 let field = NSTextField(frame: NSRect(x: 20, y: 20, width: 420, height: 28))
@@ -180,6 +238,7 @@ final class NexusAppDelegate: NSObject, NSApplicationDelegate {
             }
             return
         }
+        NexusLegacyPreferenceMigration.run()
         NSApp.setActivationPolicy(.regular)
         if CommandLine.arguments.contains("--nexus-ui-testing") {
             let notch = NotchController()
@@ -228,6 +287,11 @@ final class NexusAppDelegate: NSObject, NSApplicationDelegate {
         nexCLIHost?.stop()
         NexusDuplexVoiceRuntime.shared.stop()
         if let menuBarItem { NSStatusBar.system.removeStatusItem(menuBarItem) }
+    }
+
+    func applicationDidBecomeActive(_ notification: Notification) {
+        NexusPermissionHealth.shared.refresh()
+        notch?.reconcilePermissionDependentServices()
     }
 
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
@@ -529,9 +593,9 @@ final class NotchController: ObservableObject {
     func install(startServices: Bool = true) {
         guard panel == nil else { return }
         if startServices { connectController.start() }
-        // Permission prompts must be initiated deliberately from Settings.
-        // Starting Nexus must never turn a hotkey attempt into a repeating
-        // macOS privacy dialog.
+        // Ordinary launches and hotkey attempts never repeat privacy dialogs.
+        // The launch health check only re-prompts after the app's designated
+        // signing requirement actually changes.
         let screen = NSScreen.main ?? NSScreen.screens[0]
         self.screen = screen
         currentSize = closedSize(for: screen)
@@ -608,6 +672,14 @@ final class NotchController: ObservableObject {
             name: NSApplication.didChangeScreenParametersNotification,
             object: nil
         )
+    }
+
+    /// TCC grants can change while Nexus is in the background with System
+    /// Settings frontmost. Re-arm the permission-gated event sources as soon
+    /// as Nexus becomes active so a newly accepted grant works immediately.
+    func reconcilePermissionDependentServices() {
+        commandHoldMonitor?.reconcilePermissionState()
+        globalPasteDictationMonitor?.reconcilePermissionState()
     }
 
     /// XCUITest needs a visible, keyboard-accessible surface without relying
@@ -1024,13 +1096,11 @@ final class NotchController: ObservableObject {
             NSLog("[Nexus Vision] Encoded frontmost app window (%d base64 bytes)", attachment.base64.utf8.count)
             return attachment
         }
-        _ = NexusScreenCapture.requestAccess(prompt: true)
-        guard let attachment = NexusScreenCapture.captureCurrentScreen() else {
-            NSLog("[Nexus Vision] Screen capture unavailable; request is text-only")
-            return nil
-        }
-        NSLog("[Nexus Vision] Encoded frontmost app window (%d base64 bytes)", attachment.base64.utf8.count)
-        return attachment
+        // Never produce a Screen Recording prompt from an ordinary model
+        // request. TCC prompts must map one-to-one to the explicit permission
+        // button the user clicked in Settings.
+        NSLog("[Nexus Vision] Screen capture unavailable; request is text-only")
+        return nil
     }
 
     private func applyingCurrentScreenAttachment(to messages: [NexusChatMessage]) -> [NexusChatMessage] {
@@ -2116,15 +2186,12 @@ enum NexusCaptureWindowSelection {
 /// redacts application layers, which is actively misleading for a vision
 /// model. If the real foreground window is unavailable, fail closed instead.
 enum NexusScreenCapture {
-    private static var didRequestAccessThisLaunch = false
-
     static var hasAccess: Bool { CGPreflightScreenCaptureAccess() }
 
     @discardableResult
     static func requestAccess(prompt: Bool = false) -> Bool {
         guard !CGPreflightScreenCaptureAccess() else { return true }
-        guard prompt, !didRequestAccessThisLaunch else { return false }
-        didRequestAccessThisLaunch = true
+        guard prompt else { return false }
         return CGRequestScreenCaptureAccess()
     }
 
@@ -2488,8 +2555,7 @@ private final class NexusCommandHoldMonitor {
             return event
         }
 
-        installGlobalEventTapIfPossible()
-        installHIDModifierMonitor()
+        reconcilePermissionState()
 
         let timer = DispatchSource.makeTimerSource(queue: .main)
         timer.schedule(deadline: .now(), repeating: .milliseconds(20), leeway: .milliseconds(3))
@@ -2503,6 +2569,16 @@ private final class NexusCommandHoldMonitor {
             eventTap == nil ? "unavailable" : "active",
             hidManager == nil ? "unavailable" : "active"
         )
+    }
+
+    func reconcilePermissionState() {
+        if NexusGlobalHotkeyAccess.hasInputMonitoring {
+            installGlobalEventTapIfPossible()
+            installHIDModifierMonitor()
+        } else {
+            uninstallGlobalEventTap()
+            uninstallHIDModifierMonitor()
+        }
     }
 
     func cancelCurrentHold() {
@@ -2583,6 +2659,7 @@ private final class NexusCommandHoldMonitor {
     /// CGEvent tap is the reliable macOS mechanism for observing it while a
     /// different app is frontmost. It never consumes keystrokes.
     private func installGlobalEventTapIfPossible() {
+        guard eventTap == nil else { return }
         if !NexusGlobalHotkeyAccess.hasInputMonitoring {
             NSLog("[Nexus Hotkey] Global event tap unavailable: Input Monitoring is not authorized")
             return
@@ -2612,6 +2689,15 @@ private final class NexusCommandHoldMonitor {
         eventTap = tap
         eventTapSource = source
         NSLog("[Nexus Hotkey] Passive global event tap active")
+    }
+
+    private func uninstallGlobalEventTap() {
+        if let eventTapSource {
+            CFRunLoopRemoveSource(CFRunLoopGetMain(), eventTapSource, .commonModes)
+        }
+        if let eventTap { CGEvent.tapEnable(tap: eventTap, enable: false) }
+        eventTapSource = nil
+        eventTap = nil
     }
 
     private static let eventTapCallback: CGEventTapCallBack = { _, type, event, userInfo in
@@ -2645,6 +2731,7 @@ private final class NexusCommandHoldMonitor {
     /// an input event.
     private func installHIDModifierMonitor() {
         guard hidManager == nil else { return }
+        guard NexusGlobalHotkeyAccess.hasInputMonitoring else { return }
         let manager = IOHIDManagerCreate(kCFAllocatorDefault, IOOptionBits(kIOHIDOptionsTypeNone))
         let matching: [String: Any] = [
             kIOHIDDeviceUsagePageKey as String: kHIDPage_GenericDesktop,
@@ -2662,6 +2749,14 @@ private final class NexusCommandHoldMonitor {
             return
         }
         hidManager = manager
+    }
+
+    private func uninstallHIDModifierMonitor() {
+        guard let hidManager else { return }
+        IOHIDManagerUnscheduleFromRunLoop(hidManager, CFRunLoopGetMain(), CFRunLoopMode.commonModes.rawValue)
+        IOHIDManagerClose(hidManager, IOOptionBits(kIOHIDOptionsTypeNone))
+        self.hidManager = nil
+        pressedHIDModifiers.removeAll()
     }
 
     private static let hidInputCallback: IOHIDValueCallback = { context, _, _, value in
@@ -2694,14 +2789,8 @@ private final class NexusCommandHoldMonitor {
         timer?.cancel()
         if let globalInputMonitor { NSEvent.removeMonitor(globalInputMonitor) }
         if let localInputMonitor { NSEvent.removeMonitor(localInputMonitor) }
-        if let eventTapSource {
-            CFRunLoopRemoveSource(CFRunLoopGetMain(), eventTapSource, .commonModes)
-        }
-        if let eventTap { CGEvent.tapEnable(tap: eventTap, enable: false) }
-        if let hidManager {
-            IOHIDManagerUnscheduleFromRunLoop(hidManager, CFRunLoopGetMain(), CFRunLoopMode.commonModes.rawValue)
-            IOHIDManagerClose(hidManager, IOOptionBits(kIOHIDOptionsTypeNone))
-        }
+        uninstallGlobalEventTap()
+        uninstallHIDModifierMonitor()
     }
 }
 
@@ -2734,19 +2823,24 @@ enum NexusHIDModifierFlags {
 /// Input Monitoring gates detection of Command/Option-Command outside Nexus;
 /// Accessibility gates insertion into another app's focused text control.
 enum NexusGlobalHotkeyAccess {
-    private static var didRequestInputMonitoringThisLaunch = false
-    private static var didRequestAccessibilityThisLaunch = false
-
-    static var hasInputMonitoring: Bool { CGPreflightListenEventAccess() }
+    static var hasInputMonitoring: Bool {
+        IOHIDCheckAccess(kIOHIDRequestTypeListenEvent) == kIOHIDAccessTypeGranted
+            || CGPreflightListenEventAccess()
+    }
     static var hasAccessibility: Bool { AXIsProcessTrusted() }
 
     @discardableResult
     static func requestInputMonitoringIfNeeded(prompt: Bool = false) -> Bool {
-        guard !CGPreflightListenEventAccess() else { return true }
-        guard prompt, !didRequestInputMonitoringThisLaunch else { return false }
-        didRequestInputMonitoringThisLaunch = true
-        _ = CGRequestListenEventAccess()
-        return CGPreflightListenEventAccess()
+        guard !hasInputMonitoring else { return true }
+        guard prompt else { return false }
+        let hidGranted = IOHIDRequestAccess(kIOHIDRequestTypeListenEvent)
+        if !hidGranted {
+            // Keep the CoreGraphics request as a compatibility fallback for
+            // event-tap-only macOS configurations. IOHIDRequestAccess is what
+            // reliably registers the app in Input Monitoring on current macOS.
+            _ = CGRequestListenEventAccess()
+        }
+        return hasInputMonitoring
     }
 
     static func openInputMonitoringSettings() {
@@ -2758,8 +2852,7 @@ enum NexusGlobalHotkeyAccess {
     @discardableResult
     static func requestAccessibilityIfNeeded(prompt: Bool = false) -> Bool {
         guard !AXIsProcessTrusted() else { return true }
-        guard prompt, !didRequestAccessibilityThisLaunch else { return false }
-        didRequestAccessibilityThisLaunch = true
+        guard prompt else { return false }
         let options = [kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true] as CFDictionary
         return AXIsProcessTrustedWithOptions(options)
     }
@@ -2794,6 +2887,14 @@ struct NexusPermissionSnapshot: Equatable {
         if !screenRecording { services.append(.screenCapture) }
         return services
     }
+
+    func isAuthorized(_ service: NexusTCCService) -> Bool {
+        switch service {
+        case .listenEvent: inputMonitoring
+        case .accessibility: accessibility
+        case .screenCapture: screenRecording
+        }
+    }
 }
 
 enum NexusTCCService: String, CaseIterable {
@@ -2813,15 +2914,16 @@ enum NexusTCCService: String, CaseIterable {
 /// TCC's System Settings rows are labels, not proof that macOS authorizes the
 /// currently running signature. This object checks the real permission APIs
 /// every launch/activation and associates grants with Nexus's designated
-/// signing requirement. A launch check must never mutate TCC: automatic
-/// resets can erase a valid grant just after the user enables it. Repairs are
-/// available only through the explicit Settings action below.
+/// signing requirement. Normal launches never mutate TCC. A launch clears
+/// records only when the designated requirement has changed; each new request
+/// remains an explicit Settings action so macOS shows one consent alert at a time.
 @MainActor
 final class NexusPermissionHealth: ObservableObject {
     static let shared = NexusPermissionHealth()
 
     @Published private(set) var snapshot = NexusPermissionSnapshot.current
     @Published private(set) var statusMessage = "Checked against the running Nexus process."
+    @Published private(set) var restartRecommended = false
 
     private let defaults = UserDefaults.standard
     private let fingerprintKey = "nexus.permission.designated-requirement.v1"
@@ -2832,14 +2934,20 @@ final class NexusPermissionHealth: ObservableObject {
         let currentFingerprint = Self.designatedRequirementFingerprint()
         let previousFingerprint = defaults.string(forKey: fingerprintKey)
 
+        let identityChanged = previousFingerprint != nil
+            && previousFingerprint != currentFingerprint
+            && !currentFingerprint.isEmpty
+        if identityChanged {
+            let cleared = resetAllNexusPermissions()
+            restartRecommended = cleared
+        }
+
         if !currentFingerprint.isEmpty {
             defaults.set(currentFingerprint, forKey: fingerprintKey)
         }
         refresh()
-        if let previousFingerprint,
-           previousFingerprint != currentFingerprint,
-           !currentFingerprint.isEmpty {
-            statusMessage = "Nexus signing identity changed. " + Self.liveStatusMessage(for: snapshot)
+        if identityChanged {
+            statusMessage = "Nexus signing identity changed; stale records were cleared. Click each Enable button once."
         }
         NSLog(
             "[Nexus Permissions] launch check input=%@ accessibility=%@ screen=%@ identity=%@",
@@ -2851,8 +2959,54 @@ final class NexusPermissionHealth: ObservableObject {
     }
 
     func refresh() {
+        let previous = snapshot
         snapshot = .current
+        if !previous.screenRecording && snapshot.screenRecording {
+            restartRecommended = true
+        }
         statusMessage = Self.liveStatusMessage(for: snapshot)
+    }
+
+    /// A denied TCC decision will not reliably prompt a second time. An
+    /// explicit Enable click therefore clears only that Nexus service, then
+    /// calls the real permission API so the currently signed build is added
+    /// back to System Settings without another app stealing the prompt's focus.
+    func requestFreshPermission(_ service: NexusTCCService) {
+        refresh()
+        guard !snapshot.isAuthorized(service) else {
+            openSettings(for: service)
+            return
+        }
+        statusMessage = "Clearing the old \(service.displayName) decision…"
+        Task { @MainActor in
+            await repairAndRequest(service)
+        }
+    }
+
+    private func repairAndRequest(_ service: NexusTCCService) async {
+        guard reset([service]) else {
+            statusMessage = "macOS could not clear Nexus's \(service.displayName) record."
+            NexusDiagnostics.record("[Nexus Permissions] reset failed service=\(service.rawValue)")
+            return
+        }
+
+        // tccutil exits before tccd has necessarily invalidated its in-memory
+        // decision. Requesting in the same run-loop turn can therefore reuse
+        // the just-cleared denial and produce no prompt or Settings row.
+        try? await Task.sleep(for: .milliseconds(750))
+        NSApp.activate(ignoringOtherApps: true)
+        restartRecommended = true
+        let granted = registerCurrentBuild(service)
+        refresh()
+        let bundleIdentifier = Bundle.main.bundleIdentifier ?? "missing"
+        NexusDiagnostics.record(
+            "[Nexus Permissions] requested service=\(service.rawValue) granted=\(granted) "
+                + "live=\(snapshot.isAuthorized(service)) bundle=\(bundleIdentifier) "
+                + "path=\(Bundle.main.bundleURL.path) identity=\(Self.designatedRequirementFingerprint().prefix(12))"
+        )
+        if !snapshot.isAuthorized(service) {
+            statusMessage = "Respond to the macOS \(service.displayName) prompt. If it is behind another window, bring Nexus forward."
+        }
     }
 
     func repairDeniedPermissions() {
@@ -2862,12 +3016,44 @@ final class NexusPermissionHealth: ObservableObject {
             statusMessage = "All permissions are authorized for this running Nexus build."
             return
         }
-        let succeeded = reset(denied)
+        let succeeded = resetAllNexusPermissions()
+        if succeeded {
+            restartRecommended = true
+        }
         refresh()
         statusMessage = succeeded
-            ? "Cleared denied Nexus records. Grant each listed permission once."
+            ? "Cleared stale Nexus records. Click each Enable button so macOS presents one prompt at a time."
             : "macOS could not clear one or more Nexus permission records."
-        openSettings(for: denied.first)
+    }
+
+    func relaunchNexus() {
+        let configuration = NSWorkspace.OpenConfiguration()
+        configuration.createsNewApplicationInstance = true
+        NSWorkspace.shared.openApplication(at: Bundle.main.bundleURL, configuration: configuration) { _, error in
+            Task { @MainActor in
+                if let error {
+                    self.statusMessage = "Could not restart Nexus: \(error.localizedDescription)"
+                } else {
+                    NSApp.terminate(nil)
+                }
+            }
+        }
+    }
+
+    func openPrivacySettings(_ service: NexusTCCService) {
+        openSettings(for: service)
+    }
+
+    @discardableResult
+    private func registerCurrentBuild(_ service: NexusTCCService) -> Bool {
+        switch service {
+        case .listenEvent:
+            NexusGlobalHotkeyAccess.requestInputMonitoringIfNeeded(prompt: true)
+        case .accessibility:
+            NexusGlobalHotkeyAccess.requestAccessibilityIfNeeded(prompt: true)
+        case .screenCapture:
+            NexusScreenCapture.requestAccess(prompt: true)
+        }
     }
 
     private func reset(_ services: [NexusTCCService]) -> Bool {
@@ -2884,12 +3070,47 @@ final class NexusPermissionHealth: ObservableObject {
             do {
                 try process.run()
                 process.waitUntilExit()
+                NexusDiagnostics.record(
+                    "[Nexus Permissions] tccutil reset service=\(service.rawValue) "
+                        + "exit=\(process.terminationStatus) bundle=\(bundleIdentifier)"
+                )
                 allSucceeded = allSucceeded && process.terminationStatus == 0
             } catch {
+                NexusDiagnostics.record(
+                    "[Nexus Permissions] tccutil reset service=\(service.rawValue) error=\(error.localizedDescription)"
+                )
                 allSucceeded = false
             }
         }
         return allSucceeded
+    }
+
+    /// Service-specific resets can report success while tccd retains another
+    /// record for the same locally signed client. Apple's documented recovery
+    /// workaround is an All reset scoped to the bundle identifier. This never
+    /// touches another application's decisions.
+    private func resetAllNexusPermissions() -> Bool {
+        guard let bundleIdentifier = Bundle.main.bundleIdentifier, !bundleIdentifier.isEmpty else {
+            return false
+        }
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/tccutil")
+        process.arguments = ["reset", "All", bundleIdentifier]
+        process.standardOutput = FileHandle.nullDevice
+        process.standardError = FileHandle.nullDevice
+        do {
+            try process.run()
+            process.waitUntilExit()
+            NexusDiagnostics.record(
+                "[Nexus Permissions] tccutil reset service=All exit=\(process.terminationStatus) bundle=\(bundleIdentifier)"
+            )
+            return process.terminationStatus == 0
+        } catch {
+            NexusDiagnostics.record(
+                "[Nexus Permissions] tccutil reset service=All error=\(error.localizedDescription)"
+            )
+            return false
+        }
     }
 
     private func openSettings(for service: NexusTCCService?) {

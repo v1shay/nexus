@@ -364,20 +364,34 @@ private struct NexusExperienceSettingsPage: View {
                         }
                         HStack(spacing: 8) {
                             Button(permissionHealth.snapshot.inputMonitoring ? "Input settings" : "Enable input") {
-                                if !NexusGlobalHotkeyAccess.requestInputMonitoringIfNeeded(prompt: true) {
-                                    NexusGlobalHotkeyAccess.openInputMonitoringSettings()
-                                }
-                                permissionHealth.refresh()
+                                permissionHealth.requestFreshPermission(.listenEvent)
                             }
                             Button(permissionHealth.snapshot.accessibility ? "Paste settings" : "Enable paste") {
-                                if !NexusGlobalHotkeyAccess.requestAccessibilityIfNeeded(prompt: true) {
-                                    NexusGlobalHotkeyAccess.openAccessibilitySettings()
-                                }
-                                permissionHealth.refresh()
+                                permissionHealth.requestFreshPermission(.accessibility)
                             }
                             if !permissionHealth.snapshot.deniedServices.isEmpty {
-                                Button("Repair stale records") {
+                                Button("Repair all") {
                                     permissionHealth.repairDeniedPermissions()
+                                }
+                            }
+                            if permissionHealth.restartRecommended {
+                                Button("Restart Nexus") {
+                                    permissionHealth.relaunchNexus()
+                                }
+                            }
+                        }
+                        if !permissionHealth.snapshot.inputMonitoring
+                            || !permissionHealth.snapshot.accessibility {
+                            HStack(spacing: 8) {
+                                if !permissionHealth.snapshot.inputMonitoring {
+                                    Button("Open Input Monitoring") {
+                                        permissionHealth.openPrivacySettings(.listenEvent)
+                                    }
+                                }
+                                if !permissionHealth.snapshot.accessibility {
+                                    Button("Open Accessibility") {
+                                        permissionHealth.openPrivacySettings(.accessibility)
+                                    }
                                 }
                             }
                         }
@@ -401,11 +415,15 @@ private struct NexusExperienceSettingsPage: View {
                                 enabled: permissionHealth.snapshot.screenRecording
                             )
                         }
-                        Button(permissionHealth.snapshot.screenRecording ? "Screen settings" : "Enable screen access") {
-                            if !NexusScreenCapture.requestAccess(prompt: true) {
-                                NexusScreenCapture.openScreenRecordingSettings()
+                        HStack(spacing: 8) {
+                            Button(permissionHealth.snapshot.screenRecording ? "Screen settings" : "Enable screen access") {
+                                permissionHealth.requestFreshPermission(.screenCapture)
                             }
-                            permissionHealth.refresh()
+                            if !permissionHealth.snapshot.screenRecording {
+                                Button("Open Screen Recording") {
+                                    permissionHealth.openPrivacySettings(.screenCapture)
+                                }
+                            }
                         }
                     }
                     .help("Nexus attaches the current screen to every prompt for a vision-capable model. Screen Recording permission is required.")
