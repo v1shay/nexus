@@ -56,6 +56,23 @@ enum NexusStatusGenerationMode: String, CaseIterable, Identifiable, Codable {
     }
 }
 
+/// Controls the compact selector shown when several Codex tasks are active.
+/// Pets remain animated so concurrent work reads as a small live queue rather
+/// than a static set of thumbnails.
+enum NexusCodexTaskMarkStyle: String, CaseIterable, Identifiable, Codable {
+    case codexMarks
+    case pets
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .codexMarks: "Codex marks"
+        case .pets: "Animated pets"
+        }
+    }
+}
+
 enum NexusSpeechEngine: String, CaseIterable, Identifiable, Codable {
     case appleSpeech
     case parakeetLocal
@@ -119,6 +136,9 @@ final class NexusAppSettings: ObservableObject {
     /// Global, focused-field dictation. Accessibility permission is requested
     /// only when the user actually invokes the Option-Command shortcut.
     @Published var globalPasteDictationEnabled: Bool { didSet { persist() } }
+    /// The compact multi-task selector can use the colored Codex logo or the
+    /// installed animated pet artwork.
+    @Published var codexTaskMarkStyle: NexusCodexTaskMarkStyle { didSet { persist() } }
     /// Empty keeps the automatic Jarvis/Piper discovery behavior. A non-empty
     /// value is the absolute path to a user-selected Piper ONNX model.
     @Published var piperVoiceModelPath: String { didSet { persist() } }
@@ -148,6 +168,7 @@ final class NexusAppSettings: ObservableObject {
             ? (saved["shareScreenWithVisionModels"] as? Bool ?? true)
             : true
         globalPasteDictationEnabled = saved["globalPasteDictationEnabled"] as? Bool ?? true
+        codexTaskMarkStyle = NexusCodexTaskMarkStyle(rawValue: saved["codexTaskMarkStyle"] as? String ?? "") ?? .codexMarks
         piperVoiceModelPath = saved["piperVoiceModelPath"] as? String ?? ""
         piperVoiceDirectories = saved["piperVoiceDirectories"] as? [String] ?? []
     }
@@ -166,6 +187,7 @@ final class NexusAppSettings: ObservableObject {
             "shareScreenWithVisionModels": shareScreenWithVisionModels,
             "screenContextVersion": 2,
             "globalPasteDictationEnabled": globalPasteDictationEnabled,
+            "codexTaskMarkStyle": codexTaskMarkStyle.rawValue,
             "piperVoiceModelPath": piperVoiceModelPath,
             "piperVoiceDirectories": piperVoiceDirectories
         ], forKey: key)

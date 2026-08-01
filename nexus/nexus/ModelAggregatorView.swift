@@ -283,6 +283,15 @@ private struct NexusExperienceSettingsPage: View {
                     .frame(width: 210)
                 }
                 NexusHairline(axis: .horizontal)
+                NexusSettingsLine(label: "Codex tasks") {
+                    Picker("Codex task marks", selection: $settings.codexTaskMarkStyle) {
+                        ForEach(NexusCodexTaskMarkStyle.allCases) { style in Text(style.title).tag(style) }
+                    }
+                    .labelsHidden()
+                    .frame(width: 210)
+                    .help("Choose colored Codex marks or animated installed pets for the three most recent Codex tasks.")
+                }
+                NexusHairline(axis: .horizontal)
                 NexusSettingsLine(label: "Status") {
                     Picker("Status", selection: $settings.statusMode) {
                         ForEach(NexusStatusGenerationMode.allCases) { mode in Text(mode.title).tag(mode) }

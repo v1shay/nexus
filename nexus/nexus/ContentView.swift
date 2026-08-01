@@ -511,6 +511,8 @@ private struct CodexSessionPicker: View {
                     session: session,
                     isSelected: session.id == selectedSessionID,
                     palette: CodexSessionPalette.all[paletteIndex % CodexSessionPalette.all.count],
+                    pet: NexusPetCatalog.all[paletteIndex % NexusPetCatalog.all.count],
+                    style: notch.settings.codexTaskMarkStyle,
                     reduceMotion: reduceMotion,
                     select: { notch.selectCodexSession(session.id) }
                 )
@@ -546,6 +548,8 @@ private struct CodexSessionMark: View {
     let session: CodexSessionProgress
     let isSelected: Bool
     let palette: CodexSessionPalette
+    let pet: NexusPet
+    let style: NexusCodexTaskMarkStyle
     let reduceMotion: Bool
     let select: () -> Void
 
@@ -553,14 +557,24 @@ private struct CodexSessionMark: View {
 
     var body: some View {
         Button(action: select) {
-            LinearGradient(
-                colors: palette.colors,
-                startPoint: .topLeading,
-                endPoint: .bottomTrailing
-            )
-            // This is the exact original compact Codex mark, used as an alpha
-            // mask so the logo keeps its proper shape while the colors change.
-            .mask(CodexLogoMask())
+            Group {
+                if style == .pets {
+                    // NexusPetView owns its sprite/GIF animation, so the three
+                    // recent tasks become a compact live animated stack.
+                    NexusPetView(pet: pet, activity: .tool, height: 22)
+                } else {
+                    LinearGradient(
+                        colors: palette.colors,
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing
+                    )
+                    // This is the exact original compact Codex mark, used as
+                    // an alpha mask so the logo keeps its proper shape while
+                    // the colors change.
+                    .mask(CodexLogoMask())
+                    .frame(width: 22, height: 22)
+                }
+            }
             .frame(width: 22, height: 22)
             .shadow(
                 color: isLive ? palette.glow.opacity(reduceMotion ? 0.25 : 0.42) : .clear,

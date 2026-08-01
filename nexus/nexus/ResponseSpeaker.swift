@@ -650,12 +650,17 @@ struct PiperVoice: Identifiable, Hashable, Sendable {
 
 enum PiperVoiceCatalog {
     static func defaultDirectories(fileManager: FileManager = .default) -> [URL] {
-        let nexusSupport = fileManager.homeDirectoryForCurrentUser
+        let home = fileManager.homeDirectoryForCurrentUser
+        let nexusSupport = home
             .appendingPathComponent("Library/Application Support/Nexus", isDirectory: true)
         return [
             nexusSupport.appendingPathComponent("Voice", isDirectory: true),
             nexusSupport.appendingPathComponent("Voices", isDirectory: true),
-            fileManager.homeDirectoryForCurrentUser.appendingPathComponent("Downloads", isDirectory: true)
+            home.appendingPathComponent("Downloads", isDirectory: true),
+            // Piper voices downloaded through Finder or Safari are commonly
+            // kept at the root of iCloud Drive rather than Downloads. This is
+            // a single known folder, not a broad home-directory scan.
+            home.appendingPathComponent("Library/Mobile Documents/com~apple~CloudDocs", isDirectory: true)
         ]
     }
 

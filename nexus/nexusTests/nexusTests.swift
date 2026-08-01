@@ -548,6 +548,18 @@ final class NexusGeometryTests: XCTestCase {
         XCTAssertEqual(PiperVoiceCatalog.voice(at: model.path)?.config.path, model.path + ".json")
     }
 
+    func testPiperVoiceCatalogIncludesICloudDriveRoot() {
+        let home = FileManager.default.homeDirectoryForCurrentUser
+        let iCloudDrive = home.appendingPathComponent(
+            "Library/Mobile Documents/com~apple~CloudDocs",
+            isDirectory: true
+        ).standardizedFileURL
+
+        XCTAssertTrue(
+            PiperVoiceCatalog.defaultDirectories().contains { $0.standardizedFileURL == iCloudDrive }
+        )
+    }
+
     func testVisionDetectionRecognizesHyphenatedGemma3Identifiers() {
         let gemma = LocalModel(
             customIdentifier: "google/gemma-3-4b-it-qat",
