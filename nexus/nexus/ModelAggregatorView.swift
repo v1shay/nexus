@@ -369,11 +369,6 @@ private struct NexusExperienceSettingsPage: View {
                             Button(permissionHealth.snapshot.accessibility ? "Paste settings" : "Enable paste") {
                                 permissionHealth.requestFreshPermission(.accessibility)
                             }
-                            if !permissionHealth.snapshot.deniedServices.isEmpty {
-                                Button("Repair all") {
-                                    permissionHealth.repairDeniedPermissions()
-                                }
-                            }
                             if permissionHealth.restartRecommended {
                                 Button("Restart Nexus") {
                                     permissionHealth.relaunchNexus()

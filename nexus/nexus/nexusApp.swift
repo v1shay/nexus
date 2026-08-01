@@ -273,6 +273,7 @@ final class NexusAppDelegate: NSObject, NSApplicationDelegate {
             self?.notch = notch
             notch.install()
             self?.installMenuBarOrb(for: notch)
+            await NexusPermissionHealth.shared.requestPendingPermissionAfterRelaunch()
             await NexusDuplexVoiceRuntime.shared.reconcile(
                 with: notch.settings.duplexVoiceEngine,
                 personaPlexEndpoint: notch.settings.personaPlexRemoteEndpoint
@@ -2927,6 +2928,7 @@ final class NexusPermissionHealth: ObservableObject {
 
     private let defaults = UserDefaults.standard
     private let fingerprintKey = "nexus.permission.designated-requirement.v1"
+    private let pendingRequestKey = "nexus.permission.pending-request.v1"
 
     private init() {}
 
@@ -2967,63 +2969,60 @@ final class NexusPermissionHealth: ObservableObject {
         statusMessage = Self.liveStatusMessage(for: snapshot)
     }
 
-    /// A denied TCC decision will not reliably prompt a second time. An
-    /// explicit Enable click therefore clears only that Nexus service, then
-    /// calls the real permission API so the currently signed build is added
-    /// back to System Settings without another app stealing the prompt's focus.
+    /// Accessibility can update in place. Input Monitoring and Screen
+    /// Recording cache TCC state in the process, so resetting and requesting
+    /// them in the same PID can suppress the very prompt we need. Queue those
+    /// requests across a relaunch and invoke the native API from the new PID.
     func requestFreshPermission(_ service: NexusTCCService) {
         refresh()
         guard !snapshot.isAuthorized(service) else {
             openSettings(for: service)
             return
         }
-        statusMessage = "Clearing the old \(service.displayName) decision…"
-        Task { @MainActor in
-            await repairAndRequest(service)
+        if service == .accessibility {
+            let granted = registerCurrentBuild(service)
+            refresh()
+            recordRequest(service, granted: granted, phase: "same-process")
+            if !snapshot.accessibility {
+                statusMessage = "Enable Nexus in Accessibility, then return to Nexus."
+                openSettings(for: service)
+            }
+            return
         }
-    }
 
-    private func repairAndRequest(_ service: NexusTCCService) async {
+        defaults.set(service.rawValue, forKey: pendingRequestKey)
+        defaults.synchronize()
         guard reset([service]) else {
+            defaults.removeObject(forKey: pendingRequestKey)
             statusMessage = "macOS could not clear Nexus's \(service.displayName) record."
             NexusDiagnostics.record("[Nexus Permissions] reset failed service=\(service.rawValue)")
             return
         }
-
-        // tccutil exits before tccd has necessarily invalidated its in-memory
-        // decision. Requesting in the same run-loop turn can therefore reuse
-        // the just-cleared denial and produce no prompt or Settings row.
-        try? await Task.sleep(for: .milliseconds(750))
-        NSApp.activate(ignoringOtherApps: true)
-        restartRecommended = true
-        let granted = registerCurrentBuild(service)
-        refresh()
-        let bundleIdentifier = Bundle.main.bundleIdentifier ?? "missing"
-        NexusDiagnostics.record(
-            "[Nexus Permissions] requested service=\(service.rawValue) granted=\(granted) "
-                + "live=\(snapshot.isAuthorized(service)) bundle=\(bundleIdentifier) "
-                + "path=\(Bundle.main.bundleURL.path) identity=\(Self.designatedRequirementFingerprint().prefix(12))"
-        )
-        if !snapshot.isAuthorized(service) {
-            statusMessage = "Respond to the macOS \(service.displayName) prompt. If it is behind another window, bring Nexus forward."
-        }
+        statusMessage = "Restarting Nexus to request \(service.displayName) from a clean process…"
+        relaunchNexus()
     }
 
-    func repairDeniedPermissions() {
+    func requestPendingPermissionAfterRelaunch() async {
+        guard let rawValue = defaults.string(forKey: pendingRequestKey),
+              let service = NexusTCCService(rawValue: rawValue) else { return }
+        defaults.removeObject(forKey: pendingRequestKey)
+        defaults.synchronize()
+
+        // Let Launch Services and tccd finish attaching the new process before
+        // invoking the consent API. The reset occurred in the previous PID.
+        try? await Task.sleep(for: .milliseconds(750))
+        NSApp.activate(ignoringOtherApps: true)
+        let granted = registerCurrentBuild(service)
         refresh()
-        let denied = snapshot.deniedServices
-        guard !denied.isEmpty else {
-            statusMessage = "All permissions are authorized for this running Nexus build."
-            return
+        restartRecommended = service == .screenCapture
+        recordRequest(service, granted: granted, phase: "fresh-process")
+        if !snapshot.isAuthorized(service) {
+            statusMessage = "Enable Nexus in \(service.displayName), then return to Nexus."
+            // Some macOS versions register the app but suppress the alert
+            // after a prior denial. Opening the exact pane guarantees the
+            // newly registered current build is visible and actionable.
+            openSettings(for: service)
         }
-        let succeeded = resetAllNexusPermissions()
-        if succeeded {
-            restartRecommended = true
-        }
-        refresh()
-        statusMessage = succeeded
-            ? "Cleared stale Nexus records. Click each Enable button so macOS presents one prompt at a time."
-            : "macOS could not clear one or more Nexus permission records."
     }
 
     func relaunchNexus() {
@@ -3054,6 +3053,15 @@ final class NexusPermissionHealth: ObservableObject {
         case .screenCapture:
             NexusScreenCapture.requestAccess(prompt: true)
         }
+    }
+
+    private func recordRequest(_ service: NexusTCCService, granted: Bool, phase: String) {
+        let bundleIdentifier = Bundle.main.bundleIdentifier ?? "missing"
+        NexusDiagnostics.record(
+            "[Nexus Permissions] requested service=\(service.rawValue) phase=\(phase) granted=\(granted) "
+                + "live=\(snapshot.isAuthorized(service)) bundle=\(bundleIdentifier) "
+                + "path=\(Bundle.main.bundleURL.path) identity=\(Self.designatedRequirementFingerprint().prefix(12))"
+        )
     }
 
     private func reset(_ services: [NexusTCCService]) -> Bool {
