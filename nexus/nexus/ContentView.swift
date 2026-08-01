@@ -500,6 +500,10 @@ private struct CodexSessionPicker: View {
         Array(notch.codexSessions.prefix(3))
     }
 
+    private var usesPets: Bool { notch.settings.codexTaskMarkStyle == .pets }
+    private var stackStep: CGFloat { usesPets ? 14 : 13 }
+    private var stackSize: CGSize { usesPets ? .init(width: 70, height: 38) : .init(width: 50, height: 24) }
+
     var body: some View {
         ZStack(alignment: .leading) {
             // Draw the oldest mark first so the newest task stays visible on
@@ -516,10 +520,14 @@ private struct CodexSessionPicker: View {
                     reduceMotion: reduceMotion,
                     select: { notch.selectCodexSession(session.id) }
                 )
-                .offset(x: CGFloat(reversedIndex) * 13)
+                // Each newer task is deliberately drawn above the previous
+                // one. Pet sprites have transparent edges, so their larger
+                // treatment needs a much tighter step than a horizontal row.
+                .offset(x: CGFloat(reversedIndex) * stackStep)
+                .zIndex(Double(reversedIndex))
             }
         }
-        .frame(width: 50, height: 24, alignment: .leading)
+        .frame(width: stackSize.width, height: stackSize.height, alignment: .leading)
         .contentShape(Rectangle())
         .contextMenu {
             Button("Show Codex usage") {
@@ -554,6 +562,7 @@ private struct CodexSessionMark: View {
     let select: () -> Void
 
     private var isLive: Bool { !session.isComplete }
+    private var markSize: CGFloat { style == .pets ? 36 : 22 }
 
     var body: some View {
         Button(action: select) {
@@ -561,7 +570,7 @@ private struct CodexSessionMark: View {
                 if style == .pets {
                     // NexusPetView owns its sprite/GIF animation, so the three
                     // recent tasks become a compact live animated stack.
-                    NexusPetView(pet: pet, activity: .tool, height: 22)
+                    NexusPetView(pet: pet, activity: .tool, height: markSize)
                 } else {
                     LinearGradient(
                         colors: palette.colors,
@@ -572,13 +581,13 @@ private struct CodexSessionMark: View {
                     // an alpha mask so the logo keeps its proper shape while
                     // the colors change.
                     .mask(CodexLogoMask())
-                    .frame(width: 22, height: 22)
+                    .frame(width: markSize, height: markSize)
                 }
             }
-            .frame(width: 22, height: 22)
+            .frame(width: markSize, height: markSize)
             .shadow(
                 color: isLive ? palette.glow.opacity(reduceMotion ? 0.25 : 0.42) : .clear,
-                radius: isLive ? 2.5 : 0
+                radius: isLive ? (style == .pets ? 3 : 2.5) : 0
             )
             .opacity(session.isComplete ? 0.42 : (isSelected ? 1 : 0.82))
         }
