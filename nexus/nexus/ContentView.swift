@@ -501,30 +501,29 @@ private struct CodexSessionPicker: View {
     }
 
     private var usesPets: Bool { notch.settings.codexTaskMarkStyle == .pets }
-    private var stackStep: CGFloat { usesPets ? 14 : 13 }
-    private var stackSize: CGSize { usesPets ? .init(width: 70, height: 38) : .init(width: 50, height: 24) }
+    private var stackSize: CGSize { usesPets ? .init(width: 96, height: 32) : .init(width: 50, height: 24) }
 
     var body: some View {
-        ZStack(alignment: .leading) {
-            // Draw the oldest mark first so the newest task stays visible on
-            // top at the right edge. Each exposed mark remains a separate
-            // button, preserving direct session switching in the compact notch.
-            ForEach(Array(latestSessions.reversed().enumerated()), id: \.element.id) { reversedIndex, session in
-                let paletteIndex = latestSessions.count - reversedIndex - 1
-                CodexSessionMark(
-                    session: session,
-                    isSelected: session.id == selectedSessionID,
-                    palette: CodexSessionPalette.all[paletteIndex % CodexSessionPalette.all.count],
-                    pet: NexusPetCatalog.all[paletteIndex % NexusPetCatalog.all.count],
-                    style: notch.settings.codexTaskMarkStyle,
-                    reduceMotion: reduceMotion,
-                    select: { notch.selectCodexSession(session.id) }
-                )
-                // Each newer task is deliberately drawn above the previous
-                // one. Pet sprites have transparent edges, so their larger
-                // treatment needs a much tighter step than a horizontal row.
-                .offset(x: CGFloat(reversedIndex) * stackStep)
-                .zIndex(Double(reversedIndex))
+        Group {
+            if usesPets {
+                // Pet artwork has too much character to stack legibly. Give
+                // each of the three newest tasks an equal, fully visible slot.
+                HStack(spacing: 3) {
+                    ForEach(Array(latestSessions.enumerated()), id: \.element.id) { index, session in
+                        taskMark(session: session, paletteIndex: index)
+                    }
+                }
+            } else {
+                ZStack(alignment: .leading) {
+                    // Draw the oldest mark first so the newest task stays
+                    // visible on top at the right edge.
+                    ForEach(Array(latestSessions.reversed().enumerated()), id: \.element.id) { reversedIndex, session in
+                        let paletteIndex = latestSessions.count - reversedIndex - 1
+                        taskMark(session: session, paletteIndex: paletteIndex)
+                            .offset(x: CGFloat(reversedIndex) * 13)
+                            .zIndex(Double(reversedIndex))
+                    }
+                }
             }
         }
         .frame(width: stackSize.width, height: stackSize.height, alignment: .leading)
@@ -538,6 +537,19 @@ private struct CodexSessionPicker: View {
             CodexUsagePopover(usage: notch.codexUsageLimit)
         }
         .accessibilityLabel("Codex tasks. Showing \(latestSessions.count) most recent tasks.")
+    }
+
+    @ViewBuilder
+    private func taskMark(session: CodexSessionProgress, paletteIndex: Int) -> some View {
+        CodexSessionMark(
+            session: session,
+            isSelected: session.id == selectedSessionID,
+            palette: CodexSessionPalette.all[paletteIndex % CodexSessionPalette.all.count],
+            pet: NexusPetCatalog.all[paletteIndex % NexusPetCatalog.all.count],
+            style: notch.settings.codexTaskMarkStyle,
+            reduceMotion: reduceMotion,
+            select: { notch.selectCodexSession(session.id) }
+        )
     }
 }
 
@@ -562,7 +574,7 @@ private struct CodexSessionMark: View {
     let select: () -> Void
 
     private var isLive: Bool { !session.isComplete }
-    private var markSize: CGFloat { style == .pets ? 36 : 22 }
+    private var markSize: CGFloat { style == .pets ? 30 : 22 }
 
     var body: some View {
         Button(action: select) {
