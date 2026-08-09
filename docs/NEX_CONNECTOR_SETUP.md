@@ -54,9 +54,9 @@ After OAuth completes, Nexus stores each provider's account credential in the
 macOS Keychain under `na.nexus.connectors.oauth`. A new Nexus process reads
 that record during initialization and rebuilds the connector capability
 documents; an Xcode rebuild does not create a new connection. The build
-script and project use the persistent `system local code signing` identity so
-the Keychain ACL remains stable. If macOS shows the Keychain dialog, choose
-**Always Allow** once for Nexus. A provider is only removed by **Disconnect**/
+script and project use the explicit `identifier "na.nexus"` designated
+requirement so the Keychain ACL remains stable across local rebuilds. A
+provider is only removed by **Disconnect**/
 **Revoke Access**; a transient token-refresh or network failure is retained
 and retried later instead of forcing OAuth again.
 

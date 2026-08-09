@@ -331,6 +331,13 @@ private struct NexusExperienceSettingsPage: View {
                         .frame(width: 180)
                         Button("Add…") { isImportingPiperVoice = true }
                         Button("Refresh") { refreshPiperVoices() }
+                        Image(systemName: PiperVoiceConfiguration.hasRuntime()
+                              ? "checkmark.circle.fill"
+                              : "exclamationmark.triangle.fill")
+                            .foregroundStyle(PiperVoiceConfiguration.hasRuntime() ? Color.green : Color.orange)
+                            .help(PiperVoiceConfiguration.hasRuntime()
+                                  ? "The local Piper runtime is installed."
+                                  : "Piper is not installed. Run scripts/install-piper-runtime.sh once on this Mac.")
                     }
                     .help("Choose a local Piper voice. Each voice needs its .onnx model and matching .onnx.json config file.")
                 }
@@ -357,6 +364,14 @@ private struct NexusExperienceSettingsPage: View {
                             permissionBadge(
                                 "Paste",
                                 enabled: permissionHealth.snapshot.accessibility
+                            )
+                            permissionBadge(
+                                "Mic",
+                                enabled: permissionHealth.snapshot.microphone
+                            )
+                            permissionBadge(
+                                "Speech",
+                                enabled: permissionHealth.snapshot.speechRecognition
                             )
                             Button("Refresh") {
                                 permissionHealth.refresh()

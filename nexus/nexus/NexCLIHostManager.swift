@@ -36,7 +36,10 @@ struct NexCLIHostStatus: Codable, Equatable, Sendable {
 /// It never appears in the LaunchAgent plist or in the Nex UI.
 enum NexCLILoopbackCredential {
     private static let account = "managed-loopback-password.v1"
-    private static let store = NexusKeychainSecretStore(service: "na.nexus.nex-cli")
+    private static let store = NexusKeychainSecretStore(
+        service: "na.nexus.nex-cli",
+        allowsAuthenticationUI: false
+    )
 
     static func loadOrCreate() throws -> String {
         if let data = try store.data(for: account), let password = String(data: data, encoding: .utf8), !password.isEmpty {

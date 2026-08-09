@@ -34,15 +34,18 @@ enum NexusSecretStoreRuntime {
 final class NexusKeychainSecretStore: NexusSecretStore, @unchecked Sendable {
     private let service: String
     private let ephemeralStore: NexusMemorySecretStore?
+    private let allowsAuthenticationUI: Bool
 
     init(
         service: String = "na.nexus.connect",
-        useEphemeralStore: Bool = NexusSecretStoreRuntime.usesEphemeralStore
+        useEphemeralStore: Bool = NexusSecretStoreRuntime.usesEphemeralStore,
+        allowsAuthenticationUI: Bool = true
     ) {
         self.service = service
         self.ephemeralStore = useEphemeralStore
             ? NexusMemorySecretStore()
             : nil
+        self.allowsAuthenticationUI = allowsAuthenticationUI
     }
 
     func data(for account: String) throws -> Data? {
@@ -50,6 +53,12 @@ final class NexusKeychainSecretStore: NexusSecretStore, @unchecked Sendable {
         var query = baseQuery(account: account)
         query[kSecReturnData as String] = true
         query[kSecMatchLimit as String] = kSecMatchLimitOne
+        if !allowsAuthenticationUI {
+            // A background daemon credential must never block the visible app
+            // behind a stale Keychain ACL or an unseen authentication sheet.
+            // Interactive user credentials retain the normal Keychain prompt.
+            query[kSecUseAuthenticationUI as String] = kSecUseAuthenticationUIFail
+        }
         var item: CFTypeRef?
         let status = SecItemCopyMatching(query as CFDictionary, &item)
         if status == errSecItemNotFound { return nil }

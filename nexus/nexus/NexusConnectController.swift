@@ -215,7 +215,11 @@ final class NexusConnectController: ObservableObject {
 
     init(
         defaults: UserDefaults = .standard,
-        secretStore: NexusSecretStore = NexusKeychainSecretStore(),
+        // Connect is constructed as part of the notch's launch path.  Its
+        // credential reads must fail fast when an older app signature has a
+        // stale Keychain ACL; a hidden authentication sheet must not prevent
+        // the app (or its privacy prompts) from appearing.
+        secretStore: NexusSecretStore = NexusKeychainSecretStore(allowsAuthenticationUI: false),
         discovery: any NexusNodeDiscovering = NexusTailscaleDiscovery(),
         persistentHost: any NexusPersistentHostManaging = NexusConnectHostManager()
     ) {
@@ -235,15 +239,6 @@ final class NexusConnectController: ObservableObject {
         self.roster = roster
         self.discovery = discovery
         self.persistentHost = persistentHost
-
-        if let migrated = try? roster.migrateLegacyPairing(
-            try? clientVault.loadPairing(),
-            displayName: "Paired Mac"
-        ), let tailscaleID = defaults.string(forKey: preferredNodeKey) {
-            try? roster.update(nodeID: migrated.id) { $0.tailscaleNodeID = tailscaleID }
-        }
-        pairedNodes = (try? roster.prepareForLaunch()) ?? []
-        authorizedClients = (try? hostTrust.load()) ?? []
 
         let localNodeID: UUID
         if let saved = defaults.string(forKey: localNodeIDKey).flatMap(UUID.init(uuidString:)) {
@@ -271,18 +266,48 @@ final class NexusConnectController: ObservableObject {
                 ))
             }
         )
-        isPaired = role == .client
-            ? !pairedNodes.isEmpty || (try? clientVault.loadPairing()) != nil
-            : !authorizedClients.filter({ $0.status != .revoked }).isEmpty || (try? hostVault.loadPairing()) != nil
-
         coordinator.$nodes
             .receive(on: DispatchQueue.main)
             .sink { [weak self] in self?.apply(nodes: $0) }
             .store(in: &cancellables)
         Task { await router.setRoute(modelRoute) }
+        restorePersistentState()
     }
 
     func start() { restart() }
+
+    /// Keychain entries can outlive a development signature.  Reading one of
+    /// those stale entries may wait for Security.framework even when no useful
+    /// prompt can be shown.  The notch must be usable before Connect restores
+    /// its optional state, so perform that restoration off the main actor.
+    private func restorePersistentState() {
+        let roster = roster
+        let hostTrust = hostTrust
+        let clientVault = clientVault
+        let hostVault = hostVault
+        let role = role
+
+        Task.detached { [weak self, roster, hostTrust, clientVault, hostVault, role] in
+            let nodes = (try? roster.load()) ?? []
+            let authorized = (try? hostTrust.load()) ?? []
+            let hasPairing: Bool
+            switch role {
+            case .client:
+                hasPairing = !nodes.isEmpty || (try? clientVault.loadPairing()) != nil
+            case .studioHost:
+                hasPairing = authorized.contains { $0.status != .revoked }
+                    || (try? hostVault.loadPairing()) != nil
+            }
+
+            await MainActor.run {
+                guard let self, self.role == role else { return }
+                self.pairedNodes = nodes
+                self.authorizedClients = authorized
+                self.isPaired = hasPairing
+                if self.enabled { self.restart() }
+            }
+        }
+    }
 
     func setEnabled(_ enabled: Bool) {
         self.enabled = enabled
@@ -296,7 +321,7 @@ final class NexusConnectController: ObservableObject {
         defaults.set(role.rawValue, forKey: roleKey)
         isPaired = role == .client
             ? !pairedNodes.isEmpty
-            : !authorizedClients.filter({ $0.status != .revoked }).isEmpty || (try? hostVault.loadPairing()) != nil
+            : !authorizedClients.filter({ $0.status != .revoked }).isEmpty
         pairingCode = ""
         setupMessage = ""
         restart()
@@ -778,7 +803,7 @@ final class NexusConnectController: ObservableObject {
         coordinator.stop()
         isPaired = role == .client
             ? !pairedNodes.isEmpty
-            : authorizedClients.contains { $0.status != .revoked } || (try? hostVault.loadPairing()) != nil
+            : authorizedClients.contains { $0.status != .revoked }
 
         guard enabled else {
             Task { await router.setRoute(.thisMac) }

@@ -25,6 +25,30 @@ final class NexPrimaryToolPlannerTests: XCTestCase {
         XCTAssertEqual(Array(messages.dropFirst()), context)
     }
 
+    func testNativePlannerPromptIsCompactAndKeepsSemanticCoverageRules() {
+        let context = [
+            NexusChatMessage(role: "user", content: "Compare my old project with this year's competition.")
+        ]
+        let messages = NexPrimaryToolPlanner.nativePlanningMessages(
+            context: context,
+            tools: tools()
+        )
+        let instructions = messages[0].content
+
+        XCTAssertTrue(instructions.contains("Call every independently necessary supplied function"))
+        XCTAssertTrue(instructions.contains("saved personal evidence and current public evidence"))
+        XCTAssertTrue(instructions.contains("never from a keyword checklist"))
+        XCTAssertFalse(instructions.contains("browser.run_task"))
+        XCTAssertLessThan(instructions.split(whereSeparator: \.isWhitespace).count, 230)
+        XCTAssertEqual(Array(messages.dropFirst()), context)
+
+        let messageInstructions = NexPrimaryToolPlanner.nativePlanningMessages(
+            context: context,
+            tools: tools() + [messageTriageTool()]
+        )[0].content
+        XCTAssertTrue(messageInstructions.contains("opening the app never returns contents"))
+    }
+
     func testPlannerRequiresCapabilityDiscoveryBeforeAnExternalActionIsRefused() {
         let instructions = NexPrimaryToolPlanner.planningMessages(
             context: [.init(role: "user", content: "Text Test that he needs to get the milk.")],
@@ -198,17 +222,22 @@ final class NexPrimaryToolPlannerTests: XCTestCase {
             registeredTools: tools()
         )
         var executed = firstPlan.actions
-        if !executed.contains(where: { $0.tool == "web_search" }) {
+        if !Set(executed.map(\.tool)).isSuperset(of: ["memory_search", "web_search"]) {
+            let completedToolNames = Set(executed.map(\.tool))
+            let remainingTools = tools().filter { !completedToolNames.contains($0.name) }
+            let completedEvidence = executed.contains(where: { $0.tool == "web_search" })
+                ? "Tool result from web_search: Current Conrad Challenge details were retrieved. The user's prior robotics project is still required before answering."
+                : "Tool result from memory_search: The user's robotics project was a vision-guided robotic arm. The current public Conrad Challenge details are still required before answering."
             let nextPlan = try await manager.planTools(
                 model: model,
                 messages: NexPrimaryToolPlanner.planningMessages(
                     context: [
                         .init(role: "user", content: "Based on my previous robotics project, should I apply to the current Conrad Challenge?"),
-                        .init(role: "system", content: "Tool result from memory_search: The user's robotics project was a vision-guided robotic arm. The current public Conrad Challenge details are still required before answering.")
+                        .init(role: "system", content: completedEvidence)
                     ],
-                    tools: tools()
+                    tools: remainingTools
                 ),
-                registeredTools: tools()
+                registeredTools: remainingTools
             )
             executed += nextPlan.actions
         }
@@ -315,6 +344,42 @@ final class NexPrimaryToolPlannerTests: XCTestCase {
         XCTAssertEqual(parsed.actions.first?.arguments["query"]?.string, "2026 Conrad Challenge application deadline")
     }
 
+    func testBrowserPlansRequireAUserSuppliedURLBeforeExecution() {
+        let browser = NexRegisteredTool(
+            name: "browser.run_task",
+            description: "Run a managed browser task.",
+            statusLabel: "Working…",
+            spokenStatus: "Working.",
+            iconSystemName: "globe",
+            permission: .network,
+            schema: .init(fields: [
+                "goal": .init(.string, required: true),
+                "steps_json": .init(.string, required: true)
+            ])
+        ) { _, _ in .null }
+        let plan = NexPrimaryToolPlan(actions: [.init(
+            tool: "browser.run_task",
+            arguments: [
+                "goal": .string("Inspect a form"),
+                "steps_json": .string(#"[{"action":"navigate","url":"https://example.com/form"}]"#)
+            ]
+        )])
+
+        XCTAssertTrue(
+            NexPrimaryToolPlanner.groundingBrowserActions(
+                in: plan,
+                userPrompt: "Open a form and tell me what it says."
+            ).actions.isEmpty
+        )
+        XCTAssertEqual(
+            NexPrimaryToolPlanner.groundingBrowserActions(
+                in: plan,
+                userPrompt: "Open https://example.com and inspect its form."
+            ).actions.map(\.tool),
+            [browser.name]
+        )
+    }
+
     private func parse(_ response: String) -> NexPrimaryToolPlan {
         NexPrimaryToolPlanner.parse(response, registeredTools: tools())
     }
@@ -381,6 +446,18 @@ final class NexPrimaryToolPlannerTests: XCTestCase {
             iconSystemName: "folder",
             permission: .codeExecution,
             schema: .init(fields: ["name": .init(.string, required: true)])
+        ) { _, _ in .null }
+    }
+
+    private func messageTriageTool() -> NexRegisteredTool {
+        .init(
+            name: "messages.triage",
+            description: "Return bounded recent Messages records.",
+            statusLabel: "Reading Messages…",
+            spokenStatus: "Reading recent Messages.",
+            iconSystemName: "message",
+            permission: .files,
+            schema: .init(fields: ["limit": .init(.integer)])
         ) { _, _ in .null }
     }
 }

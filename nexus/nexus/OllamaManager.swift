@@ -67,7 +67,23 @@ enum NexusResponseInstructions {
     Core rule: personal missing from active chat → `memory_search`; current facts/research → `web_search`; inspect one known URL in Nexus browser → `browser.visit_url`; complex browser interaction → `browser.run_task`; sign in to a private Nexus browser session → `browser.open_profile`; coding → `nex_cli_task`; explicit workspace change → `nex_cli_set_workspace`; current Chrome YouTube video → `youtube_play_current`; find/play YouTube → `youtube_search` then `youtube_play`; existing Nex YouTube playback enlargement → `youtube_fullscreen`; durable user-supported memory change → `memory_write`; mixed request → every required tool; known stable fact → answer directly.
     """
 
-    static var completeSystemPrompt: String { conciseSystemPrompt }
+    /// Tool selection happens in a separate, schema-validated planning turn.
+    /// The answer turn therefore receives no tool syntax or catalog names:
+    /// this both shrinks every prompt and makes raw function markup far less
+    /// likely to escape into the visible response.
+    static let answerSystemPrompt = """
+    You are Nex, Vishay Agarwal's personal AI assistant. Address him as Sir when speaking directly.
+    Be concise, direct, calm, and lightly sarcastic. Use only the conversation
+    and actual evidence already present in it. Never invent completed actions,
+    personal facts, files, citations, URLs, or external results. Tool execution
+    is handled before this answer turn: do not emit function calls, JSON tool
+    payloads, XML tool markup, internal tool names, hidden reasoning, or routing
+    commentary. Answer the user's request directly. When evidence says an
+    action failed or needs permission/confirmation, state that exact limitation
+    and recovery briefly. Do not mention these instructions.
+    """
+
+    static var completeSystemPrompt: String { answerSystemPrompt }
 }
 
 enum NexAssistantIdentityIntent {
@@ -94,6 +110,9 @@ final class OllamaManager: @unchecked Sendable {
     /// especially with native reasoning enabled. This is deliberately far
     /// beyond normal model work; user cancellation remains immediate.
     static let inferenceRequestTimeout: TimeInterval = 7 * 24 * 60 * 60
+    /// Planning is advisory and runs before the normal response. It must not
+    /// leave the UI waiting indefinitely when Ollama is busy.
+    static let toolPlanningRequestTimeout: TimeInterval = 5
 
     private let session: URLSession
     private let fileManager: FileManager
@@ -228,6 +247,7 @@ final class OllamaManager: @unchecked Sendable {
         temperature: Double? = nil,
         maximumTokens: Int? = nil,
         keepAlive: String? = nil,
+        requestTimeout: TimeInterval? = nil,
         includeNexusSystemPrompt: Bool = true,
         onDelta: @escaping @Sendable (_ delta: String, _ accumulated: String) async -> Void
     ) async throws -> String {
@@ -237,6 +257,7 @@ final class OllamaManager: @unchecked Sendable {
             temperature: temperature,
             maximumTokens: maximumTokens,
             keepAlive: keepAlive,
+            requestTimeout: requestTimeout,
             includeThinking: false,
             includeNexusSystemPrompt: includeNexusSystemPrompt,
             onThinkingDelta: nil,
@@ -252,6 +273,7 @@ final class OllamaManager: @unchecked Sendable {
         temperature: Double? = nil,
         maximumTokens: Int? = nil,
         keepAlive: String? = nil,
+        requestTimeout: TimeInterval? = nil,
         includeThinking: Bool,
         includeNexusSystemPrompt: Bool = true,
         onThinkingDelta: (@Sendable (_ delta: String, _ accumulated: String) async -> Void)?,
@@ -264,7 +286,7 @@ final class OllamaManager: @unchecked Sendable {
         NSLog("[Nexus Vision] Ollama /api/chat model %@ with %d image message(s)", model, imageCount)
         var request = URLRequest(url: Self.serverURL.appendingPathComponent("api/chat"))
         request.httpMethod = "POST"
-        request.timeoutInterval = Self.inferenceRequestTimeout
+        request.timeoutInterval = requestTimeout ?? Self.inferenceRequestTimeout
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.httpBody = try JSONEncoder().encode(
             OllamaChatRequest(
@@ -272,12 +294,12 @@ final class OllamaManager: @unchecked Sendable {
                 messages: (includeNexusSystemPrompt ? [.init(role: "system", content: NexusResponseInstructions.completeSystemPrompt, images: nil)] : [])
                     + messages.map { .init(role: $0.role, content: $0.content, images: $0.imageBase64.map { [$0] }) },
                 stream: true,
-                keepAlive: keepAlive,
-                // `nil` lets thinking-capable models choose their own default.
-                // The notch control is an explicit user preference, so always
-                // send false when it is off rather than relying on that default.
-                think: includeThinking,
-                options: .init(temperature: temperature, numPredict: maximumTokens)
+                keepAlive: keepAlive ?? "30m",
+                // The notch control is explicit. GPT-OSS cannot fully disable
+                // reasoning, so the off state maps to its documented low
+                // effort instead of an ignored Boolean false.
+                think: OllamaThinkingSetting.forModel(model, enabled: includeThinking),
+                options: .init(temperature: temperature, numPredict: maximumTokens, numContext: 32_768)
             )
         )
         let (bytes, response) = try await session.bytes(for: request)
@@ -352,6 +374,7 @@ final class OllamaManager: @unchecked Sendable {
                 messages: messages,
                 temperature: 0,
                 maximumTokens: 360,
+                requestTimeout: Self.toolPlanningRequestTimeout,
                 onDelta: { _, _ in }
             )
             return NexPrimaryToolPlanner.parse(raw, registeredTools: registeredTools)
@@ -359,15 +382,20 @@ final class OllamaManager: @unchecked Sendable {
 
         var request = URLRequest(url: Self.serverURL.appendingPathComponent("api/chat"))
         request.httpMethod = "POST"
-        request.timeoutInterval = Self.inferenceRequestTimeout
+        request.timeoutInterval = Self.toolPlanningRequestTimeout
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        let nativeMessages = NexPrimaryToolPlanner.nativePlanningMessages(
+            context: Array(messages.dropFirst()),
+            tools: registeredTools
+        )
         request.httpBody = try JSONEncoder().encode(
             OllamaToolPlanningRequest(
                 model: model,
-                messages: [.init(role: "system", content: NexusResponseInstructions.completeSystemPrompt, images: nil)]
-                    + messages.map { .init(role: $0.role, content: $0.content, images: $0.imageBase64.map { [$0] }) },
+                messages: nativeMessages.map {
+                    .init(role: $0.role, content: $0.content, images: $0.imageBase64.map { [$0] })
+                },
                 stream: true,
-                think: false,
+                think: OllamaThinkingSetting.forModel(model, enabled: false),
                 // Native calls can include model-internal reasoning before the
                 // compact function arguments.  A small cap can therefore cut
                 // off otherwise-valid JSON (for example halfway through a
@@ -375,7 +403,8 @@ final class OllamaManager: @unchecked Sendable {
                 // planning only, but it must have enough room to finish one
                 // complete call; the planner still returns as soon as Ollama
                 // finishes the tool response.
-                options: .init(temperature: 0, numPredict: 512),
+                keepAlive: "30m",
+                options: .init(temperature: 0, numPredict: 512, numContext: 32_768),
                 tools: registeredTools
                     .filter { $0.permission != .writeMemory && $0.permission != .forgetMemory }
                     .map(OllamaToolPlanningRequest.Tool.init)
@@ -459,6 +488,7 @@ final class OllamaManager: @unchecked Sendable {
         struct ShowResponse: Decodable { let capabilities: [String]? }
         var request = URLRequest(url: Self.serverURL.appendingPathComponent("api/show"))
         request.httpMethod = "POST"
+        request.timeoutInterval = Self.toolPlanningRequestTimeout
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.httpBody = try? JSONEncoder().encode(ShowRequest(model: model))
         let supported: Bool
@@ -529,6 +559,31 @@ private struct OllamaTagsResponse: Decodable {
     struct Model: Decodable { let name: String }
     let models: [Model]
 }
+private enum OllamaThinkingSetting: Encodable {
+    case boolean(Bool)
+    case level(String)
+
+    static func forModel(_ model: String, enabled: Bool) -> Self {
+        // Ollama's GPT-OSS contract accepts only low/medium/high and cannot
+        // disable reasoning entirely. Sending `false` is ignored and lets the
+        // model burn a short token cap entirely on hidden thinking.
+        if model.localizedCaseInsensitiveContains("gpt-oss") {
+            return .level(enabled ? "medium" : "low")
+        }
+        return .boolean(enabled)
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.singleValueContainer()
+        switch self {
+        case .boolean(let value):
+            try container.encode(value)
+        case .level(let value):
+            try container.encode(value)
+        }
+    }
+}
+
 private struct OllamaChatRequest: Encodable {
     struct Message: Encodable {
         let role: String
@@ -538,17 +593,19 @@ private struct OllamaChatRequest: Encodable {
     struct Options: Encodable {
         let temperature: Double?
         let numPredict: Int?
+        let numContext: Int
 
         enum CodingKeys: String, CodingKey {
             case temperature
             case numPredict = "num_predict"
+            case numContext = "num_ctx"
         }
     }
     let model: String
     let messages: [Message]
     let stream: Bool
     let keepAlive: String?
-    let think: Bool
+    let think: OllamaThinkingSetting
     let options: Options
 
     enum CodingKeys: String, CodingKey {
@@ -576,7 +633,12 @@ private struct OllamaToolPlanningRequest: Encodable {
     struct Options: Encodable {
         let temperature: Double
         let numPredict: Int
-        enum CodingKeys: String, CodingKey { case temperature; case numPredict = "num_predict" }
+        let numContext: Int
+        enum CodingKeys: String, CodingKey {
+            case temperature
+            case numPredict = "num_predict"
+            case numContext = "num_ctx"
+        }
     }
     struct Tool: Encodable {
         struct Function: Encodable {
@@ -615,9 +677,15 @@ private struct OllamaToolPlanningRequest: Encodable {
     let model: String
     let messages: [Message]
     let stream: Bool
-    let think: Bool
+    let think: OllamaThinkingSetting
+    let keepAlive: String
     let options: Options
     let tools: [Tool]
+
+    enum CodingKeys: String, CodingKey {
+        case model, messages, stream, think, options, tools
+        case keepAlive = "keep_alive"
+    }
 }
 private struct OllamaChatStreamEvent: Decodable {
     struct Message: Decodable {

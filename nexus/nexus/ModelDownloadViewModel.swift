@@ -138,6 +138,18 @@ final class ModelDownloadViewModel: ObservableObject {
         }
     }
 
+    /// Preload the primary and optional status model so the first dictated
+    /// sentence does not pay Ollama's multi-second model-load cost.
+    func prepareLowLatencyModels(statusModelID: String?) async {
+        if let activeModel, activeModel.backend == .ollama {
+            try? await ollama.keepModelWarm(activeModel.identifier)
+        }
+        guard let statusModelID,
+              let statusModel = installedModels.first(where: { $0.id == statusModelID }),
+              statusModel.backend == .ollama else { return }
+        try? await ollama.keepModelWarm(statusModel.identifier)
+    }
+
     private func provisionDictationRefinerIfNeeded() {
         guard dictationRefinerProvisioningTask == nil else { return }
         let model = dictationRefinerModel

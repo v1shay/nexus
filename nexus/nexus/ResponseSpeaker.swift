@@ -46,6 +46,9 @@ final class ResponseSpeaker {
         piperConfiguration = configuration
         do {
             try startPiperStream(configuration)
+            NexusDiagnostics.record(
+                "[Nexus Voice] Piper active model=\(configuration.model.path) sampleRate=\(Int(configuration.sampleRate))"
+            )
         } catch {
             piperConfiguration = nil
             NSLog("Nexus could not start Piper; using the system voice: %@", error.localizedDescription)
@@ -100,6 +103,28 @@ final class ResponseSpeaker {
         try? piperInput?.close()
         piperInput = nil
         suppressCitationSpeech = false
+    }
+
+    /// Closes the streaming input and waits until every scheduled speech
+    /// buffer has actually played. Hands-free dictation must use this gate
+    /// before reopening the microphone or Nexus can transcribe its own tail
+    /// audio as the next user request.
+    func finishStreamingAndWait() async {
+        finishStreaming()
+        guard !isMuted else { return }
+        let deadline = ProcessInfo.processInfo.systemUptime + 45
+        while ProcessInfo.processInfo.systemUptime < deadline {
+            guard !Task.isCancelled, !isMuted else { return }
+            if systemSynthesizer.isSpeaking {
+                await waitForSystemVoice()
+                continue
+            }
+            let quietFor = ProcessInfo.processInfo.systemUptime - lastPCMActivityUptime
+            if piperProcess == nil, scheduledBufferCount == 0, quietFor >= 0.20 {
+                return
+            }
+            try? await Task.sleep(for: .milliseconds(25))
+        }
     }
 
     func setMuted(_ muted: Bool) {
@@ -712,36 +737,56 @@ struct PiperVoiceConfiguration: Sendable, Equatable {
     let config: URL
     let sampleRate: Double
 
+    static func hasRuntime(fileManager: FileManager = .default) -> Bool {
+        executableURL(fileManager: fileManager) != nil
+    }
+
     static func detect(
         preferredModelPath: String = "",
         additionalVoiceDirectories: [String] = [],
         fileManager: FileManager = .default
     ) -> PiperVoiceConfiguration? {
-        let home = fileManager.homeDirectoryForCurrentUser
-        let voiceDirectory = home.appendingPathComponent("Library/Application Support/Nexus/Voice", isDirectory: true)
-        let executableCandidates = [
-            voiceDirectory.appendingPathComponent("piper"),
-            URL(fileURLWithPath: "/opt/homebrew/bin/piper"),
-            URL(fileURLWithPath: "/usr/local/bin/piper"),
-            URL(fileURLWithPath: "/opt/anaconda3/bin/piper"),
-            home.appendingPathComponent(".local/bin/piper"),
-            home.appendingPathComponent("Library/Python/3.13/bin/piper")
-        ]
-        guard let executable = executableCandidates.first(where: { fileManager.isExecutableFile(atPath: $0.path) }) else {
-            return nil
-        }
+        guard let executable = executableURL(fileManager: fileManager) else { return nil }
 
         let preferred = PiperVoiceCatalog.voice(at: preferredModelPath, fileManager: fileManager)
-        guard let voice = preferred ?? PiperVoiceCatalog.voices(
-            additionalDirectories: additionalVoiceDirectories,
-            fileManager: fileManager
-        ).first else { return nil }
+        let trimmedPreferred = preferredModelPath.trimmingCharacters(in: .whitespacesAndNewlines)
+        let voice: PiperVoice
+        if !trimmedPreferred.isEmpty {
+            // A named voice is a strict choice. Silently selecting some other
+            // ONNX model makes the settings UI lie about what is speaking.
+            guard let preferred else {
+                NexusDiagnostics.record("[Nexus Voice] selected Piper model is unavailable: \(trimmedPreferred)")
+                return nil
+            }
+            voice = preferred
+        } else {
+            guard let discovered = PiperVoiceCatalog.voices(
+                additionalDirectories: additionalVoiceDirectories,
+                fileManager: fileManager
+            ).first else { return nil }
+            voice = discovered
+        }
         return PiperVoiceConfiguration(
             executable: executable,
             model: voice.model,
             config: voice.config,
             sampleRate: sampleRate(from: voice.config, fileManager: fileManager)
         )
+    }
+
+    private static func executableURL(fileManager: FileManager) -> URL? {
+        let home = fileManager.homeDirectoryForCurrentUser
+        let voiceDirectory = home.appendingPathComponent("Library/Application Support/Nexus/Voice", isDirectory: true)
+        return [
+            voiceDirectory.appendingPathComponent("PiperPython/bin/piper"),
+            voiceDirectory.appendingPathComponent("PiperRuntime/piper"),
+            voiceDirectory.appendingPathComponent("piper"),
+            URL(fileURLWithPath: "/opt/homebrew/bin/piper"),
+            URL(fileURLWithPath: "/usr/local/bin/piper"),
+            URL(fileURLWithPath: "/opt/anaconda3/bin/piper"),
+            home.appendingPathComponent(".local/bin/piper"),
+            home.appendingPathComponent("Library/Python/3.13/bin/piper")
+        ].first(where: { fileManager.isExecutableFile(atPath: $0.path) })
     }
 
     private static func sampleRate(from config: URL, fileManager: FileManager) -> Double {

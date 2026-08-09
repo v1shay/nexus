@@ -186,6 +186,10 @@ actor NexComputerRegistry {
         entries.values.map(\.manifest).sorted { $0.actionID < $1.actionID }
     }
 
+    func contains(actionID: String) -> Bool {
+        entries[actionID] != nil
+    }
+
     func manifest(actionID: String) throws -> NexComputerActionManifest {
         guard let entry = entries[actionID] else { throw NexToolError.notFound(actionID) }
         return entry.manifest
@@ -408,6 +412,34 @@ actor NexComputerRuntime {
     init(registry: NexComputerRegistry, logger: NexComputerActionLogger = NexComputerActionLogger()) {
         self.registry = registry
         self.logger = logger
+    }
+
+    /// Model-originated computer actions use the same timeout, retry,
+    /// cancellation, availability and output-validation boundary as CLI
+    /// actions. Confirmation and permission results remain structured so the
+    /// planner can present their exact recovery instead of fabricating one.
+    func executeForModel(
+        actionID: String,
+        arguments: [String: NexJSONValue]
+    ) async throws -> NexJSONValue {
+        let envelope = await execute(
+            actionID: actionID,
+            arguments: arguments,
+            options: .init(invocation: .modelReadOnly)
+        )
+        switch envelope.status {
+        case .completed, .dryRun, .confirmationRequired, .permissionRequired:
+            return envelope.data
+        case .failed, .cancelled, .timedOut, .unavailable:
+            let failure = envelope.error
+            throw NexComputerActionFailure(
+                code: failure?.code ?? envelope.status.rawValue.uppercased(),
+                message: failure?.message ?? envelope.display,
+                permission: failure?.permission,
+                recovery: failure?.recovery,
+                retryable: failure?.retryable ?? false
+            )
+        }
     }
 
     func execute(

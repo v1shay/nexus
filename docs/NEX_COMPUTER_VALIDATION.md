@@ -44,7 +44,7 @@ Validated on macOS on 2026-07-22 against the signed Debug build produced by `./s
 ```text
 ./scripts/build-nexus.sh
   ** BUILD SUCCEEDED **
-  Signed Nexus with stable identity: system local code signing
+  Durable requirement: designated => identifier "na.nexus"
 
 xcodebuild -project nexus/nexus.xcodeproj -scheme nexus \
   -destination 'platform=macOS' -derivedDataPath .build-phase27-test \

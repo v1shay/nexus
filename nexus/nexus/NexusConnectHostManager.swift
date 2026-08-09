@@ -26,6 +26,16 @@ protocol NexusPersistentHostManaging: Sendable {
     func currentStatus() -> NexusConnectHostStatus?
 }
 
+enum NexusLaunchAgentMigrationPolicy {
+    static func preservesHealthyProcess(
+        hasLiveStatus: Bool,
+        installedPropertyList: Data?,
+        expectedPropertyList: Data
+    ) -> Bool {
+        hasLiveStatus && installedPropertyList == expectedPropertyList
+    }
+}
+
 /// Installs the signed Nexus executable as a per-user LaunchAgent. The agent is
 /// a separate process in `--nexus-connect-host` mode, so closing the notch UI
 /// cannot stop listeners or host-side model downloads.
@@ -67,9 +77,6 @@ struct NexusConnectHostManager: NexusPersistentHostManaging, @unchecked Sendable
 
     func installAndStart() throws {
         guard !NexusConnectHostProcess.isCurrentProcess else { return }
-        // Never restart a healthy helper merely because the visible app was
-        // rebuilt. It may own a multi-hour model pull.
-        if currentStatus() != nil { return }
         try fileManager.createDirectory(at: supportDirectory, withIntermediateDirectories: true)
         try fileManager.createDirectory(
             at: launchAgentURL.deletingLastPathComponent(),
@@ -77,6 +84,17 @@ struct NexusConnectHostManager: NexusPersistentHostManaging, @unchecked Sendable
         )
         let expected = launchAgentPropertyList()
         let current = try? Data(contentsOf: launchAgentURL)
+        // Preserve a healthy helper only while launchd already points at this
+        // exact build location. A moved clone or different DerivedData path
+        // must migrate the agent or subsequent restarts silently resurrect
+        // an older Nexus binary with different behavior and identity.
+        if NexusLaunchAgentMigrationPolicy.preservesHealthyProcess(
+            hasLiveStatus: currentStatus() != nil,
+            installedPropertyList: current,
+            expectedPropertyList: expected
+        ) {
+            return
+        }
         if current != expected {
             if fileManager.fileExists(atPath: launchAgentURL.path) {
                 try? processRunner(URL(fileURLWithPath: "/bin/launchctl"), [
