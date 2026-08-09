@@ -9,50 +9,6 @@ enum Nexus3DLayout {
     static let connectDeviceCameraDistance: Float = 4.52
 }
 
-/// First-run security setup. The password prompt, when macOS needs one, is
-/// owned by Keychain—not Nexus—so the app never sees or retains a Mac login
-/// password. Completing this creates the one Nexus-owned Keychain record that
-/// contains all future Nexus secrets.
-struct NexusSecureVaultOnboardingView: View {
-    let onComplete: () -> Void
-    @State private var message = "Authorize Nexus once to protect all of its credentials."
-    @State private var isWorking = false
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 18) {
-            Image(systemName: "lock.shield.fill")
-                .font(.system(size: 34, weight: .semibold))
-                .foregroundStyle(.tint)
-            Text("Set up Nexus security")
-                .font(.title2.weight(.bold))
-            Text("Nexus keeps API keys, connected accounts, pairing material, and its local worker credential in one secure macOS Keychain record. macOS may ask you to authorize it once. Nexus never asks for, sees, or saves your Mac password.")
-                .font(.body)
-                .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
-            Text(message)
-                .font(.caption)
-                .foregroundStyle(.secondary)
-            HStack {
-                Spacer()
-                Button("Set up secure vault") {
-                    isWorking = true
-                    defer { isWorking = false }
-                    do {
-                        _ = try NexusUnifiedKeychainVault.shared.prepare()
-                        onComplete()
-                    } catch {
-                        message = "Keychain setup did not finish: \(error.localizedDescription)"
-                    }
-                }
-                .keyboardShortcut(.defaultAction)
-                .disabled(isWorking)
-            }
-        }
-        .padding(28)
-        .frame(width: 500, height: 290, alignment: .topLeading)
-    }
-}
-
 struct ModelAggregatorView: View {
     @ObservedObject var viewModel: ModelDownloadViewModel
     @ObservedObject var connect: NexusConnectController
@@ -316,8 +272,8 @@ private struct NexusExperienceSettingsPage: View {
     @State private var piperVoices: [PiperVoice] = []
     @State private var isImportingPiperVoice = false
     @State private var secureVaultMessage = NexusUnifiedKeychainVault.shared.isConfigured
-        ? "Secure vault is ready"
-        : "Finish setup once to consolidate Nexus credentials"
+        ? "Shared credential vault is active"
+        : "Migrate existing Nexus credentials into the shared vault"
 
     var body: some View {
         ScrollView {
@@ -394,19 +350,19 @@ private struct NexusExperienceSettingsPage: View {
                         .help("Hold Globe/Fn in any editable field, then release to paste clean dictation.")
                 }
                 NexusHairline(axis: .horizontal)
-                NexusSettingsLine(label: "Secure vault") {
+                NexusSettingsLine(label: "Credentials") {
                     VStack(alignment: .trailing, spacing: 7) {
                         HStack(spacing: 8) {
                             Image(systemName: NexusUnifiedKeychainVault.shared.isConfigured ? "lock.fill" : "lock.badge.plus")
                                 .foregroundStyle(NexusUnifiedKeychainVault.shared.isConfigured ? .green : .orange)
-                            Button(NexusUnifiedKeychainVault.shared.isConfigured ? "Re-authorize" : "Set up once") {
+                            Button(NexusUnifiedKeychainVault.shared.isConfigured ? "Run migration again" : "Migrate credentials") {
                                 do {
                                     let migration = try NexusUnifiedKeychainVault.shared.prepare()
                                     secureVaultMessage = migration.skippedServices == 0
-                                        ? "Secure vault is ready — migrated \(migration.copiedEntries) existing Nexus entries"
+                                        ? "Shared vault is active — migrated \(migration.copiedEntries) existing Nexus entries"
                                         : "Migrated \(migration.copiedEntries) entries; \(migration.skippedServices) protected service(s) will retry when available"
                                 } catch {
-                                    secureVaultMessage = "Setup needs macOS Keychain authorization: \(error.localizedDescription)"
+                                    secureVaultMessage = "Migration needs macOS Keychain authorization: \(error.localizedDescription)"
                                 }
                             }
                         }
@@ -416,7 +372,7 @@ private struct NexusExperienceSettingsPage: View {
                             .multilineTextAlignment(.trailing)
                             .frame(maxWidth: 390, alignment: .trailing)
                     }
-                    .help("macOS may ask you to authorize Nexus once. Nexus never stores your Mac password; its own credentials are consolidated into one Keychain record.")
+                    .help("Migrates the Nexus credentials already on this Mac into one Keychain record. Nexus never stores your Mac password.")
                 }
                 NexusHairline(axis: .horizontal)
                 NexusSettingsLine(label: "Hotkey access") {

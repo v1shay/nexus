@@ -52,21 +52,26 @@ final class NexusHeadlessControlHost {
         for url in urls.sorted(by: { $0.lastPathComponent < $1.lastPathComponent }) {
             guard let data = try? Data(contentsOf: url), let request = try? JSONDecoder().decode(NexusHeadlessControlRequest.self, from: data) else { try? manager.removeItem(at: url); continue }
             try? manager.removeItem(at: url)
-            let reply: NexusHeadlessControlReply
-            if let controller = currentController() {
-                reply = await controller.performHeadlessControl(request)
-            } else {
-                reply = .init(ok: false, result: ["state": "starting"], error: "Nexus is starting.")
+            // A model request can legitimately take minutes.  Do not make it
+            // block status, settings, or cancellation requests in the same
+            // live control plane; the GUI remains the single executor.
+            Task { [weak self] in
+                let reply: NexusHeadlessControlReply
+                if let controller = self?.currentController() {
+                    reply = await controller.performHeadlessControl(request)
+                } else {
+                    reply = .init(ok: false, result: ["state": "starting"], error: "Nexus is starting.")
+                }
+                let destination = NexusHeadlessControlPaths.replies.appendingPathComponent("\(request.id.uuidString).json")
+                if let data = try? JSONEncoder().encode(reply) { try? data.write(to: destination, options: .atomic) }
             }
-            let destination = NexusHeadlessControlPaths.replies.appendingPathComponent("\(request.id.uuidString).json")
-            if let data = try? JSONEncoder().encode(reply) { try? data.write(to: destination, options: .atomic) }
         }
     }
 }
 
 enum NexusHeadlessControlClient {
     static func run(arguments: [String]) async -> Int32 {
-        guard let command = arguments.first else { return fail("Usage: nexusctl <status|prompt|models|model-select|permissions|permission-open|permission-repair|memory-status|memory-save|settings|settings-set|tools|connect-enable|connect-role|connect-route>") }
+        guard let command = arguments.first else { return fail("Usage: nexusctl <status|nexcli-status|prompt|cancel|models|model-select|permissions|permission-open|permission-repair|memory-status|memory-save|settings|settings-set|tools|connect-enable|connect-role|connect-route>") }
         var values: [String: String] = [:]
         if ["prompt", "model-select", "permission-open", "connect-enable", "connect-role", "connect-route"].contains(command) {
             guard arguments.count > 1 else { return fail("Missing value for \(command).") }
