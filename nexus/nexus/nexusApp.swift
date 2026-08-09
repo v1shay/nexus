@@ -511,6 +511,10 @@ final class NotchController: ObservableObject {
     private var codexProgressDismissTask: Task<Void, Never>?
     private var selectedCodexSessionID: String?
     private var responseIsStreaming = false
+    /// A prompt submitted through nexusctl must be judged from the same tool
+    /// lifecycle that the Notch renders—not from a second direct-execution
+    /// path. This trace is reset per CLI prompt and returned with its answer.
+    private var headlessToolTrace: [ToolActivity] = []
     private var hoverSession = NotchHoverSession()
     private var suppressAutomaticResponseReveal = false
     private let music = NexusAudioReactiveMusic()
@@ -1100,25 +1104,6 @@ final class NotchController: ObservableObject {
             }
             let tools = await computerRegistry.manifests().map(\.actionID).sorted().joined(separator: "\n")
             return .init(ok: true, result: ["tools": tools], error: nil)
-        case "tool-dry-run", "tool-execute":
-            guard let action = request.arguments["action"], !action.isEmpty else {
-                return .init(ok: false, result: [:], error: "Missing action ID.")
-            }
-            guard await waitForHeadlessTools(action: action) else {
-                return .init(ok: false, result: [:], error: "Nexus tool registry is still starting or does not contain \(action).")
-            }
-            do {
-                let arguments = try NexusHeadlessControlCodec.toolArguments(request.arguments["json"] ?? "{}")
-                let runtime = NexComputerRuntime(registry: computerRegistry)
-                let envelope = await runtime.execute(
-                    actionID: action,
-                    arguments: arguments,
-                    options: .init(dryRun: request.command == "tool-dry-run", invocation: .app)
-                )
-                return .init(ok: envelope.ok, result: ["execution": NexusHeadlessControlCodec.envelope(envelope)], error: envelope.error?.message)
-            } catch {
-                return .init(ok: false, result: [:], error: error.localizedDescription)
-            }
         case "connect-enable":
             guard let value = request.arguments["value"], let enabled = Bool(value) else {
                 return .init(ok: false, result: [:], error: "Use true or false.")
@@ -1152,10 +1137,15 @@ final class NotchController: ObservableObject {
                 return .init(ok: false, result: [:], error: "Screen Recording is required by the active vision model. Run nexusctl permission-open screen-recording, or use nexusctl settings-set screen-sharing false for a text-only test.")
             }
             let priorAnswer = answer
+            headlessToolTrace.removeAll()
             await submitTypedPrompt(text)
             for _ in 0..<1_500 {
                 if !responseIsStreaming, !answer.isEmpty, answer != priorAnswer {
-                    return .init(ok: true, result: ["answer": answer, "transcript": transcript], error: nil)
+                    return .init(ok: true, result: [
+                        "answer": answer,
+                        "transcript": transcript,
+                        "tool_trace": headlessToolTraceJSON()
+                    ], error: nil)
                 }
                 try? await Task.sleep(for: .milliseconds(120))
             }
@@ -1175,6 +1165,23 @@ final class NotchController: ObservableObject {
             try? await Task.sleep(for: .milliseconds(120))
         }
         return false
+    }
+
+    private func headlessToolTraceJSON() -> String {
+        let trace = headlessToolTrace.map { activity in
+            [
+                "action": activity.actionID ?? "",
+                "phase": String(describing: activity.phase),
+                "status": activity.status,
+                "detail": activity.detail ?? "",
+                "arguments": NexusHeadlessControlCodec.jsonString(activity.arguments),
+                "result": activity.result.map(NexusHeadlessControlCodec.jsonString) ?? ""
+            ]
+        }
+        guard JSONSerialization.isValidJSONObject(trace),
+              let data = try? JSONSerialization.data(withJSONObject: trace, options: [.sortedKeys]),
+              let text = String(data: data, encoding: .utf8) else { return "[]" }
+        return text
     }
 
     private func submitFinalizedPrompt() async {
@@ -1926,10 +1933,10 @@ final class NotchController: ObservableObject {
         let monitor = CodexProgressMonitor()
         monitor.start(
             onUpdate: { [weak self] update, sessions in
-                self?.handleCodexProgress(update, sessions: sessions)
+                Task { @MainActor in self?.handleCodexProgress(update, sessions: sessions) }
             },
             onUsage: { [weak self] usage in
-                self?.codexUsageLimit = usage
+                Task { @MainActor in self?.codexUsageLimit = usage }
             }
         )
         codexProgressMonitor = monitor
@@ -1995,15 +2002,17 @@ final class NotchController: ObservableObject {
             if let screen { resize(to: currentMediaOverlaySize(for: screen), animated: false) }
             return
         }
+        let activity = ToolActivity.lifecycle(event)
+        headlessToolTrace.append(activity)
         switch event.phase {
         case .started, .progress:
-            interaction.beginToolActivity(.lifecycle(event))
+            interaction.beginToolActivity(activity)
             if let screen { resize(to: toolActivitySize(for: screen), animated: true) }
         case .completed:
-            interaction.completeToolActivity(.lifecycle(event))
+            interaction.completeToolActivity(activity)
             if let screen { resize(to: toolActivitySize(for: screen), animated: true) }
         case .failed:
-            interaction.completeToolActivity(.lifecycle(event))
+            interaction.completeToolActivity(activity)
             if let screen { resize(to: toolActivitySize(for: screen), animated: true) }
         }
     }

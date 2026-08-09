@@ -6,34 +6,9 @@ struct NexusHeadlessControlRequest: Codable, Sendable { let id: UUID; let comman
 struct NexusHeadlessControlReply: Codable, Sendable { let ok: Bool; let result: [String: String]; let error: String? }
 
 enum NexusHeadlessControlCodec {
-    static func toolArguments(_ json: String) throws -> [String: NexJSONValue] {
-        guard let data = json.data(using: .utf8),
-              let raw = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-            throw NexusHeadlessControlError.invalidJSON
-        }
-        return try raw.mapValues(value)
-    }
-
-    static func envelope(_ value: NexComputerResultEnvelope) -> String {
+    static func jsonString<T: Encodable>(_ value: T) -> String {
         String(data: (try? JSONEncoder.cli.encode(value)) ?? Data("{}".utf8), encoding: .utf8) ?? "{}"
     }
-
-    private static func value(_ value: Any) throws -> NexJSONValue {
-        switch value {
-        case let value as String: .string(value)
-        case let value as NSNumber:
-            CFGetTypeID(value) == CFBooleanGetTypeID() ? .bool(value.boolValue) : .number(value.doubleValue)
-        case let value as [Any]: .array(try value.map(self.value))
-        case let value as [String: Any]: .object(try value.mapValues(self.value))
-        case is NSNull: .null
-        default: throw NexusHeadlessControlError.invalidJSON
-        }
-    }
-}
-
-enum NexusHeadlessControlError: LocalizedError {
-    case invalidJSON
-    var errorDescription: String? { "--json must contain one JSON object." }
 }
 
 enum NexusHeadlessControlPaths {
@@ -91,7 +66,7 @@ final class NexusHeadlessControlHost {
 
 enum NexusHeadlessControlClient {
     static func run(arguments: [String]) async -> Int32 {
-        guard let command = arguments.first else { return fail("Usage: nexusctl <status|prompt|models|model-select|permissions|permission-open|permission-repair|memory-status|memory-save|settings|settings-set|tools|tool-dry-run|tool-execute|connect-enable|connect-role|connect-route>") }
+        guard let command = arguments.first else { return fail("Usage: nexusctl <status|prompt|models|model-select|permissions|permission-open|permission-repair|memory-status|memory-save|settings|settings-set|tools|connect-enable|connect-role|connect-route>") }
         var values: [String: String] = [:]
         if ["prompt", "model-select", "permission-open", "connect-enable", "connect-role", "connect-route"].contains(command) {
             guard arguments.count > 1 else { return fail("Missing value for \(command).") }
@@ -101,15 +76,6 @@ enum NexusHeadlessControlClient {
             guard arguments.count == 3 else { return fail("Usage: nexusctl settings-set <key> <value>") }
             values["key"] = arguments[1]
             values["value"] = arguments[2]
-        }
-        if ["tool-dry-run", "tool-execute"].contains(command) {
-            guard arguments.count > 1 else { return fail("Missing action ID for \(command).") }
-            values["action"] = arguments[1]
-            if let index = arguments.firstIndex(of: "--json"), arguments.indices.contains(index + 1) {
-                values["json"] = arguments[index + 1]
-            } else {
-                values["json"] = "{}"
-            }
         }
         do {
             try NexusHeadlessControlPaths.prepare()

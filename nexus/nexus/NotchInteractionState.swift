@@ -180,23 +180,11 @@ enum CodexProgressAssets {
     static let avatarURL = downloadsURL.appendingPathComponent("codex-removebg-preview.png")
 
     static func icon(for kind: CodexProgressKind) -> ToolIconSource {
-        let fileName: String = switch kind {
-        case .thinking: "codex.svg"
-        case .terminal: "terminal-svgrepo-com.svg"
-        case .writing: "code-svgrepo-com.svg"
-        case .reading: "read-svgrepo-com.svg"
-        case .image: "image-01-svgrepo-com.svg"
-        case .git: "code-merge-svgrepo-com.svg"
-        }
-        return loadIcon(named: fileName, fallbackSystemName: kind.fallbackSymbol)
-    }
-
-    private static func loadIcon(named fileName: String, fallbackSystemName: String) -> ToolIconSource {
-        let url = downloadsURL.appendingPathComponent(fileName)
-        if let data = try? Data(contentsOf: url) {
-            return .svg(data: data, fallbackSystemName: fallbackSystemName)
-        }
-        return .systemSymbol(fallbackSystemName)
+        // Codex session updates arrive on the main UI actor. Do not synchronously
+        // open a user Downloads file for every progress event: an iCloud or
+        // unavailable volume can stall the entire Notch and nexus prompt host.
+        // The compact task marks retain their dedicated artwork separately.
+        .systemSymbol(kind.fallbackSymbol)
     }
 }
 

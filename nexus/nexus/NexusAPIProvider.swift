@@ -176,8 +176,11 @@ final class NexusAPIProviderStore: ObservableObject {
         self.model = inferredKind == .openAICompatible
             ? (storedModel.isEmpty ? inferredKind.defaultModel : storedModel)
             : (inferredKind == .openAI && !storedModel.isEmpty ? storedModel : inferredKind.defaultModel)
-        self.savedKey = false
-        self.savedKey = (try? self.keyData(for: inferredKind)) != nil
+        // Keychain access can block while macOS resolves an access request.
+        // The persisted presence bit keeps Settings informative at launch;
+        // the key itself is still read and verified only when this provider is
+        // explicitly selected for inference or a connection check.
+        self.savedKey = stored?["hasKey"] as? Bool ?? false
         if inferredKind != .openAICompatible { persist() }
     }
 
