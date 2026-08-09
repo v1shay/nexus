@@ -1,3 +1,4 @@
+import AVFoundation
 import Foundation
 import Combine
 import SwiftUI
@@ -97,6 +98,7 @@ enum NexusDuplexVoiceEngine: String, CaseIterable, Identifiable, Codable {
     case disabled
     case moshiMLXQ4
     case personaPlexRemoteCUDA
+    case nemotronVoiceChatRemoteCUDA
 
     var id: String { rawValue }
 
@@ -105,6 +107,7 @@ enum NexusDuplexVoiceEngine: String, CaseIterable, Identifiable, Codable {
         case .disabled: "Off"
         case .moshiMLXQ4: "Moshi MLX (4-bit)"
         case .personaPlexRemoteCUDA: "PersonaPlex (remote CUDA)"
+        case .nemotronVoiceChatRemoteCUDA: "Nemotron VoiceChat 11B (remote CUDA)"
         }
     }
 
@@ -113,6 +116,7 @@ enum NexusDuplexVoiceEngine: String, CaseIterable, Identifiable, Codable {
         case .disabled: "Use Nex's existing dictation and Piper response voice."
         case .moshiMLXQ4: "Runs Moshiko/Moshika Q4 locally on Apple silicon (about 8 GB)."
         case .personaPlexRemoteCUDA: "Requires a separately configured NVIDIA CUDA host; Mac Studio itself is not CUDA-capable."
+        case .nemotronVoiceChatRemoteCUDA: "Native full-duplex audio, barge-in, and function calls through NVIDIA's realtime CUDA server."
         }
     }
 }
@@ -126,6 +130,7 @@ final class NexusAppSettings: ObservableObject {
     @Published var localSpeechModel: String { didSet { persist() } }
     @Published var duplexVoiceEngine: NexusDuplexVoiceEngine { didSet { persist() } }
     @Published var personaPlexRemoteEndpoint: String { didSet { persist() } }
+    @Published var nemotronVoiceChatRemoteEndpoint: String { didSet { persist() } }
     @Published var glassTheme: NexusGlassTheme { didSet { persist() } }
     /// Hold Command once to enter a hands-free conversation. A double Command
     /// leaves the session and returns the gesture to its normal behavior.
@@ -158,6 +163,7 @@ final class NexusAppSettings: ObservableObject {
         localSpeechModel = saved["localSpeechModel"] as? String ?? "nvidia/parakeet-tdt-0.6b-v2"
         duplexVoiceEngine = NexusDuplexVoiceEngine(rawValue: saved["duplexVoiceEngine"] as? String ?? "") ?? .disabled
         personaPlexRemoteEndpoint = saved["personaPlexRemoteEndpoint"] as? String ?? ""
+        nemotronVoiceChatRemoteEndpoint = saved["nemotronVoiceChatRemoteEndpoint"] as? String ?? ""
         glassTheme = NexusGlassTheme(rawValue: saved["glassTheme"] as? String ?? "") ?? .graphite
         alwaysOnVoiceMode = saved["alwaysOnVoiceMode"] as? Bool ?? false
         // Screen context shipped disabled in early builds. Migrate that old
@@ -182,6 +188,7 @@ final class NexusAppSettings: ObservableObject {
             "localSpeechModel": localSpeechModel,
             "duplexVoiceEngine": duplexVoiceEngine.rawValue,
             "personaPlexRemoteEndpoint": personaPlexRemoteEndpoint,
+            "nemotronVoiceChatRemoteEndpoint": nemotronVoiceChatRemoteEndpoint,
             "glassTheme": glassTheme.rawValue,
             "alwaysOnVoiceMode": alwaysOnVoiceMode,
             "shareScreenWithVisionModels": shareScreenWithVisionModels,
@@ -223,6 +230,7 @@ final class NexusDuplexVoiceRuntime: ObservableObject {
 
     @Published private(set) var state: State = .stopped
     private var process: Process?
+    private var nemotronSession: NexusNemotronVoiceChatSession?
     private let port = 8998
 
     private init() {}
@@ -244,7 +252,11 @@ final class NexusDuplexVoiceRuntime: ObservableObject {
         supportDirectory.appendingPathComponent("venv/bin/python")
     }
 
-    func reconcile(with engine: NexusDuplexVoiceEngine, personaPlexEndpoint: String) async {
+    func reconcile(
+        with engine: NexusDuplexVoiceEngine,
+        personaPlexEndpoint: String,
+        nemotronVoiceChatEndpoint: String = ""
+    ) async {
         switch engine {
         case .disabled:
             stop()
@@ -263,6 +275,11 @@ final class NexusDuplexVoiceRuntime: ObservableObject {
             state = personaPlexEndpoint.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
                 ? .unavailable("PersonaPlex needs a configured CUDA host")
                 : .unavailable("PersonaPlex remote bridge is not configured")
+        case .nemotronVoiceChatRemoteCUDA:
+            stop()
+            state = nemotronVoiceChatEndpoint.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                ? .unavailable("Configure the Nemotron VoiceChat CUDA endpoint in Settings")
+                : .stopped
         }
     }
 
@@ -290,9 +307,69 @@ final class NexusDuplexVoiceRuntime: ObservableObject {
     }
 
     func stop() {
+        nemotronSession?.stop()
+        nemotronSession = nil
         process?.terminate()
         process = nil
         state = .stopped
+    }
+
+    func startNemotronVoiceChat(
+        endpoint: String,
+        tools: [NexRegisteredTool],
+        onUserTranscript: @escaping @MainActor (String, Bool) async -> Void,
+        onAssistantTranscript: @escaping @MainActor (String, Bool) async -> Void,
+        onToolStatus: @escaping @MainActor (String) -> Void,
+        executeTool: @escaping @MainActor (NexPrimaryToolPlan.Action) async throws -> NexJSONValue
+    ) async -> Bool {
+        guard let url = Self.nemotronRealtimeURL(from: endpoint) else {
+            state = .unavailable("Enter the HTTPS or WSS address of the Nemotron VoiceChat server")
+            return false
+        }
+        nemotronSession?.stop()
+        let session = NexusNemotronVoiceChatSession(
+            endpoint: url,
+            tools: tools,
+            onUserTranscript: onUserTranscript,
+            onAssistantTranscript: onAssistantTranscript,
+            onToolStatus: onToolStatus,
+            executeTool: executeTool
+        )
+        nemotronSession = session
+        state = .starting
+        do {
+            try await session.start()
+            state = .ready
+            return true
+        } catch {
+            session.stop()
+            nemotronSession = nil
+            state = .failed("Nemotron VoiceChat could not start: \(error.localizedDescription)")
+            return false
+        }
+    }
+
+    func stopNemotronVoiceChat() {
+        nemotronSession?.stop()
+        nemotronSession = nil
+        if process == nil { state = .stopped }
+    }
+
+    private static func nemotronRealtimeURL(from raw: String) -> URL? {
+        let value = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard var components = URLComponents(string: value),
+              let scheme = components.scheme?.lowercased() else { return nil }
+        switch scheme {
+        case "https": components.scheme = "wss"
+        case "http": components.scheme = "ws"
+        case "wss", "ws": break
+        default: return nil
+        }
+        let path = components.path.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        components.path = path.hasSuffix("v1/realtime") || path == "realtime"
+            ? "/" + path
+            : "/" + (path.isEmpty ? "v1/realtime" : path + "/v1/realtime")
+        return components.url
     }
 
     private func startMoshiIfNeeded() async {
@@ -408,6 +485,304 @@ final class NexusDuplexVoiceRuntime: ObservableObject {
             }
             do { try task.run() } catch { continuation.resume(throwing: error) }
         }
+    }
+}
+
+/// Bridges the official Nemotron VoiceChat realtime protocol to Nexus's live
+/// audio, transcript, and tool lifecycle. The CUDA server owns speech timing;
+/// Nexus validates every requested tool against its already-live registry.
+///
+/// `AVAudioEngine` invokes input taps off the main actor. Keeping this small
+/// converter owned by that serial audio callback avoids allocating a new
+/// converter for every 80 ms audio frame.
+private final class NexusNemotronPCMConverter: @unchecked Sendable {
+    private let converter: AVAudioConverter
+    private let target: AVAudioFormat
+
+    init?(source: AVAudioFormat) {
+        guard let target = AVAudioFormat(
+            commonFormat: .pcmFormatInt16,
+            sampleRate: 24_000,
+            channels: 1,
+            interleaved: false
+        ), let converter = AVAudioConverter(from: source, to: target) else {
+            return nil
+        }
+        self.target = target
+        self.converter = converter
+    }
+
+    func convert(_ input: AVAudioPCMBuffer) -> Data {
+        let ratio = target.sampleRate / input.format.sampleRate
+        let capacity = AVAudioFrameCount(Double(input.frameLength) * ratio + 64)
+        guard let output = AVAudioPCMBuffer(pcmFormat: target, frameCapacity: capacity) else { return Data() }
+        var error: NSError?
+        converter.convert(to: output, error: &error) { _, status in
+            status.pointee = .haveData
+            return input
+        }
+        guard error == nil, let samples = output.int16ChannelData?.pointee else { return Data() }
+        return Data(bytes: samples, count: Int(output.frameLength) * MemoryLayout<Int16>.size)
+    }
+}
+
+@MainActor
+final class NexusNemotronVoiceChatSession {
+    private let endpoint: URL
+    private let tools: [NexRegisteredTool]
+    private let onUserTranscript: @MainActor (String, Bool) async -> Void
+    private let onAssistantTranscript: @MainActor (String, Bool) async -> Void
+    private let onToolStatus: @MainActor (String) -> Void
+    private let executeTool: @MainActor (NexPrimaryToolPlan.Action) async throws -> NexJSONValue
+    private let inputEngine = AVAudioEngine()
+    private let outputEngine = AVAudioEngine()
+    private let player = AVAudioPlayerNode()
+    private let pcmFormat = AVAudioFormat(commonFormat: .pcmFormatInt16, sampleRate: 24_000, channels: 1, interleaved: false)!
+    private var socket: URLSessionWebSocketTask?
+    private var receiveTask: Task<Void, Never>?
+    private var inputTapInstalled = false
+    private var didReceiveSession = false
+    private var sessionReadyContinuation: CheckedContinuation<Void, Error>?
+    private var userTranscript = ""
+    private var assistantTranscript = ""
+
+    init(
+        endpoint: URL,
+        tools: [NexRegisteredTool],
+        onUserTranscript: @escaping @MainActor (String, Bool) async -> Void,
+        onAssistantTranscript: @escaping @MainActor (String, Bool) async -> Void,
+        onToolStatus: @escaping @MainActor (String) -> Void,
+        executeTool: @escaping @MainActor (NexPrimaryToolPlan.Action) async throws -> NexJSONValue
+    ) {
+        self.endpoint = endpoint
+        self.tools = tools
+        self.onUserTranscript = onUserTranscript
+        self.onAssistantTranscript = onAssistantTranscript
+        self.onToolStatus = onToolStatus
+        self.executeTool = executeTool
+    }
+
+    func start() async throws {
+        guard AVCaptureDevice.authorizationStatus(for: .audio) == .authorized else {
+            throw NSError(domain: "NexusNemotronVoiceChat", code: 1, userInfo: [NSLocalizedDescriptionKey: "Microphone permission is required for duplex voice."])
+        }
+        let task = URLSession.shared.webSocketTask(with: endpoint)
+        socket = task
+        task.resume()
+        try configurePlayback()
+        receiveTask = Task { [weak self] in await self?.receiveLoop() }
+        try await send(sessionConfiguration())
+        try await waitForSessionUpdate()
+        try configureCapture()
+    }
+
+    func stop() {
+        receiveTask?.cancel()
+        receiveTask = nil
+        if inputTapInstalled {
+            inputEngine.inputNode.removeTap(onBus: 0)
+            inputTapInstalled = false
+        }
+        inputEngine.stop()
+        player.stop()
+        outputEngine.stop()
+        socket?.cancel(with: .goingAway, reason: nil)
+        socket = nil
+        didReceiveSession = false
+        sessionReadyContinuation?.resume(throwing: CancellationError())
+        sessionReadyContinuation = nil
+        userTranscript = ""
+        assistantTranscript = ""
+    }
+
+    private func configurePlayback() throws {
+        outputEngine.attach(player)
+        outputEngine.connect(player, to: outputEngine.mainMixerNode, format: pcmFormat)
+        outputEngine.prepare()
+        try outputEngine.start()
+        player.play()
+    }
+
+    private func configureCapture() throws {
+        let node = inputEngine.inputNode
+        let sourceFormat = node.outputFormat(forBus: 0)
+        guard let converter = NexusNemotronPCMConverter(source: sourceFormat) else {
+            throw NSError(domain: "NexusNemotronVoiceChat", code: 2, userInfo: [NSLocalizedDescriptionKey: "Nexus could not configure 24 kHz voice capture."])
+        }
+        node.installTap(onBus: 0, bufferSize: 1_920, format: sourceFormat) { [weak self, converter] buffer, _ in
+            let data = converter.convert(buffer)
+            guard !data.isEmpty else { return }
+            Task { @MainActor [weak self] in try? await self?.send(["type": "input_audio_buffer.append", "event_id": UUID().uuidString, "audio": data.base64EncodedString()]) }
+        }
+        inputTapInstalled = true
+        inputEngine.prepare()
+        try inputEngine.start()
+    }
+
+    private func waitForSessionUpdate() async throws {
+        try await withCheckedThrowingContinuation { continuation in
+            sessionReadyContinuation = continuation
+            Task { @MainActor [weak self] in
+                try? await Task.sleep(for: .seconds(8))
+                guard let self, self.sessionReadyContinuation != nil else { return }
+                self.sessionReadyContinuation?.resume(throwing: NSError(
+                    domain: "NexusNemotronVoiceChat",
+                    code: 3,
+                    userInfo: [NSLocalizedDescriptionKey: "The VoiceChat server did not accept the realtime session in time."]
+                ))
+                self.sessionReadyContinuation = nil
+            }
+        }
+    }
+
+    private func receiveLoop() async {
+        while !Task.isCancelled, let socket {
+            do {
+                let message = try await socket.receive()
+                let data: Data
+                switch message {
+                case .data(let value): data = value
+                case .string(let value): data = Data(value.utf8)
+                @unknown default: continue
+                }
+                guard let raw = try JSONSerialization.jsonObject(with: data) as? [String: Any] else { continue }
+                await handle(raw)
+            } catch {
+                if !Task.isCancelled {
+                    sessionReadyContinuation?.resume(throwing: error)
+                    sessionReadyContinuation = nil
+                    onToolStatus("Nemotron VoiceChat connection closed")
+                }
+                return
+            }
+        }
+    }
+
+    private func handle(_ event: [String: Any]) async {
+        guard let type = event["type"] as? String else { return }
+        switch type {
+        case "session.created":
+            didReceiveSession = true
+        case "session.updated":
+            didReceiveSession = true
+            sessionReadyContinuation?.resume()
+            sessionReadyContinuation = nil
+            onToolStatus("Nemotron VoiceChat is listening")
+        case "input_audio_buffer.speech_started":
+            player.stop()
+            player.play()
+        case "conversation.item.input_audio_transcription.delta":
+            if let text = event["delta"] as? String {
+                userTranscript += text
+                await onUserTranscript(userTranscript, false)
+            }
+        case "conversation.item.input_audio_transcription.completed":
+            let text = event["transcript"] as? String ?? event["text"] as? String ?? userTranscript
+            if !text.isEmpty { await onUserTranscript(text, true) }
+            userTranscript = ""
+        case "response.output_audio.delta":
+            if let encoded = event["delta"] as? String, let data = Data(base64Encoded: encoded) { play(data) }
+        case "response.output_audio_transcript.delta":
+            if let text = event["delta"] as? String {
+                assistantTranscript += text
+                await onAssistantTranscript(assistantTranscript, false)
+            }
+        case "response.output_audio_transcript.done":
+            let text = (event["transcript"] ?? event["text"] as Any?) as? String ?? assistantTranscript
+            if !text.isEmpty { await onAssistantTranscript(text, true) }
+            assistantTranscript = ""
+        case "response.function_call_arguments.done":
+            await handleToolCall(event)
+        case "error":
+            let message = event["message"] as? String ?? event["error"] as? String ?? "Nemotron VoiceChat reported an error"
+            onToolStatus(message)
+        default: break
+        }
+    }
+
+    private func handleToolCall(_ event: [String: Any]) async {
+        guard let name = event["name"] as? String,
+              let callID = event["call_id"] as? String else { return }
+        let arguments: [String: NexJSONValue]
+        do {
+            let raw = event["arguments"] as? String ?? "{}"
+            let object = try JSONSerialization.jsonObject(with: Data(raw.utf8)) as? [String: Any] ?? [:]
+            arguments = try object.mapValues(Self.nexusValue)
+            guard let tool = tools.first(where: { $0.name == name }) else { throw NexToolError.notFound(name) }
+            try tool.schema.validate(arguments)
+            onToolStatus("Using \(tool.application)…")
+            let result = try await executeTool(.init(tool: name, arguments: arguments))
+            try await send(["type": "conversation.item.create", "item": ["type": "function_call_output", "call_id": callID, "output": Self.resultString(result)]])
+        } catch {
+            try? await send(["type": "conversation.item.create", "item": ["type": "function_call_output", "call_id": callID, "output": "{\"error\":\"\(error.localizedDescription.replacingOccurrences(of: "\\\"", with: "'"))\"}"]])
+        }
+    }
+
+    private func play(_ data: Data) {
+        let frames = AVAudioFrameCount(data.count / MemoryLayout<Int16>.size)
+        guard frames > 0, let buffer = AVAudioPCMBuffer(pcmFormat: pcmFormat, frameCapacity: frames), let output = buffer.int16ChannelData?.pointee else { return }
+        buffer.frameLength = frames
+        data.copyBytes(to: UnsafeMutableRawPointer(output).assumingMemoryBound(to: UInt8.self), count: data.count)
+        player.scheduleBuffer(buffer, completionHandler: nil)
+    }
+
+    private func send(_ value: [String: Any]) async throws {
+        guard let socket else { throw URLError(.notConnectedToInternet) }
+        let data = try JSONSerialization.data(withJSONObject: value)
+        try await socket.send(.data(data))
+    }
+
+    private func sessionConfiguration() -> [String: Any] {
+        [
+            "type": "session.update",
+            "event_id": UUID().uuidString,
+            "session": [
+                "audio": ["input": ["format": ["type": "audio/pcm", "rate": 24_000]], "output": ["format": ["type": "audio/pcm", "rate": 24_000]]],
+                "instructions": "You are Nexus in a natural live voice conversation. Use registered functions for external actions. While a tool runs, give a short natural on-hold acknowledgement. Never claim a tool succeeded until its function result arrives.",
+                "tools": tools.map(Self.realtimeTool)
+            ]
+        ]
+    }
+
+    private static func realtimeTool(_ tool: NexRegisteredTool) -> [String: Any] {
+        var properties: [String: Any] = [:]
+        var required: [String] = []
+        for (name, field) in tool.schema.fields {
+            var schema: [String: Any] = ["type": jsonType(field.type)]
+            if let description = field.description { schema["description"] = description }
+            if !field.allowedValues.isEmpty { schema["enum"] = field.allowedValues }
+            if let minimum = field.minimum { schema["minimum"] = minimum }
+            if let maximum = field.maximum { schema["maximum"] = maximum }
+            properties[name] = schema
+            if field.required { required.append(name) }
+        }
+        return ["type": "function", "name": tool.name, "description": tool.description, "parameters": ["type": "object", "properties": properties, "required": required, "additionalProperties": false]]
+    }
+
+    private static func jsonType(_ type: NexToolFieldType) -> String {
+        switch type {
+        case .string: "string"
+        case .integer: "integer"
+        case .number: "number"
+        case .boolean: "boolean"
+        case .stringArray, .array: "array"
+        }
+    }
+
+    private static func nexusValue(_ value: Any) throws -> NexJSONValue {
+        switch value {
+        case let value as String: .string(value)
+        case let value as NSNumber: CFGetTypeID(value) == CFBooleanGetTypeID() ? .bool(value.boolValue) : .number(value.doubleValue)
+        case let value as [Any]: .array(try value.map(nexusValue))
+        case let value as [String: Any]: .object(try value.mapValues(nexusValue))
+        case is NSNull: .null
+        default: throw NexToolError.executionFailed(code: "invalid_voice_tool_arguments", message: "VoiceChat supplied an unsupported tool argument.")
+        }
+    }
+
+    private static func resultString(_ value: NexJSONValue) -> String {
+        guard let data = try? JSONEncoder().encode(value), let text = String(data: data, encoding: .utf8) else { return "{\"error\":\"Could not encode tool result\"}" }
+        return text
     }
 }
 

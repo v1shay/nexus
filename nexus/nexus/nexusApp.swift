@@ -236,7 +236,8 @@ final class NexusAppDelegate: NSObject, NSApplicationDelegate {
             }
             await NexusDuplexVoiceRuntime.shared.reconcile(
                 with: notch.settings.duplexVoiceEngine,
-                personaPlexEndpoint: notch.settings.personaPlexRemoteEndpoint
+                personaPlexEndpoint: notch.settings.personaPlexRemoteEndpoint,
+                nemotronVoiceChatEndpoint: notch.settings.nemotronVoiceChatRemoteEndpoint
             )
         }
     }
@@ -781,6 +782,48 @@ final class NotchController: ObservableObject {
     private func startAlwaysOnVoiceSession() async {
         guard !alwaysOnVoiceSessionActive else { return }
         alwaysOnVoiceSessionActive = true
+        if settings.duplexVoiceEngine == .nemotronVoiceChatRemoteCUDA {
+            let definitions = await memory.registry.definitions()
+            let started = await NexusDuplexVoiceRuntime.shared.startNemotronVoiceChat(
+                endpoint: settings.nemotronVoiceChatRemoteEndpoint,
+                tools: definitions,
+                onUserTranscript: { [weak self] text, isFinal in
+                    guard let self else { return }
+                    self.interaction.updateTranscript(text)
+                    if isFinal, !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                        _ = await self.conversationSession.appendUser(text)
+                        await self.memory.conversationDidChange()
+                    }
+                },
+                onAssistantTranscript: { [weak self] text, isFinal in
+                    guard let self else { return }
+                    if isFinal {
+                        self.interaction.receiveAnswer(text)
+                        _ = await self.conversationSession.appendAssistant(text)
+                        await self.memory.conversationDidChange()
+                    }
+                },
+                onToolStatus: { [weak self] status in
+                    self?.interaction.acknowledge(status)
+                },
+                executeTool: { [weak self] action in
+                    guard let self else { throw CancellationError() }
+                    return try await self.memory.registry.execute(
+                        name: action.tool,
+                        arguments: action.arguments,
+                        invocation: action.tool == NexToolSearchService.actionName ? .modelDiscovery : .modelReadOnly
+                    )
+                }
+            )
+            guard started else {
+                alwaysOnVoiceSessionActive = false
+                interaction.acknowledge(NexusDuplexVoiceRuntime.shared.state.label)
+                return
+            }
+            interaction.beginDictation()
+            if let screen { resize(to: listeningSize(for: screen), animated: true) }
+            return
+        }
         await prepareForUserRequest()
         beginAlwaysOnListening()
     }
@@ -828,6 +871,9 @@ final class NotchController: ObservableObject {
     private func stopAlwaysOnVoiceSession() {
         guard alwaysOnVoiceSessionActive else { return }
         alwaysOnVoiceSessionActive = false
+        if settings.duplexVoiceEngine == .nemotronVoiceChatRemoteCUDA {
+            NexusDuplexVoiceRuntime.shared.stopNemotronVoiceChat()
+        }
         speechTranscriber.stop()
         responseTask?.cancel()
         responseGeneration = UUID()
@@ -1756,6 +1802,10 @@ final class NotchController: ObservableObject {
     }
 
     private func quickDismiss() {
+        if settings.duplexVoiceEngine == .nemotronVoiceChatRemoteCUDA, alwaysOnVoiceSessionActive {
+            stopAlwaysOnVoiceSession()
+            return
+        }
         guard isListening || isExpanded || isThinking || isUsingTool else { return }
         closeTask?.cancel()
         automaticRevealIsWaitingForNotchVisit = false

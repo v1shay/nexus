@@ -449,7 +449,8 @@ private struct NexusExperienceSettingsPage: View {
                         Task {
                             await duplexRuntime.reconcile(
                                 with: engine,
-                                personaPlexEndpoint: settings.personaPlexRemoteEndpoint
+                                personaPlexEndpoint: settings.personaPlexRemoteEndpoint,
+                                nemotronVoiceChatEndpoint: settings.nemotronVoiceChatRemoteEndpoint
                             )
                         }
                     }
@@ -492,6 +493,34 @@ private struct NexusExperienceSettingsPage: View {
                             .font(.system(size: 11, weight: .medium))
                             .foregroundStyle(.secondary)
                             .frame(maxWidth: 360, alignment: .trailing)
+                    }
+                }
+                if settings.duplexVoiceEngine == .nemotronVoiceChatRemoteCUDA {
+                    NexusHairline(axis: .horizontal)
+                    NexusSettingsLine(label: "CUDA host") {
+                        TextField("https://voicechat-host:9000", text: $settings.nemotronVoiceChatRemoteEndpoint)
+                            .textFieldStyle(.roundedBorder)
+                            .frame(width: 250)
+                            .onChange(of: settings.nemotronVoiceChatRemoteEndpoint) { _, endpoint in
+                                Task {
+                                    await duplexRuntime.reconcile(
+                                        with: .nemotronVoiceChatRemoteCUDA,
+                                        personaPlexEndpoint: settings.personaPlexRemoteEndpoint,
+                                        nemotronVoiceChatEndpoint: endpoint
+                                    )
+                                }
+                            }
+                    }
+                    NexusSettingsLine(label: "VoiceChat") {
+                        VStack(alignment: .trailing, spacing: 4) {
+                            Text(duplexRuntime.state.label)
+                                .font(.system(size: 11, weight: .medium, design: .monospaced))
+                                .foregroundStyle(duplexRuntime.state == .ready ? .green : .secondary)
+                            Text("Connects to NVIDIA's /v1/realtime WebSocket. Use headphones to prevent acoustic feedback.")
+                                .font(.system(size: 10.5, weight: .medium))
+                                .foregroundStyle(.secondary)
+                                .frame(maxWidth: 360, alignment: .trailing)
+                        }
                     }
                 }
             }
