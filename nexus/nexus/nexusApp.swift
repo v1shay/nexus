@@ -74,6 +74,7 @@ final class NexusAppDelegate: NSObject, NSApplicationDelegate {
     private var automationWindow: NSWindow?
     private var connectHost: NexusConnectHostDaemon?
     private var nexCLIHost: NexCLIHostDaemon?
+    private var headlessControlHost: NexusHeadlessControlHost?
     private var launchTask: Task<Void, Never>?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -92,6 +93,15 @@ final class NexusAppDelegate: NSObject, NSApplicationDelegate {
             let arguments = Array(CommandLine.arguments.dropFirst(index + 1))
             launchTask = Task {
                 let status = await NexComputerCLI.run(arguments: arguments)
+                Foundation.exit(status)
+            }
+            return
+        }
+        if let index = CommandLine.arguments.firstIndex(of: "--nexusctl") {
+            NSApp.setActivationPolicy(.prohibited)
+            let arguments = Array(CommandLine.arguments.dropFirst(index + 1))
+            launchTask = Task {
+                let status = await NexusHeadlessControlClient.run(arguments: arguments)
                 Foundation.exit(status)
             }
             return
@@ -204,16 +214,27 @@ final class NexusAppDelegate: NSObject, NSApplicationDelegate {
             automationWindow = window
             return
         }
+        let headlessControlHost = NexusHeadlessControlHost()
+        headlessControlHost.start()
+        self.headlessControlHost = headlessControlHost
         launchTask = Task { @MainActor [weak self] in
             await Self.retireOlderInstances()
             guard !Task.isCancelled else { return }
             NexusPermissionHealth.shared.validateAtLaunch()
-            _ = try? NexCLIWorkspaceManager.shared.prepareForNexusLaunch()
-            try? NexCLIHostManager.shared.installAndStart()
             let notch = NotchController()
             self?.notch = notch
             notch.install()
+            headlessControlHost.attach(controller: notch)
             self?.installMenuBarOrb(for: notch)
+            // The optional legacy NexCLI worker uses Keychain credentials and
+            // can legitimately wait for macOS. It must never delay the live
+            // Notch controller or its in-process nexusctl host.
+            Task { @MainActor in
+                _ = try? NexCLIWorkspaceManager.shared.prepareForNexusLaunch()
+            }
+            DispatchQueue.global(qos: .utility).async {
+                try? NexCLIHostManager.shared.installAndStart()
+            }
             await NexusDuplexVoiceRuntime.shared.reconcile(
                 with: notch.settings.duplexVoiceEngine,
                 personaPlexEndpoint: notch.settings.personaPlexRemoteEndpoint
@@ -226,6 +247,7 @@ final class NexusAppDelegate: NSObject, NSApplicationDelegate {
         notch?.shutdown()
         connectHost?.stop()
         nexCLIHost?.stop()
+        headlessControlHost?.stop()
         NexusDuplexVoiceRuntime.shared.stop()
         if let menuBarItem { NSStatusBar.system.removeStatusItem(menuBarItem) }
     }
@@ -472,7 +494,10 @@ final class NotchController: ObservableObject {
     private lazy var applicationActions = NexApplicationActionCatalog()
     private lazy var browserActions = NexBrowserActionCatalog()
     private lazy var chromeTabActions = NexChromeTabActionCatalog()
-    private let connectorAuth = NexConnectorAuthController.shared
+    // Connector credentials are Keychain-backed. Defer their first read until
+    // the Connect UI actually needs them so the real Notch and nexusctl host
+    // can come up even while macOS is resolving a Keychain request.
+    private lazy var connectorAuth = NexConnectorAuthController.shared
     private lazy var connectorManager = NexConnectorManager()
     private lazy var webSearch = NexWebSearchController(registry: memory.registry)
     private lazy var youtubeTools = NexYouTubeToolController(registry: memory.registry) { [weak self] tab, fullscreen in
@@ -978,6 +1003,178 @@ final class NotchController: ObservableObject {
         await prepareForUserRequest()
         interaction.updateTranscript(prompt)
         await submitFinalizedPrompt()
+    }
+
+    /// The headless control host is deliberately a thin adapter over this
+    /// controller. It never recreates settings, memory, models, or tool
+    /// registries, so terminal requests drive the same live Nexus instance as
+    /// the notch and model window.
+    func performHeadlessControl(_ request: NexusHeadlessControlRequest) async -> NexusHeadlessControlReply {
+        switch request.command {
+        case "status":
+            let permissions = NexusPermissionSnapshot.current
+            return .init(ok: true, result: [
+                "presentation": String(describing: presentation),
+                "model": activeModel?.name ?? "",
+                "model_id": activeModel?.id ?? "",
+                "transcript": transcript,
+                "answer": answer,
+                "is_streaming": String(responseIsStreaming),
+                "input_monitoring": String(permissions.inputMonitoring),
+                "accessibility": String(permissions.accessibility),
+                "screen_recording": String(permissions.screenRecording),
+                "connect_enabled": String(connectController.enabled),
+                "connect_paired": String(connectController.isPaired),
+                "connect_role": connectController.role.rawValue,
+                "connect_route": connectController.modelRoute.id
+            ], error: nil)
+        case "models":
+            let models = modelDownloadViewModel.installedModels
+                .map { "\($0.id)|\($0.name)" }
+                .joined(separator: "\n")
+            return .init(ok: true, result: ["models": models, "active": activeModel?.id ?? ""], error: nil)
+        case "model-select":
+            guard let value = request.arguments["value"]?.trimmingCharacters(in: .whitespacesAndNewlines), !value.isEmpty else {
+                return .init(ok: false, result: [:], error: "Missing model ID or name.")
+            }
+            guard let model = modelDownloadViewModel.installedModels.first(where: {
+                $0.id == value || $0.identifier == value || $0.name.caseInsensitiveCompare(value) == .orderedSame
+            }) else { return .init(ok: false, result: [:], error: "No installed model matches \(value).") }
+            modelDownloadViewModel.use(model)
+            return .init(ok: true, result: ["active": model.id, "model": model.name], error: nil)
+        case "permissions":
+            let snapshot = NexusPermissionSnapshot.current
+            return .init(ok: true, result: [
+                "input_monitoring": String(snapshot.inputMonitoring),
+                "accessibility": String(snapshot.accessibility),
+                "screen_recording": String(snapshot.screenRecording)
+            ], error: nil)
+        case "permission-open":
+            guard let raw = request.arguments["value"], let service = NexusTCCService.cliService(raw) else {
+                return .init(ok: false, result: [:], error: "Use input-monitoring, accessibility, or screen-recording.")
+            }
+            NexusPermissionHealth.shared.openPermissionSettings(for: service)
+            return .init(ok: true, result: ["opened": service.displayName], error: nil)
+        case "permission-repair":
+            NexusPermissionHealth.shared.repairDeniedPermissions()
+            return .init(ok: true, result: ["state": NexusPermissionHealth.shared.statusMessage], error: nil)
+        case "memory-save":
+            await memory.save()
+            return .init(ok: true, result: ["state": memory.saveState.label], error: nil)
+        case "memory-status":
+            return .init(ok: true, result: [
+                "save_state": memory.saveState.label,
+                "sync_state": memory.syncState.label,
+                "saved_conversations": String(memory.savedConversations.count),
+                "has_unsaved_conversation": String(memory.hasValuableUnsavedConversation)
+            ], error: nil)
+        case "settings":
+            return .init(ok: true, result: [
+                "status_mode": settings.statusMode.rawValue,
+                "speech_engine": settings.speechEngine.rawValue,
+                "voice_engine": settings.duplexVoiceEngine.rawValue,
+                "glass_theme": settings.glassTheme.rawValue,
+                "always_on_voice": String(settings.alwaysOnVoiceMode),
+                "screen_sharing": String(settings.shareScreenWithVisionModels),
+                "global_paste_dictation": String(settings.globalPasteDictationEnabled),
+                "codex_task_mark_style": settings.codexTaskMarkStyle.rawValue
+            ], error: nil)
+        case "settings-set":
+            guard let key = request.arguments["key"], let value = request.arguments["value"] else {
+                return .init(ok: false, result: [:], error: "Usage: settings-set <key> <value>.")
+            }
+            guard let boolean = Bool(value) else {
+                return .init(ok: false, result: [:], error: "Settings values must be true or false.")
+            }
+            switch key {
+            case "screen-sharing": settings.shareScreenWithVisionModels = boolean
+            case "always-on-voice": settings.alwaysOnVoiceMode = boolean
+            case "global-paste-dictation": settings.globalPasteDictationEnabled = boolean
+            default:
+                return .init(ok: false, result: [:], error: "Supported settings: screen-sharing, always-on-voice, global-paste-dictation.")
+            }
+            return .init(ok: true, result: [key: String(boolean)], error: nil)
+        case "tools":
+            guard await waitForHeadlessTools() else {
+                return .init(ok: false, result: [:], error: "Nexus tool registry is still starting.")
+            }
+            let tools = await computerRegistry.manifests().map(\.actionID).sorted().joined(separator: "\n")
+            return .init(ok: true, result: ["tools": tools], error: nil)
+        case "tool-dry-run", "tool-execute":
+            guard let action = request.arguments["action"], !action.isEmpty else {
+                return .init(ok: false, result: [:], error: "Missing action ID.")
+            }
+            guard await waitForHeadlessTools(action: action) else {
+                return .init(ok: false, result: [:], error: "Nexus tool registry is still starting or does not contain \(action).")
+            }
+            do {
+                let arguments = try NexusHeadlessControlCodec.toolArguments(request.arguments["json"] ?? "{}")
+                let runtime = NexComputerRuntime(registry: computerRegistry)
+                let envelope = await runtime.execute(
+                    actionID: action,
+                    arguments: arguments,
+                    options: .init(dryRun: request.command == "tool-dry-run", invocation: .app)
+                )
+                return .init(ok: envelope.ok, result: ["execution": NexusHeadlessControlCodec.envelope(envelope)], error: envelope.error?.message)
+            } catch {
+                return .init(ok: false, result: [:], error: error.localizedDescription)
+            }
+        case "connect-enable":
+            guard let value = request.arguments["value"], let enabled = Bool(value) else {
+                return .init(ok: false, result: [:], error: "Use true or false.")
+            }
+            connectController.setEnabled(enabled)
+            return .init(ok: true, result: ["enabled": String(connectController.enabled)], error: nil)
+        case "connect-role":
+            guard let value = request.arguments["value"], let role = NexusConnectRole(rawValue: value) else {
+                return .init(ok: false, result: [:], error: "Use client or studioHost.")
+            }
+            connectController.setRole(role)
+            return .init(ok: true, result: ["role": role.rawValue], error: nil)
+        case "connect-route":
+            guard let value = request.arguments["value"]?.lowercased() else {
+                return .init(ok: false, result: [:], error: "Use automatic, local, or node:<UUID>.")
+            }
+            let route: NexusModelRoute
+            if value == "automatic" { route = .automatic }
+            else if value == "local" || value == "thismac" { route = .thisMac }
+            else if value.hasPrefix("node:"), let nodeID = UUID(uuidString: String(value.dropFirst("node:".count))) { route = .pairedNode(nodeID) }
+            else { return .init(ok: false, result: [:], error: "Use automatic, local, or node:<UUID>.") }
+            connectController.setModelRoute(route)
+            return .init(ok: true, result: ["route": route.id], error: nil)
+        case "prompt":
+            guard let text = request.arguments["text"]?.trimmingCharacters(in: .whitespacesAndNewlines), !text.isEmpty else {
+                return .init(ok: false, result: [:], error: "Missing prompt text.")
+            }
+            if settings.shareScreenWithVisionModels,
+               modelDownloadViewModel.activeModelSupportsImageInput,
+               !NexusScreenCapture.hasAccess {
+                return .init(ok: false, result: [:], error: "Screen Recording is required by the active vision model. Run nexusctl permission-open screen-recording, or use nexusctl settings-set screen-sharing false for a text-only test.")
+            }
+            let priorAnswer = answer
+            await submitTypedPrompt(text)
+            for _ in 0..<1_500 {
+                if !responseIsStreaming, !answer.isEmpty, answer != priorAnswer {
+                    return .init(ok: true, result: ["answer": answer, "transcript": transcript], error: nil)
+                }
+                try? await Task.sleep(for: .milliseconds(120))
+            }
+            return .init(ok: false, result: ["transcript": transcript], error: "Nexus did not finish within 180 seconds.")
+        default:
+            return .init(ok: false, result: [:], error: "Unknown command \(request.command).")
+        }
+    }
+
+    private func waitForHeadlessTools(action: String? = nil) async -> Bool {
+        for _ in 0..<250 {
+            let manifests = await computerRegistry.manifests()
+            if !manifests.isEmpty,
+               (action == nil || manifests.contains(where: { $0.actionID == action })) {
+                return true
+            }
+            try? await Task.sleep(for: .milliseconds(120))
+        }
+        return false
     }
 
     private func submitFinalizedPrompt() async {
@@ -2808,6 +3005,15 @@ enum NexusTCCService: String, CaseIterable {
         case .screenCapture: "Screen Recording"
         }
     }
+
+    static func cliService(_ raw: String) -> Self? {
+        switch raw.lowercased().replacingOccurrences(of: "_", with: "-") {
+        case "input-monitoring", "inputmonitoring", "listen-event": .listenEvent
+        case "accessibility": .accessibility
+        case "screen-recording", "screenrecording", "screen-capture": .screenCapture
+        default: nil
+        }
+    }
 }
 
 /// TCC's System Settings rows are labels, not proof that macOS authorizes the
@@ -2868,6 +3074,12 @@ final class NexusPermissionHealth: ObservableObject {
             ? "Cleared denied Nexus records. Grant each listed permission once."
             : "macOS could not clear one or more Nexus permission records."
         openSettings(for: denied.first)
+    }
+
+    func openPermissionSettings(for service: NexusTCCService) {
+        refresh()
+        openSettings(for: service)
+        statusMessage = "Open \(service.displayName) in System Settings, enable Nexus, then run nexusctl permissions to verify the running app."
     }
 
     private func reset(_ services: [NexusTCCService]) -> Bool {
