@@ -38,7 +38,7 @@ struct NexusSecureVaultOnboardingView: View {
                     isWorking = true
                     defer { isWorking = false }
                     do {
-                        try NexusUnifiedKeychainVault.shared.prepare()
+                        _ = try NexusUnifiedKeychainVault.shared.prepare()
                         onComplete()
                     } catch {
                         message = "Keychain setup did not finish: \(error.localizedDescription)"
@@ -401,8 +401,10 @@ private struct NexusExperienceSettingsPage: View {
                                 .foregroundStyle(NexusUnifiedKeychainVault.shared.isConfigured ? .green : .orange)
                             Button(NexusUnifiedKeychainVault.shared.isConfigured ? "Re-authorize" : "Set up once") {
                                 do {
-                                    try NexusUnifiedKeychainVault.shared.prepare()
-                                    secureVaultMessage = "Secure vault is ready — future Nexus secrets use one Keychain item"
+                                    let migration = try NexusUnifiedKeychainVault.shared.prepare()
+                                    secureVaultMessage = migration.skippedServices == 0
+                                        ? "Secure vault is ready — migrated \(migration.copiedEntries) existing Nexus entries"
+                                        : "Migrated \(migration.copiedEntries) entries; \(migration.skippedServices) protected service(s) will retry when available"
                                 } catch {
                                     secureVaultMessage = "Setup needs macOS Keychain authorization: \(error.localizedDescription)"
                                 }

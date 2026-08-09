@@ -115,6 +115,14 @@ final class NexusUnifiedKeychainVault: @unchecked Sendable {
 
     private static let service = "na.nexus.secure-vault"
     private static let account = "secrets.v1"
+    private static let legacyServices = [
+        "na.nexus.connect",
+        "na.nexus.model-provider",
+        "na.nexus.managed-inference",
+        "na.nexus.nex-cli",
+        "na.nexus.connectors.registration",
+        "na.nexus.connectors.oauth"
+    ]
     private let lock = NSLock()
 
     private init() {}
@@ -123,9 +131,36 @@ final class NexusUnifiedKeychainVault: @unchecked Sendable {
         lock.withLock { (try? read()) != nil }
     }
 
-    func prepare() throws {
+    /// Consolidates every currently-known Nexus service and account into the
+    /// shared record. Legacy items are deliberately left untouched: the copy
+    /// is verified before use and the originals remain a rollback path.
+    @discardableResult
+    func prepare() throws -> NexusKeychainMigrationReport {
         try lock.withLock {
-            if try read() == nil { try write([:]) }
+            var values = try read() ?? [:]
+            var copied = 0
+            var skippedServices = 0
+            for legacyService in Self.legacyServices {
+                do {
+                    for (account, data) in try legacyEntries(service: legacyService) {
+                        let entryKey = key(legacyService, account)
+                        guard values[entryKey] == nil else { continue }
+                        values[entryKey] = data.base64EncodedString()
+                        copied += 1
+                    }
+                } catch {
+                    // One old ACL must not prevent the rest of the user's
+                    // credentials from moving. The unchanged source item can
+                    // still migrate later when macOS permits access.
+                    skippedServices += 1
+                }
+            }
+            try write(values)
+            let verified = try read() ?? [:]
+            guard verified == values else {
+                throw NexusConnectError.unavailable("Nexus secure vault verification failed")
+            }
+            return .init(copiedEntries: copied, skippedServices: skippedServices)
         }
     }
 
@@ -156,6 +191,31 @@ final class NexusUnifiedKeychainVault: @unchecked Sendable {
     }
 
     private func key(_ service: String, _ account: String) -> String { "\(service)\u{1F}\(account)" }
+
+    private func legacyEntries(service: String) throws -> [(String, Data)] {
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service,
+            kSecReturnAttributes as String: true,
+            kSecReturnData as String: true,
+            kSecMatchLimit as String: kSecMatchLimitAll
+        ]
+        var result: CFTypeRef?
+        let status = SecItemCopyMatching(query as CFDictionary, &result)
+        if status == errSecItemNotFound { return [] }
+        guard status == errSecSuccess else {
+            throw NexusConnectError.unavailable("Keychain migration read failed (\(status))")
+        }
+        let items: [[String: Any]]
+        if let array = result as? [[String: Any]] { items = array }
+        else if let item = result as? [String: Any] { items = [item] }
+        else { return [] }
+        return items.compactMap { item in
+            guard let account = item[kSecAttrAccount as String] as? String,
+                  let data = item[kSecValueData as String] as? Data else { return nil }
+            return (account, data)
+        }
+    }
 
     private func read() throws -> [String: String]? {
         var query = baseQuery
@@ -194,6 +254,11 @@ final class NexusUnifiedKeychainVault: @unchecked Sendable {
             kSecAttrAccount as String: Self.account
         ]
     }
+}
+
+struct NexusKeychainMigrationReport: Sendable {
+    let copiedEntries: Int
+    let skippedServices: Int
 }
 
 final class NexusMemorySecretStore: NexusSecretStore, @unchecked Sendable {
