@@ -9,6 +9,50 @@ enum Nexus3DLayout {
     static let connectDeviceCameraDistance: Float = 4.52
 }
 
+/// First-run security setup. The password prompt, when macOS needs one, is
+/// owned by Keychain—not Nexus—so the app never sees or retains a Mac login
+/// password. Completing this creates the one Nexus-owned Keychain record that
+/// contains all future Nexus secrets.
+struct NexusSecureVaultOnboardingView: View {
+    let onComplete: () -> Void
+    @State private var message = "Authorize Nexus once to protect all of its credentials."
+    @State private var isWorking = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 18) {
+            Image(systemName: "lock.shield.fill")
+                .font(.system(size: 34, weight: .semibold))
+                .foregroundStyle(.tint)
+            Text("Set up Nexus security")
+                .font(.title2.weight(.bold))
+            Text("Nexus keeps API keys, connected accounts, pairing material, and its local worker credential in one secure macOS Keychain record. macOS may ask you to authorize it once. Nexus never asks for, sees, or saves your Mac password.")
+                .font(.body)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            Text(message)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            HStack {
+                Spacer()
+                Button("Set up secure vault") {
+                    isWorking = true
+                    defer { isWorking = false }
+                    do {
+                        try NexusUnifiedKeychainVault.shared.prepare()
+                        onComplete()
+                    } catch {
+                        message = "Keychain setup did not finish: \(error.localizedDescription)"
+                    }
+                }
+                .keyboardShortcut(.defaultAction)
+                .disabled(isWorking)
+            }
+        }
+        .padding(28)
+        .frame(width: 500, height: 290, alignment: .topLeading)
+    }
+}
+
 struct ModelAggregatorView: View {
     @ObservedObject var viewModel: ModelDownloadViewModel
     @ObservedObject var connect: NexusConnectController
@@ -271,6 +315,9 @@ private struct NexusExperienceSettingsPage: View {
     @ObservedObject private var permissionHealth = NexusPermissionHealth.shared
     @State private var piperVoices: [PiperVoice] = []
     @State private var isImportingPiperVoice = false
+    @State private var secureVaultMessage = NexusUnifiedKeychainVault.shared.isConfigured
+        ? "Secure vault is ready"
+        : "Finish setup once to consolidate Nexus credentials"
 
     var body: some View {
         ScrollView {
@@ -345,6 +392,29 @@ private struct NexusExperienceSettingsPage: View {
                     Toggle("Hold Globe/Fn to dictate", isOn: $settings.globalPasteDictationEnabled)
                         .toggleStyle(.switch)
                         .help("Hold Globe/Fn in any editable field, then release to paste clean dictation.")
+                }
+                NexusHairline(axis: .horizontal)
+                NexusSettingsLine(label: "Secure vault") {
+                    VStack(alignment: .trailing, spacing: 7) {
+                        HStack(spacing: 8) {
+                            Image(systemName: NexusUnifiedKeychainVault.shared.isConfigured ? "lock.fill" : "lock.badge.plus")
+                                .foregroundStyle(NexusUnifiedKeychainVault.shared.isConfigured ? .green : .orange)
+                            Button(NexusUnifiedKeychainVault.shared.isConfigured ? "Re-authorize" : "Set up once") {
+                                do {
+                                    try NexusUnifiedKeychainVault.shared.prepare()
+                                    secureVaultMessage = "Secure vault is ready — future Nexus secrets use one Keychain item"
+                                } catch {
+                                    secureVaultMessage = "Setup needs macOS Keychain authorization: \(error.localizedDescription)"
+                                }
+                            }
+                        }
+                        Text(secureVaultMessage)
+                            .font(.system(size: 10.5, weight: .medium))
+                            .foregroundStyle(.secondary)
+                            .multilineTextAlignment(.trailing)
+                            .frame(maxWidth: 390, alignment: .trailing)
+                    }
+                    .help("macOS may ask you to authorize Nexus once. Nexus never stores your Mac password; its own credentials are consolidated into one Keychain record.")
                 }
                 NexusHairline(axis: .horizontal)
                 NexusSettingsLine(label: "Hotkey access") {

@@ -72,6 +72,7 @@ final class NexusAppDelegate: NSObject, NSApplicationDelegate {
     private var menuBarItem: NSStatusItem?
     private var menuBarOrbView: NSHostingView<NexusMenuBarOrb>?
     private var automationWindow: NSWindow?
+    private var secureVaultOnboardingWindow: NSWindow?
     private var connectHost: NexusConnectHostDaemon?
     private var nexCLIHost: NexCLIHostDaemon?
     private var headlessControlHost: NexusHeadlessControlHost?
@@ -226,6 +227,7 @@ final class NexusAppDelegate: NSObject, NSApplicationDelegate {
             notch.install()
             headlessControlHost.attach(controller: notch)
             self?.installMenuBarOrb(for: notch)
+            self?.presentSecureVaultOnboardingIfNeeded()
             // The optional legacy NexCLI worker uses Keychain credentials and
             // can legitimately wait for macOS. It must never delay the live
             // Notch controller or its in-process nexusctl host.
@@ -280,6 +282,29 @@ final class NexusAppDelegate: NSObject, NSApplicationDelegate {
 
     @objc private func openNexusFromMenuBar() {
         notch?.openModelAggregator()
+    }
+
+    private func presentSecureVaultOnboardingIfNeeded() {
+        guard !NexusUnifiedKeychainVault.shared.isConfigured,
+              secureVaultOnboardingWindow == nil else { return }
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 500, height: 290),
+            styleMask: [.titled, .closable],
+            backing: .buffered,
+            defer: false
+        )
+        window.title = "Set up Nexus security"
+        window.isReleasedWhenClosed = false
+        window.contentView = NSHostingView(
+            rootView: NexusSecureVaultOnboardingView { [weak self, weak window] in
+                window?.close()
+                self?.secureVaultOnboardingWindow = nil
+            }
+        )
+        window.center()
+        window.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
+        secureVaultOnboardingWindow = window
     }
 
     /// Xcode can launch a new debug build while the previous accessory app is
@@ -1141,6 +1166,11 @@ final class NotchController: ObservableObject {
             await submitTypedPrompt(text)
             for _ in 0..<1_500 {
                 if !responseIsStreaming, !answer.isEmpty, answer != priorAnswer {
+                    // Tool lifecycle events travel through the same async bus
+                    // that powers the notch.  Let its main-actor consumer
+                    // drain before returning a headless reply; otherwise a
+                    // very fast model answer can beat its own tool receipt.
+                    try? await Task.sleep(for: .milliseconds(180))
                     return .init(ok: true, result: [
                         "answer": answer,
                         "transcript": transcript,

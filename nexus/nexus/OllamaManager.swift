@@ -94,6 +94,11 @@ final class OllamaManager: @unchecked Sendable {
     /// especially with native reasoning enabled. This is deliberately far
     /// beyond normal model work; user cancellation remains immediate.
     static let inferenceRequestTimeout: TimeInterval = 7 * 24 * 60 * 60
+    /// Tool selection is a short advisory pass.  It must never inherit the
+    /// effectively-unbounded answer timeout, otherwise a model that stalls
+    /// before its first tool token can leave both the notch and nexus CLI in
+    /// the thinking state indefinitely.
+    static let toolPlanningRequestTimeout: TimeInterval = 18
 
     private let session: URLSession
     private let fileManager: FileManager
@@ -359,7 +364,7 @@ final class OllamaManager: @unchecked Sendable {
 
         var request = URLRequest(url: Self.serverURL.appendingPathComponent("api/chat"))
         request.httpMethod = "POST"
-        request.timeoutInterval = Self.inferenceRequestTimeout
+        request.timeoutInterval = Self.toolPlanningRequestTimeout
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.httpBody = try JSONEncoder().encode(
             OllamaToolPlanningRequest(
