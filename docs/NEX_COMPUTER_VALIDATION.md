@@ -342,6 +342,42 @@ path-shaped input, then verifies a natural build request ranks Xcode first.
 
 Focused `NexComputerToolSearchTests` and the live Debug-host rebuild passed.
 
+## 2026-08-10 VS Code generated-file workflow (GPT-OSS-20B)
+
+The planner model was local `gpt-oss:latest` (GPT-OSS 20B). The only edited
+target was the generated `.build/validation-fixtures/VSCODE_ROUTING_PROOF.md`.
+It began with `STATUS: PENDING`, and remains retained as a test artifact with
+`STATUS: VERIFIED`; no user or source-controlled file was edited or deleted.
+
+| Prompt / operation | Expected / selected action | Result | Latency | Status |
+|---|---|---|---:|---|
+| `In the generated proof file at …/VSCODE_ROUTING_PROOF.md, replace STATUS: PENDING with STATUS: VERIFIED.` before path-schema repair | `vscode.edit_file` | VS Code did not declare its absolute file/workspace contracts, so path-capable Finder and unrelated status actions crowded it from the narrow model allowlist. GPT-OSS emitted no action. | 2.7 s plan | FAIL / fixed |
+| Same exact comma-bearing prompt after the schema repair, before segmentation repair | `vscode.edit_file` | The commas were incorrectly treated as separate independent clauses, splitting the path from the replacement intent. The live allowlist still omitted VS Code and no file operation occurred. | 6.2 s plan | FAIL / fixed |
+| Same exact comma-bearing prompt after both repairs | `vscode.edit_file` | GPT-OSS selected the action with the exact space-containing path, old/new text, and `replace_all: true`. The 3 ms immutable preview was approved and returned the exact one-line diff. | 4.8 s plan; 3 ms preview; 15 ms run | PASS after fix |
+| `Search the generated validation workspace at …/.build/validation-fixtures for STATUS: VERIFIED.` | `vscode.search_workspace` | GPT-OSS selected the bounded workspace search and the live result found the expected line 3 in the generated proof file. | 2.4 s plan; 11 ms run | PASS |
+| `Open the generated validation workspace at …/.build/validation-fixtures in VS Code.` | `vscode.open_project` | GPT-OSS selected project-open with the exact generated directory; VS Code opened it. A following `vscode.get_active_workspace` returned the same path. | 2.2 s plan; 6,579 ms open; 0 ms workspace read | PASS |
+| `Open the generated proof file at …/VSCODE_ROUTING_PROOF.md at line 3 in VS Code.` | `vscode.open_file` | GPT-OSS selected the exact file and line; the live action opened it. | 2.3 s plan; 1,207 ms run | PASS |
+| `Open Visual Studio Code.` | `vscode.open` | GPT-OSS selected the dedicated activation action, which completed successfully. | 1.7 s plan; 42 ms run | PASS |
+| `Show the VS Code command palette.` | `vscode.run_command` with `workbench.action.showCommands` | GPT-OSS selected the command from the action schema’s safe allowlist. The 2 ms immutable confirmation was approved and the command URL completed. | 2.0 s plan; 2 ms preview; 33 ms run | PASS (headless) |
+
+### Defects fixed in this increment
+
+1. VS Code actions now declare their absolute project, source-file, workspace,
+   and edit-target contracts. This is model-facing schema metadata, so the
+   generic structural ranker can compare any action that declares a local
+   target; it does not route by app name or prompt keyword.
+2. Semantic retrieval no longer splits a request at a comma or simple `and`
+   after it contains an absolute path. Those tokens normally continue the
+   same operation’s arguments; explicit `then`, `also`, and semicolons still
+   introduce separate actions. Non-path compound requests retain their normal
+   comma/conjunction splitting. A regression includes competing Finder and
+   status actions and asserts the complete file-replacement request retrieves
+   the editor action first.
+
+Focused `NexComputerToolSearchTests` and `NexComputerExtendedActionTests`,
+plus the live Debug-host rebuild, passed. Computer Use visual inspection is
+pending only because the local Mac is locked; no bypass was attempted.
+
 ## 2026-08-09 local Git initialization capability (GPT-OSS-20B)
 
 The Git catalog previously exposed only actions that require an existing
