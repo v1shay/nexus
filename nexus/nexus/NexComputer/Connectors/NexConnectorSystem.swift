@@ -159,6 +159,17 @@ actor NexConnectorManager {
         }
     }
 
+    /// Registers the complete connector surface without reading OAuth tokens.
+    /// Headless discovery, planning, and dry-runs must never block behind a
+    /// Keychain ACL or an authentication sheet just to determine which tool
+    /// names exist. The live app reloads stored connections separately before
+    /// it executes an account-bound action.
+    func registerDisconnectedCapabilities(on registry: NexComputerRegistry) async throws {
+        for provider in NexConnectorProvider.allCases where provider.supportsUserConnection {
+            try await apply(.disconnected(provider), to: registry)
+        }
+    }
+
     func pendingRequest(id: UUID) async -> NexConnectorPendingRequest? { await pendingStore.request(id: id) }
 
     /// Returns the exact saved action and arguments. The caller must feed this
