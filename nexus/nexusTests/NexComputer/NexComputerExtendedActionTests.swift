@@ -71,8 +71,80 @@ final class NexComputerExtendedActionTests: XCTestCase {
     func testCodexCatalogPreservesSpecializedActionFamily() async throws {
         let tools = NexToolRegistry(), computer = NexComputerRegistry(toolRegistry: tools, permissionManager: NexComputerPermissionManager(backend: AuthorizedPermissions()))
         try await NexCodexActionCatalog(provider: MockCodexProvider()).register(on: computer)
-        let names = Set(await tools.definitions().map(\.name))
+        let definitions = await tools.definitions()
+        let names = Set(definitions.map(\.name))
         XCTAssertTrue(Set(["codex.open", "codex.start_task", "codex.continue_task", "codex.get_status", "codex.cancel_task", "codex.open_session"]).isSubset(of: names))
+        let prompt = try XCTUnwrap(definitions.first(where: { $0.name == "codex.continue_task" })?.schema.fields["prompt"])
+        XCTAssertTrue(prompt.required)
+        XCTAssertTrue(prompt.description?.contains("Complete non-empty instruction") == true)
+    }
+
+    func testCodexReportsOnlyChangesInsideTheRequestedWorkspace() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let workspace = root.appendingPathComponent("generated-workspace", isDirectory: true)
+        try FileManager.default.createDirectory(at: workspace, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let git = NexGitHubCLIProvider()
+        _ = try await git.git(["init", "-q"], repository: root)
+        try "pre-existing unrelated change\n".write(
+            to: root.appendingPathComponent("unrelated.txt"),
+            atomically: true,
+            encoding: .utf8
+        )
+
+        let provider = NexCodexCLIProvider(executable: URL(fileURLWithPath: "/usr/bin/true"))
+        let snapshot = try await provider.run(
+            prompt: "Report the workspace contents without changes.",
+            workspace: workspace,
+            sessionID: nil,
+            progress: { _ in }
+        )
+        XCTAssertEqual(snapshot.status, "completed")
+        XCTAssertTrue(snapshot.filesChanged.isEmpty)
+    }
+
+    func testCodexDoesNotExposeRawCommandOutputAsATestSummary() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let workspace = root.appendingPathComponent("workspace", isDirectory: true)
+        let fixture = root.appendingPathComponent("codex-fixture")
+        try FileManager.default.createDirectory(at: workspace, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let output = #"{"type":"item.completed","item":{"aggregated_output":" M ../../nexus/nexusTests/Example.swift"}}"#
+        try "#!/bin/sh\nprintf '%s\\n' '\(output)'\n".write(to: fixture, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: fixture.path)
+
+        let provider = NexCodexCLIProvider(executable: fixture)
+        let snapshot = try await provider.run(
+            prompt: "Report the workspace contents without changes.",
+            workspace: workspace,
+            sessionID: nil,
+            progress: { _ in }
+        )
+        XCTAssertTrue(snapshot.testSummary.isEmpty)
+    }
+
+    func testCodexStartExposesAStableSessionThatCanBeCancelled() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let workspace = root.appendingPathComponent("workspace", isDirectory: true)
+        let fixture = root.appendingPathComponent("codex-fixture")
+        try FileManager.default.createDirectory(at: workspace, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        try "#!/bin/sh\nprintf '%s\\n' '{\"type\":\"thread.started\",\"thread_id\":\"stable-session\"}'\nsleep 30\n".write(to: fixture, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: fixture.path)
+
+        let provider = NexCodexCLIProvider(executable: fixture)
+        let started = try await provider.start(
+            prompt: "Wait without changing this generated workspace.",
+            workspace: workspace,
+            sessionID: nil,
+            progress: { _ in }
+        )
+        XCTAssertEqual(started.sessionID, "stable-session")
+        XCTAssertEqual(started.status, "running")
+        try await provider.cancel(sessionID: started.sessionID)
+        let cancelled = await provider.status(sessionID: started.sessionID)
+        XCTAssertEqual(cancelled?.status, "cancelled")
     }
 
     func testObsidianWritesAreAtomicSearchableAndTraversalSafe() async throws {
@@ -576,6 +648,7 @@ final class NexComputerExtendedActionTests: XCTestCase {
 
 private actor MockCodexProvider: NexCodexProviding {
     func open() async throws {}
+    func start(prompt: String, workspace: URL, sessionID: String?, progress: @escaping @Sendable (String) async -> Void) async throws -> NexCodexTaskSnapshot { await progress("Started"); return .init(sessionID: sessionID ?? "codex-session", status: "running", finalText: "", filesChanged: [], testSummary: "", error: nil) }
     func run(prompt: String, workspace: URL, sessionID: String?, progress: @escaping @Sendable (String) async -> Void) async throws -> NexCodexTaskSnapshot { await progress("Writing files"); return .init(sessionID: sessionID ?? "codex-session", status: "completed", finalText: "Done", filesChanged: ["App.swift"], testSummary: "1 passed", error: nil) }
     func status(sessionID: String) async -> NexCodexTaskSnapshot? { .init(sessionID: sessionID, status: "completed", finalText: "Done", filesChanged: [], testSummary: "", error: nil) }
     func cancel(sessionID: String) async throws {}

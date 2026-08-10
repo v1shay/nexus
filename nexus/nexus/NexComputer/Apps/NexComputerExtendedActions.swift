@@ -498,6 +498,7 @@ struct NexCodexTaskSnapshot: Equatable, Sendable {
 
 protocol NexCodexProviding: Sendable {
     func open() async throws
+    func start(prompt: String, workspace: URL, sessionID: String?, progress: @escaping @Sendable (String) async -> Void) async throws -> NexCodexTaskSnapshot
     func run(prompt: String, workspace: URL, sessionID: String?, progress: @escaping @Sendable (String) async -> Void) async throws -> NexCodexTaskSnapshot
     func status(sessionID: String) async -> NexCodexTaskSnapshot?
     func cancel(sessionID: String) async throws
@@ -520,9 +521,25 @@ enum NexCodexError: LocalizedError {
 }
 
 actor NexCodexCLIProvider: NexCodexProviding {
+    private struct WorkspaceFileSignature: Equatable, Sendable {
+        let size: Int
+        let modifiedAt: Date
+    }
+
+    private struct TaskRun {
+        let process: Process
+        let pipe: Pipe
+        let outputURL: URL
+        let fallbackID: String
+        let suppliedSessionID: String?
+        let workspace: URL
+        let filesBeforeRun: [String: WorkspaceFileSignature]
+    }
+
     private let executable: URL?
     private var snapshots: [String: NexCodexTaskSnapshot] = [:]
     private var running: [String: Process] = [:]
+    private var cancelledSessionIDs: Set<String> = []
     init(executable: URL? = NexCodexCLIProvider.discoverExecutable()) { self.executable = executable }
 
     func open() async throws {
@@ -530,12 +547,33 @@ actor NexCodexCLIProvider: NexCodexProviding {
         _ = try await NSWorkspace.shared.openApplication(at: app, configuration: .init())
     }
 
+    /// Starts a task as soon as Codex emits its real stable thread ID. The
+    /// collector remains alive in this provider so status and cancellation are
+    /// useful while the CLI is still working instead of only after it exits.
+    func start(prompt: String, workspace: URL, sessionID: String?, progress: @escaping @Sendable (String) async -> Void) async throws -> NexCodexTaskSnapshot {
+        let task = try launch(prompt: prompt, workspace: workspace, sessionID: sessionID)
+        return await withCheckedContinuation { continuation in
+            Task {
+                _ = await self.collect(task, progress: progress) { snapshot in
+                    continuation.resume(returning: snapshot)
+                }
+            }
+        }
+    }
+
     func run(prompt: String, workspace: URL, sessionID: String?, progress: @escaping @Sendable (String) async -> Void) async throws -> NexCodexTaskSnapshot {
+        let task = try launch(prompt: prompt, workspace: workspace, sessionID: sessionID)
+        let snapshot = await collect(task, progress: progress, onStarted: nil)
+        if let failure = snapshot.error { throw NexCodexError.failed(failure) }
+        return snapshot
+    }
+
+    private func launch(prompt: String, workspace: URL, sessionID: String?) throws -> TaskRun {
         guard let executable else { throw NexCodexError.unavailable }
         var isDirectory: ObjCBool = false
         guard FileManager.default.fileExists(atPath: workspace.path, isDirectory: &isDirectory), isDirectory.boolValue else { throw NexCodexError.invalidWorkspace }
+        let filesBeforeRun = Self.workspaceFileSnapshot(in: workspace)
         let outputURL = FileManager.default.temporaryDirectory.appendingPathComponent("nex-codex-\(UUID().uuidString).txt")
-        defer { try? FileManager.default.removeItem(at: outputURL) }
         let fallbackID = sessionID ?? UUID().uuidString.lowercased()
         var arguments: [String]
         if let sessionID {
@@ -549,27 +587,55 @@ actor NexCodexCLIProvider: NexCodexProviding {
         running[fallbackID] = process
         snapshots[fallbackID] = .init(sessionID: fallbackID, status: "running", finalText: "", filesChanged: [], testSummary: "", error: nil)
         try process.run()
-        var resolvedID = fallbackID, transcript = "", testLines: [String] = []
+        return .init(process: process, pipe: pipe, outputURL: outputURL, fallbackID: fallbackID, suppliedSessionID: sessionID, workspace: workspace, filesBeforeRun: filesBeforeRun)
+    }
+
+    private func collect(
+        _ task: TaskRun,
+        progress: @escaping @Sendable (String) async -> Void,
+        onStarted: (@Sendable (NexCodexTaskSnapshot) async -> Void)?
+    ) async -> NexCodexTaskSnapshot {
+        defer { try? FileManager.default.removeItem(at: task.outputURL) }
+        var resolvedID = task.fallbackID, transcript = "", testLines: [String] = []
+        var reportedStart = false
+        func reportStarted(_ id: String) async {
+            guard !reportedStart else { return }
+            reportedStart = true
+            await onStarted?(.init(sessionID: id, status: "running", finalText: "", filesChanged: [], testSummary: "", error: nil))
+        }
+        if let suppliedSessionID = task.suppliedSessionID {
+            resolvedID = suppliedSessionID
+            running[resolvedID] = task.process
+            snapshots[resolvedID] = .init(sessionID: resolvedID, status: "running", finalText: "", filesChanged: [], testSummary: "", error: nil)
+            await reportStarted(resolvedID)
+        }
         do {
-            for try await line in pipe.fileHandleForReading.bytes.lines {
+            for try await line in task.pipe.fileHandleForReading.bytes.lines {
                 transcript += line + "\n"
                 if let data = line.data(using: .utf8), let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
                     if let id = Self.findString(in: json, keys: ["session_id", "thread_id", "conversation_id"]), !id.isEmpty {
                         resolvedID = id
-                        if running[resolvedID] == nil { running[resolvedID] = process }
+                        if running[resolvedID] == nil { running[resolvedID] = task.process }
+                        snapshots[resolvedID] = .init(sessionID: resolvedID, status: "running", finalText: "", filesChanged: [], testSummary: "", error: nil)
+                        await reportStarted(resolvedID)
                     }
-                    if let message = Self.progressMessage(json) { await progress(message) }
+                    if let message = Self.progressMessage(json) {
+                        await progress(message)
+                        if Self.isTestSummaryLine(message) { testLines.append(String(message.prefix(1_000))) }
+                    }
+                } else if Self.isTestSummaryLine(line) {
+                    testLines.append(String(line.prefix(1_000)))
                 }
-                if line.localizedCaseInsensitiveContains("test") || line.contains("BUILD SUCCEEDED") || line.contains("BUILD FAILED") { testLines.append(String(line.prefix(1_000))) }
             }
-        } catch { process.terminate() }
-        process.waitUntilExit(); running[fallbackID] = nil; running[resolvedID] = nil
-        let final = (try? String(contentsOf: outputURL, encoding: .utf8))?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        let files = Self.gitChanges(in: workspace)
-        let failure = process.terminationStatus == 0 ? nil : String(transcript.suffix(2_000))
-        let snapshot = NexCodexTaskSnapshot(sessionID: resolvedID, status: failure == nil ? "completed" : "failed", finalText: final, filesChanged: files, testSummary: testLines.suffix(20).joined(separator: "\n"), error: failure)
-        snapshots[resolvedID] = snapshot; if resolvedID != fallbackID { snapshots[fallbackID] = snapshot }
-        if let failure { throw NexCodexError.failed(failure) }
+        } catch { task.process.terminate() }
+        task.process.waitUntilExit(); running[task.fallbackID] = nil; running[resolvedID] = nil
+        let final = (try? String(contentsOf: task.outputURL, encoding: .utf8))?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let files = Self.workspaceChanges(from: task.filesBeforeRun, to: Self.workspaceFileSnapshot(in: task.workspace))
+        let cancelled = cancelledSessionIDs.remove(resolvedID) != nil || cancelledSessionIDs.remove(task.fallbackID) != nil
+        let failure = task.process.terminationStatus == 0 || cancelled ? nil : String(transcript.suffix(2_000))
+        let snapshot = NexCodexTaskSnapshot(sessionID: resolvedID, status: cancelled ? "cancelled" : (failure == nil ? "completed" : "failed"), finalText: final, filesChanged: files, testSummary: testLines.suffix(20).joined(separator: "\n"), error: failure)
+        snapshots[resolvedID] = snapshot; if resolvedID != task.fallbackID { snapshots[task.fallbackID] = snapshot }
+        await reportStarted(resolvedID)
         return snapshot
     }
 
@@ -578,6 +644,7 @@ actor NexCodexCLIProvider: NexCodexProviding {
         guard let process = running[sessionID], process.isRunning else { throw NexCodexError.unknownSession }
         process.interrupt(); try? await Task.sleep(for: .milliseconds(400)); if process.isRunning { process.terminate() }
         running[sessionID] = nil
+        cancelledSessionIDs.insert(sessionID)
         let prior = snapshots[sessionID]
         snapshots[sessionID] = .init(sessionID: sessionID, status: "cancelled", finalText: prior?.finalText ?? "", filesChanged: prior?.filesChanged ?? [], testSummary: prior?.testSummary ?? "", error: nil)
     }
@@ -586,10 +653,42 @@ actor NexCodexCLIProvider: NexCodexProviding {
     nonisolated static func discoverExecutable() -> URL? {
         ["/opt/homebrew/bin/codex", "/usr/local/bin/codex", "/Applications/Codex.app/Contents/Resources/codex"].map(URL.init(fileURLWithPath:)).first { FileManager.default.isExecutableFile(atPath: $0.path) }
     }
-    private static func gitChanges(in workspace: URL) -> [String] {
-        let process = Process(), pipe = Pipe(); process.executableURL = URL(fileURLWithPath: "/usr/bin/git"); process.arguments = ["-C", workspace.path, "status", "--porcelain=v1"]; process.standardOutput = pipe; process.standardError = FileHandle.nullDevice
-        guard (try? process.run()) != nil else { return [] }; process.waitUntilExit()
-        return (String(data: pipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? "").split(separator: "\n").map { String($0.dropFirst(min(3, $0.count))) }
+    private static func workspaceFileSnapshot(in workspace: URL) -> [String: WorkspaceFileSignature] {
+        let root = workspace.standardizedFileURL.resolvingSymlinksInPath()
+        guard let enumerator = FileManager.default.enumerator(
+            at: root,
+            includingPropertiesForKeys: [.isRegularFileKey, .fileSizeKey, .contentModificationDateKey],
+            options: [.skipsPackageDescendants]
+        ) else { return [:] }
+        var files: [String: WorkspaceFileSignature] = [:]
+        for case let file as URL in enumerator {
+            let relativePath = String(file.standardizedFileURL.path.dropFirst(root.path.count + 1))
+            guard !relativePath.split(separator: "/").contains(".git"),
+                  let values = try? file.resourceValues(forKeys: [.isRegularFileKey, .fileSizeKey, .contentModificationDateKey]),
+                  values.isRegularFile == true else { continue }
+            files[relativePath] = .init(
+                size: values.fileSize ?? 0,
+                modifiedAt: values.contentModificationDate ?? .distantPast
+            )
+        }
+        return files
+    }
+
+    private static func workspaceChanges(
+        from before: [String: WorkspaceFileSignature],
+        to after: [String: WorkspaceFileSignature]
+    ) -> [String] {
+        Set(before.keys).union(after.keys)
+            .filter { before[$0] != after[$0] }
+            .sorted()
+    }
+
+    private static func isTestSummaryLine(_ text: String) -> Bool {
+        let normalized = text.lowercased()
+        return [
+            "test suite", "test case", "test succeeded", "test failed",
+            "tests passed", "tests failed", "build succeeded", "build failed"
+        ].contains { normalized.contains($0) }
     }
     private static func findString(in value: Any, keys: Set<String>) -> String? {
         if let dictionary = value as? [String: Any] {
@@ -612,11 +711,23 @@ actor NexCodexActionCatalog {
         guard !registered else { return }; let provider = provider
         try await registry.register(manifest: Self.manifest("codex.open", "Open the installed Codex application for visual review.", ["Open Codex"], [:])) { _, _ in try await provider.open(); return Self.result(display: "Opened Codex.") }
         for (id, description) in [("codex.start_task", "Start a persisted Codex task in an exact workspace and stream its real JSONL progress."), ("codex.continue_task", "Continue an existing stable Codex session with a new prompt and stream progress.")] {
-            var fields: [String: NexToolFieldSchema] = ["workspace": .init(.string, required: true), "prompt": .init(.string, required: true)]
+            var fields: [String: NexToolFieldSchema] = [
+                "workspace": .init(.string, required: true, description: "Exact existing workspace for this Codex task. Preserve every supplied path segment, including spaces."),
+                "prompt": .init(.string, required: true, description: "Complete non-empty instruction for Codex. Preserve the requested outcome and safety constraints; for a continuation, state the new follow-up work rather than repeating only its session ID or workspace path.")
+            ]
             if id.hasSuffix("continue_task") { fields["session_id"] = .init(.string, required: true) }
             try await registry.register(manifest: Self.manifest(id, description, [id.hasSuffix("continue_task") ? "Continue this Codex session" : "Have Codex implement this task"], fields, risk: .high, confirmation: .always)) { args, context in
-                guard let workspace = args["workspace"]?.string, let prompt = args["prompt"]?.string else { throw NexToolError.missingField("workspace") }
-                let snapshot = try await provider.run(prompt: prompt, workspace: URL(fileURLWithPath: workspace), sessionID: args["session_id"]?.string) { message in await context.reportProgress(message, nil) }
+                guard let workspace = args["workspace"]?.string else { throw NexToolError.missingField("workspace") }
+                guard let prompt = args["prompt"]?.string,
+                      !prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                    throw NexToolError.missingField("prompt")
+                }
+                let snapshot: NexCodexTaskSnapshot
+                if id == "codex.start_task" {
+                    snapshot = try await provider.start(prompt: prompt, workspace: URL(fileURLWithPath: workspace), sessionID: nil) { message in await context.reportProgress(message, nil) }
+                } else {
+                    snapshot = try await provider.run(prompt: prompt, workspace: URL(fileURLWithPath: workspace), sessionID: args["session_id"]?.string) { message in await context.reportProgress(message, nil) }
+                }
                 return Self.result(snapshot: snapshot)
             }
         }

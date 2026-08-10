@@ -63,6 +63,13 @@ final class NexPrimaryToolPlannerTests: XCTestCase {
         )[0].content
         XCTAssertTrue(obsidianInstructions.contains("requested new note"))
         XCTAssertTrue(obsidianInstructions.contains("vault-relative path"))
+
+        let codexInstructions = NexPrimaryToolPlanner.nativePlanningMessages(
+            context: context,
+            tools: tools() + [codexContinuationTool()]
+        )[0].content
+        XCTAssertTrue(codexInstructions.contains("complete, non-empty instruction for Codex"))
+        XCTAssertTrue(codexInstructions.contains("new follow-up work"))
     }
 
     func testPlannerRequiresCapabilityDiscoveryBeforeAnExternalActionIsRefused() {
@@ -594,6 +601,22 @@ final class NexPrimaryToolPlannerTests: XCTestCase {
             iconSystemName: "folder",
             permission: .codeExecution,
             schema: .init(fields: ["name": .init(.string, required: true)])
+        ) { _, _ in .null }
+    }
+
+    private func codexContinuationTool() -> NexRegisteredTool {
+        .init(
+            name: "codex.continue_task",
+            description: "Continue an existing stable Codex session with a new prompt.",
+            statusLabel: "Continuing Codex…",
+            spokenStatus: "Continuing the coding task.",
+            iconSystemName: "terminal",
+            permission: .codeExecution,
+            schema: .init(fields: [
+                "workspace": .init(.string, required: true, description: "Exact existing workspace for this Codex task."),
+                "session_id": .init(.string, required: true),
+                "prompt": .init(.string, required: true, description: "Complete non-empty instruction for Codex.")
+            ])
         ) { _, _ in .null }
     }
 
