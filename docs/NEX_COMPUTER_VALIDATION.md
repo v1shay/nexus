@@ -205,6 +205,23 @@ it does not name any application, force a tool, or add model arguments.
 
 Focused `NexComputerToolSearchTests` and `./scripts/build-nexus.sh` passed.
 
+## 2026-08-09 local Git initialization capability (GPT-OSS-20B)
+
+The Git catalog previously exposed only actions that require an existing
+repository. This safe validation used a folder created solely under
+`.build/validation-fixtures/Git Lifecycle Proof`; no workspace repository or
+remote was targeted. The local planner model was `gpt-oss:latest` (GPT-OSS
+20B).
+
+| Prompt / operation | Expected / selected action | Result | Latency | Status |
+|---|---|---|---:|---|
+| `Initialize a new local Git repository in the disposable folder at …/Git Lifecycle Proof.` before catalog completion | `git.init` | The catalog had no initialization action, so discovery returned branch/status alternatives and GPT-OSS emitted no action. | about 2–3 s planning | FAIL / fixed |
+| Same prompt after adding `git.init` | `git.init` | GPT-OSS selected the new action with the exact disposable directory. Immutable confirmation initialized `.git` with branch `main`; follow-up `git.status` returned the structured initial branch state. | 4,800 ms planning; 3 ms preview; 60 ms confirmed run; 19 ms status read | PASS after fix |
+
+`git.init` accepts only an existing explicit directory and remains
+confirmation-gated. It does not create a remote, configure an upstream, stage
+files, or make a commit.
+
 ## 2026-08-09 recoverable Finder lifecycle (GPT-OSS-20B)
 
 The local planner model was `gpt-oss:latest` (GPT-OSS 20B). This intentionally
