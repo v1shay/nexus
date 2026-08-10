@@ -182,6 +182,18 @@ xcodebuild -quiet -project nexus/nexus.xcodeproj -scheme nexus \
   ** BUILD SUCCEEDED **
 ```
 
+## 2026-08-09 recoverable Finder lifecycle (GPT-OSS-20B)
+
+The local planner model was `gpt-oss:latest` (GPT-OSS 20B). This intentionally
+tested the real high-risk confirmation path only on a folder created for the
+test under `.build/validation-fixtures`; no user file or non-generated folder
+was targeted.
+
+| Prompt / operation | Expected / selected action | Result | Latency | Status |
+|---|---|---|---:|---|
+| `Inside the disposable validation workspace at …, make a folder called Finder Lifecycle Proof for a harmless test artifact.` | `finder.create_folder` | GPT-OSS selected the create action with the specified parent, name, and collision policy. Preflight verified that the exact target did not exist. Confirmation created the one generated folder. | 3,000 ms planning; 1 ms preview; 7 ms confirmed run | PASS |
+| `Move the generated Finder Lifecycle Proof folder at … to Trash now that its harmless test is complete.` | `finder.trash` | GPT-OSS selected `finder.trash` with the exact generated path. A second confirmation moved that folder to macOS Trash. The original workspace path no longer exists; the item is recoverable in Trash. | 2,500 ms planning; 7 ms preview; 24 ms confirmed run | PASS / recoverable cleanup |
+
 ## 2026-08-09 terminal session continuity and live headless bridge (GPT-OSS-20B)
 
 The local planner model was `gpt-oss:latest` (GPT-OSS 20B). The natural
