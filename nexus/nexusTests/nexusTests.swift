@@ -417,6 +417,7 @@ final class NexusGeometryTests: XCTestCase {
         XCTAssertFalse(NexusCloudRoutingPolicy.usesAutomaticCloudChain(apiProviderIsExplicitlyEnabled: false))
     }
 
+    @MainActor
     func testGroqAndOpenRouterArtworkCanRenderAtTextSize() {
         XCTAssertNotNil(ModelBrandArtwork.image(for: .groq))
         XCTAssertNotNil(ModelBrandArtwork.icon(for: .groq, size: 18))
@@ -1352,6 +1353,7 @@ final class NexusGeometryTests: XCTestCase {
         XCTAssertEqual(ModelBrandArtwork.assetURL(for: model("phi-4")).lastPathComponent, "icons8-linux-48.png")
     }
 
+    @MainActor
     func testProviderIconResolverPrefersProviderMetadataAndCoversAPIModels() throws {
         let openAIModel = LocalModel(
             name: "Reasoning model",

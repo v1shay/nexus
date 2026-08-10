@@ -154,9 +154,9 @@ enum ModelProviderResolver {
     }
 }
 
-/// Resolves only the model artwork the user supplied. OpenAI/ChatGPT models
-/// use the supplied `openai.webp` directly, with no app-created tile or
-/// background.
+/// Prefers model artwork supplied alongside the app. If a provider mark is not
+/// available on this Mac, uses a system fallback so a provider selection never
+/// renders as an empty image.
 enum ModelBrandArtwork {
     private static let downloadsDirectory = URL(fileURLWithPath: "/Users/vishayagarwal/Downloads", isDirectory: true)
 
@@ -204,7 +204,7 @@ enum ModelBrandArtwork {
         if identity == .openAI, let data = embeddedChatGPTPNGData {
             return NSImage(data: data)
         }
-        return nil
+        return NSImage(systemSymbolName: fallbackSystemName, accessibilityDescription: nil)
     }
 
     /// AppKit menu items do not consistently honor SwiftUI's resizable frame

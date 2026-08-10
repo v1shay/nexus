@@ -239,7 +239,7 @@ extension NexusGeometryTests {
     }
 
     @MainActor
-    func testNX2PairingSurvivesControllerRestartWithoutAnotherCode() throws {
+    func testNX2PairingSurvivesControllerRestartWithoutAnotherCode() async throws {
         let defaultsName = "NexusConnectNX2Restart.\(UUID().uuidString)"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: defaultsName))
         defer { defaults.removePersistentDomain(forName: defaultsName) }
@@ -266,6 +266,10 @@ extension NexusGeometryTests {
         firstController = nil
 
         let restarted = NexusConnectController(defaults: defaults, secretStore: store)
+        let restoreDeadline = Date().addingTimeInterval(1)
+        while !restarted.isPaired && Date() < restoreDeadline {
+            try await Task.sleep(nanoseconds: 10_000_000)
+        }
         XCTAssertTrue(restarted.isPaired)
         XCTAssertEqual(restarted.pairedNodes.first?.displayName, "Vishay's iMac")
         XCTAssertEqual(restarted.pairedNodes.first?.status, .reconnecting)
