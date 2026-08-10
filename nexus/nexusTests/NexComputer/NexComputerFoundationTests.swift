@@ -13,6 +13,15 @@ final class NexComputerFoundationTests: XCTestCase {
         func current() -> Int { value }
     }
 
+    func testPermissionCLIRecognizesEveryCorePrivacyService() {
+        XCTAssertEqual(NexusTCCService.cliService("input-monitoring"), .listenEvent)
+        XCTAssertEqual(NexusTCCService.cliService("accessibility"), .accessibility)
+        XCTAssertEqual(NexusTCCService.cliService("screen-recording"), .screenCapture)
+        XCTAssertEqual(NexusTCCService.cliService("microphone"), .microphone)
+        XCTAssertEqual(NexusTCCService.cliService("speech-recognition"), .speechRecognition)
+        XCTAssertEqual(NexusTCCService.cliService("full-disk-access"), .fullDiskAccess)
+    }
+
     func testManifestIsVersionedCodableAndRejectsLowLevelActionIDs() throws {
         let manifest = makeManifest()
         try manifest.validate()

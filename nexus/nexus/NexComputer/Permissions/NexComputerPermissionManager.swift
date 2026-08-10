@@ -107,9 +107,19 @@ final class NexComputerSystemPermissionBackend: NexComputerPermissionChecking, @
             // reliably preflight Full Disk Access globally. Check only the
             // exact protected resource needed by a declared action.
             if id == "full_disk_access.messages" {
-                let path = FileManager.default.homeDirectoryForCurrentUser
-                    .appendingPathComponent("Library/Messages/chat.db").path
-                state = FileManager.default.isReadableFile(atPath: path) ? .authorized : .unsupported
+                let url = FileManager.default.homeDirectoryForCurrentUser
+                    .appendingPathComponent("Library/Messages/chat.db")
+                if FileManager.default.isReadableFile(atPath: url.path) {
+                    state = .authorized
+                } else if FileManager.default.fileExists(atPath: url.path) {
+                    // Full Disk Access has no request API and macOS does not
+                    // distinguish "not yet granted" from "denied" here.
+                    // The database exists, so this is an actionable denied
+                    // permission—not an unsupported capability.
+                    state = .denied
+                } else {
+                    state = .unsupported
+                }
             } else {
                 state = .unsupported
             }
