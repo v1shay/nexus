@@ -4,6 +4,11 @@ import Foundation
 enum NexFinderCollisionPolicy: String, Codable, Sendable {
     case error
     case replace
+    /// `overwrite` is the conventional user-facing term for the existing
+    /// replace behavior.  It remains confirmation-gated and never removes a
+    /// nonempty directory, but accepting it keeps native function calls from
+    /// being discarded solely for choosing a natural synonym.
+    case overwrite
     case keepBoth = "keep_both"
 }
 
@@ -181,7 +186,7 @@ actor NexFinderFileService {
         guard fileManager.fileExists(atPath: destination.path) else { return destination }
         switch policy {
         case .error: throw NexFinderError.collision(destination.path)
-        case .replace:
+        case .replace, .overwrite:
             var existingIsDirectory: ObjCBool = false
             if fileManager.fileExists(atPath: destination.path, isDirectory: &existingIsDirectory), existingIsDirectory.boolValue,
                !(try fileManager.contentsOfDirectory(atPath: destination.path)).isEmpty {
@@ -335,7 +340,7 @@ actor NexFinderActionCatalog {
     private static func name(_ arguments: [String: NexJSONValue]) throws -> String { guard let value = arguments["name"]?.string else { throw NexToolError.missingField("name") }; return value }
     private static func policy(_ arguments: [String: NexJSONValue]) throws -> NexFinderCollisionPolicy {
         let raw = arguments["collisionPolicy"]?.string ?? "error"
-        guard let value = NexFinderCollisionPolicy(rawValue: raw) else { throw NexToolError.invalidEnum(field: "collisionPolicy", allowed: ["error", "replace", "keep_both"]) }
+        guard let value = NexFinderCollisionPolicy(rawValue: raw) else { throw NexToolError.invalidEnum(field: "collisionPolicy", allowed: ["error", "replace", "overwrite", "keep_both"]) }
         return value
     }
     private static func date(_ raw: String?) -> Date? { raw.flatMap { ISO8601DateFormatter().date(from: $0) } }
@@ -350,7 +355,7 @@ actor NexFinderActionCatalog {
 
     private static let output = NexToolInputSchema(fields: ["display": .init(.string, required: true), "status": .init(.string, required: true), "paths": .init(.stringArray, required: true), "count": .init(.integer, required: true)])
     private static let finderPermission = [NexComputerPermissionRequirement(id: "automation.com.apple.finder", permission: .automation)]
-    private static let collision = NexToolFieldSchema(.string, allowedValues: ["error", "replace", "keep_both"])
+    private static let collision = NexToolFieldSchema(.string, allowedValues: ["error", "replace", "overwrite", "keep_both"])
     private static let pathInput = NexToolInputSchema(fields: ["path": .init(.string, required: true)])
     private static let openFinderManifest = manifest("finder.activate", "Open or activate Finder.", ["Open Finder"], .init(fields: [:]), .low, .never, [], .nativeAPI)
     private static let searchManifest = manifest("finder.search", "Search an allowed folder by filename, extension, text content, modification date, byte size, and bounded result count.", ["Find PDFs named application", "Search this folder for text"], .init(fields: [

@@ -651,9 +651,50 @@ private struct OllamaToolPlanningRequest: Encodable {
         struct Function: Encodable {
             struct Parameters: Encodable {
                 struct Property: Encodable {
+                    struct Items: Encodable {
+                        let type: String
+                        let enumValues: [String]?
+
+                        enum CodingKeys: String, CodingKey {
+                            case type
+                            case enumValues = "enum"
+                        }
+                    }
+
                     let type: String
+                    let description: String?
                     let enumValues: [String]?
-                    enum CodingKeys: String, CodingKey { case type; case enumValues = "enum" }
+                    let items: Items?
+                    let minimum: Double?
+                    let maximum: Double?
+
+                    enum CodingKeys: String, CodingKey {
+                        case type, description, items, minimum, maximum
+                        case enumValues = "enum"
+                    }
+
+                    init(_ field: NexToolFieldSchema) {
+                        description = field.description
+                        minimum = field.minimum
+                        maximum = field.maximum
+                        switch field.type {
+                        case .stringArray:
+                            type = "array"
+                            enumValues = nil
+                            items = .init(
+                                type: "string",
+                                enumValues: field.allowedValues.isEmpty ? nil : field.allowedValues
+                            )
+                        case .array:
+                            type = "array"
+                            enumValues = nil
+                            items = .init(type: "object", enumValues: nil)
+                        case .string, .integer, .number, .boolean:
+                            type = field.type.rawValue
+                            enumValues = field.allowedValues.isEmpty ? nil : field.allowedValues
+                            items = nil
+                        }
+                    }
                 }
                 let type = "object"
                 let properties: [String: Property]
@@ -670,7 +711,7 @@ private struct OllamaToolPlanningRequest: Encodable {
         init(_ registered: NexRegisteredTool) {
             let activeFields = registered.schema.fields.filter { !$0.value.deprecated }
             let properties = Dictionary(uniqueKeysWithValues: activeFields.map { name, field in
-                (name, Function.Parameters.Property(type: field.type.rawValue, enumValues: field.allowedValues.isEmpty ? nil : field.allowedValues))
+                (name, Function.Parameters.Property(field))
             })
             function = .init(
                 name: registered.name,
