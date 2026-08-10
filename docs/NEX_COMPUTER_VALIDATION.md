@@ -1,6 +1,8 @@
 # Nex Computer Phase 27 Validation
 
-Validated on macOS on 2026-07-22 against the signed Debug build produced by `./scripts/build-nexus.sh`. The live CLI commands below use the same registry, runtime, permission manager, confirmation gateway, connector roster, and executors as Nexus. No real message or email was sent, no call was placed, no purchase or publication occurred, no remote Git push ran, and no personal file was deleted.
+This ledger began on 2026-07-22 and is extended by dated validation increments below. The live CLI commands use the same registry, runtime, permission manager, confirmation gateway, connector roster, and executors as Nexus. No real message or email was sent, no call was placed, no purchase or publication occurred, no remote Git push ran, and no personal file was deleted.
+
+**Current 2026-08-10 snapshot:** 202 catalog actions; 111 pass the live availability probe while Google, GitHub OAuth, Notion, and Slack remain disconnected. The exact prerequisite for every action that cannot currently receive a real-functionality test is in [NEX_TOOL_AUTHORIZATION_MATRIX.md](NEX_TOOL_AUTHORIZATION_MATRIX.md).
 
 ## Environment
 
