@@ -130,6 +130,28 @@ final class NexComputerToolSearchTests: XCTestCase {
         )
     }
 
+    func testOwnerNameReferenceRanksADeclaredOwnerNameSchema() {
+        let application = tool(
+            name: "applications.open",
+            description: "Open an installed application by bundle identifier.",
+            application: "Applications",
+            provider: "LaunchServices",
+            tags: ["open", "application"]
+        )
+        let repository = tool(
+            name: "github.open_repository",
+            description: "Open an exact hosted repository URL or name.",
+            application: "GitHub",
+            provider: "CLI",
+            tags: ["repository"],
+            fields: ["repository": .init(.string, required: true, description: "Exact repository in owner/name form.")]
+        )
+        XCTAssertEqual(
+            search("Open v1shay/nexusV2", [application, repository]).first?.tool,
+            "github.open_repository"
+        )
+    }
+
     func testSemanticCapabilityLookupFindsMessagesForNaturalTextingIntent() {
         let messages = tool(
             name: "messages.draft",

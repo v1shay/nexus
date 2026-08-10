@@ -285,6 +285,36 @@ xcodebuild test -quiet -project nexus/nexus.xcodeproj -scheme nexus \
   ** BUILD SUCCEEDED **
 ```
 
+## 2026-08-10 discovery-audit repository identifier repair (GPT-OSS-20B)
+
+The read-only catalog discovery audit evaluated the first natural-language
+example registered for each of 201 actions. It executes neither tools nor
+connectors. It found 200 matching examples and one failure: the example
+`Open v1shay/nexusV2` for `github.open_repository` tied on the generic verb
+`open` and was offered unrelated generic actions instead.
+
+| Prompt / operation | Expected / selected action | Result | Latency | Status |
+|---|---|---|---:|---|
+| `Open v1shay/nexusV2` — pre-fix read-only discovery audit | `github.open_repository` | The declared action was absent from the three-candidate semantic allowlist. The audit performed no external action. | complete 201-example audit; no action execution | FAIL / fixed |
+| Same prompt after schema-driven retrieval repair | `github.open_repository` | A generic owner/name-pattern check now boosts only tools whose own input-field description declares an `owner/name` contract. Search ranked `github.open_repository` first, and GPT-OSS emitted the exact `repository: v1shay/nexusV2` argument. | 2.6 s search + plan | PASS after fix |
+| Confirmed live action with the GPT-OSS argument | `github.open_repository` | Nexus returned `Opened the GitHub repository.` No repository data was read or changed. The locked desktop prevented visual inspection of the launched browser route, so this is launch evidence only. | 27 ms execution | PASS (launch evidence) |
+
+The repair is generic schema matching, not a hardcoded GitHub route: any
+registered action that describes an `owner/name` input benefits from the same
+structured-identifier evidence.
+
+Focused verification:
+
+```text
+xcodebuild test -quiet -project nexus/nexus.xcodeproj -scheme nexus \
+  -destination 'platform=macOS,arch=arm64,id=00006002-001869AC3489801E' \
+  -only-testing:nexusTests/NexComputerToolSearchTests/testOwnerNameReferenceRanksADeclaredOwnerNameSchema
+  ** TEST SUCCEEDED **
+
+./scripts/build-nexus.sh --run
+  ** BUILD SUCCEEDED **
+```
+
 ## 2026-08-10 isolated Obsidian lifecycle and relative-path retrieval repair (GPT-OSS-20B)
 
 The planner model was local `gpt-oss:latest` (GPT-OSS 20B). Every operation
