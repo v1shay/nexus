@@ -551,7 +551,7 @@ actor NexTerminalActionCatalog {
         examples: ["Run git status in this project", "Print the current directory"],
         input: .init(fields: [
             "executable": .init(.string, required: true, description: "Executable name or allowed absolute executable path."),
-            "arguments": .init(.stringArray, description: "Separate argv entries; never a shell command string."),
+            "arguments": .init(.stringArray, description: "Separate argv entries after executable; never repeat executable or use a shell command string."),
             "workingDirectory": .init(.string, description: "Existing directory under an allowed user or temporary root."),
             "environment": .init(.stringArray, description: "Allowlisted KEY=VALUE entries only.")
         ]), output: processOutput, permissions: [], risk: .high, confirmation: .always, implementation: .nativeAPI

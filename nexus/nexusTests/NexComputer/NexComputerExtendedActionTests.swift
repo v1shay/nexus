@@ -91,6 +91,26 @@ final class NexComputerExtendedActionTests: XCTestCase {
         let result = try await cli.git(["status", "--porcelain=v1"], repository: root); XCTAssertTrue(result.stdout.contains("README.md"))
     }
 
+    func testFinderAcceptsNaturalOverwriteAliasForAFileCollision() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let source = root.appendingPathComponent("source.txt")
+        let destination = root.appendingPathComponent("destination", isDirectory: true)
+        try FileManager.default.createDirectory(at: destination, withIntermediateDirectories: true)
+        try "new".write(to: source, atomically: true, encoding: .utf8)
+        try "old".write(to: destination.appendingPathComponent("source.txt"), atomically: true, encoding: .utf8)
+
+        let files = NexFinderFileService(allowedRoots: [root])
+        let copied = try await files.copy(
+            sourcePath: source.path,
+            destinationDirectory: destination.path,
+            collisionPolicy: .overwrite
+        )
+        XCTAssertEqual(try String(contentsOf: copied), "new")
+        XCTAssertEqual(try String(contentsOf: source), "new")
+    }
+
     func testSystemCatalogExposesExplicitFocusLimitation() async throws {
         let tools = NexToolRegistry(), computer = NexComputerRegistry(toolRegistry: tools, permissionManager: NexComputerPermissionManager(backend: AuthorizedPermissions())); try await NexSystemActionCatalog().register(on: computer)
         let names = Set(await tools.definitions().map(\.name)); XCTAssertTrue(Set(["system.open_setting", "system.get_volume", "system.set_volume", "system.get_display_state", "system.toggle_focus_mode", "system.get_battery", "system.get_network_state"]).isSubset(of: names))

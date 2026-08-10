@@ -92,3 +92,46 @@ no message, email, remote Git mutation, or personal note was sent or changed.
 2. Agentic browser screenshot requests did not rank `browser.run_task` above a simple visit. The action's semantic metadata now describes full-page screenshots and a registered-catalog regression test covers that natural request.
 3. Native function calls embedded browser steps as a JSON string, which caused GPT-OSS/Ollama tool-call decoding to truncate the outer call. New calls use a structured `steps` array; the accepted legacy `steps_json` field is hidden from model-facing schemas.
 4. The managed browser script was not refreshed after an application update. Nexus now rewrites only its own generated script when its bundled implementation changes, preventing stale runtimes from advertising unsupported behavior.
+
+## 2026-08-09 native function-schema and fixture increment (GPT-OSS-20B)
+
+The local model was `gpt-oss:latest` (20.9B reported by Ollama). These are
+natural, target-complete requests against disposable paths under
+`.build/validation-fixtures`; Nexus still required its normal immutable
+confirmation before every mutation. No personal file, message, account, or
+remote repository was changed.
+
+| Prompt / operation | Expected / selected action | Result | Latency | Status |
+|---|---|---|---:|---|
+| `In the disposable validation workspace at …, run the harmless command printf planner-proof and show me its output.` | `terminal.run_command` with structured argv | Confirmed execution returned exact stdout `planner-proof`, exit 0, and a Nexus-owned session ID. | about 2.8 s planning; 4 ms execution | PASS |
+| `In the disposable validation workspace at …, make a folder called Model Finder Proof so I can organize a harmless test artifact.` | `finder.create_folder` | Confirmed creation returned the generated folder path. | about 2.8 s planning; 2 ms to confirmation | PASS |
+| `Please keep the source untouched and put a copy of …/ValidationNote.md in …/Model Finder Proof.` | `finder.copy` | GPT-OSS selected the natural collision policy `overwrite`; confirmed copy preserved the source and returned the generated destination path. | about 3.1 s planning; 2 ms to confirmation | PASS after fix |
+| `In the disposable Git repository at …, start a local branch called model-route-proof for this harmless validation.` | `git.create_branch` | Confirmed Git action completed; direct status verified the fixture on `model-route-proof`. | about 2.8 s planning; 2 ms to confirmation | PASS |
+| `Make a disposable combined PDF at …/ModelCombinedProof.pdf by putting the pages from …/NexusPreviewFixture.pdf in twice, in that order.` | `preview.combine_pdfs` | Confirmed action produced 4 pages. Computer Use opened the generated PDF in Preview and visually verified page order 1, 2, 1, 2. | about 3.4 s planning; 2 ms to confirmation | PASS |
+
+### Model-routing audit after the schema repair
+
+`nex-computer audit-plan --model gpt-oss:latest` completed all 198 registered
+examples without external execution. Direct selection increased from 117 to
+121; 59 returned no action, 14 correctly requested discovery-first, and 4
+selected another action. This is diagnostic evidence, not a claim that the
+remaining examples work: many older catalog examples deliberately omit a
+required path, ID, recipient, page, or prior-tool result, so a valid native
+call would be impossible. The end-to-end rows above use target-complete
+natural prompts instead.
+
+### Defects fixed in this increment
+
+1. Native Ollama function schemas emitted the internal `string_array` label,
+   which is not JSON Schema. Nexus now sends JSON-schema `array` properties
+   with typed `items`, field descriptions, and scalar bounds. This prevents
+   GPT-OSS tool calls from being dropped before validation.
+2. The native planner's broad reference to “writing” accidentally covered
+   requests to change files or records. It now distinguishes conversational
+   reply-writing from a requested external state change, which remains routed
+   through the ordinary tool, permission, and confirmation layers.
+3. GPT-OSS naturally uses `overwrite` for collision handling; Finder
+   previously recognized only its internal `replace` spelling. `overwrite` is
+   now an explicit, confirmation-gated synonym with the same nonempty-folder
+   safeguard. A focused regression test verifies the alias replaces only the
+   generated file collision and preserves the source.
