@@ -415,7 +415,21 @@ enum NexComputerCLI {
     }
 
     private static func manifestJSON(_ manifest: NexComputerActionManifest, availability: NexComputerAvailability? = nil) -> [String: Any] {
-        var value: [String: Any] = ["action": manifest.actionID, "application": manifest.application, "provider": manifest.provider, "description": manifest.description, "risk": manifest.riskClass.rawValue, "confirmation": manifest.confirmationPolicy.rawValue, "implementation": manifest.implementationMethod.rawValue, "preview": manifest.previewRenderer]
+        var value: [String: Any] = [
+            "action": manifest.actionID,
+            "application": manifest.application,
+            "provider": manifest.provider,
+            "description": manifest.description,
+            "examples": manifest.examples,
+            "input_schema": (try? object(JSONEncoder.cli.encode(manifest.inputSchema))) ?? [:],
+            "required_permissions": manifest.requiredPermissions.map {
+                ["id": $0.id, "permission": $0.permission.rawValue, "recovery": $0.recovery ?? ""]
+            },
+            "risk": manifest.riskClass.rawValue,
+            "confirmation": manifest.confirmationPolicy.rawValue,
+            "implementation": manifest.implementationMethod.rawValue,
+            "preview": manifest.previewRenderer
+        ]
         if let availability { value["available"] = availability.isAvailable; value["unavailable_reason"] = availability.reason ?? "" }
         return value
     }
