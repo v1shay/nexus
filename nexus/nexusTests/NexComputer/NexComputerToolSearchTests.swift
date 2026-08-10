@@ -48,6 +48,46 @@ final class NexComputerToolSearchTests: XCTestCase {
         XCTAssertEqual(names, ["web.search", "mail.send"])
     }
 
+    func testCompoundRequestPreservesAClauseLeaderAgainstNearbyAlternatives() {
+        let network = tool(
+            name: "system.get_network_state",
+            description: "Read whether this Mac is online and connected to the network.",
+            application: "macOS",
+            provider: "System",
+            examples: ["Is my Mac online?"],
+            tags: ["network", "online"]
+        )
+        let battery = tool(
+            name: "system.get_battery",
+            description: "Read the Mac battery and power source.",
+            application: "macOS",
+            provider: "System",
+            examples: ["How much battery is left?"],
+            tags: ["battery", "power"]
+        )
+        let volume = tool(
+            name: "system.get_volume",
+            description: "Read the output volume.",
+            application: "macOS",
+            provider: "System",
+            examples: ["What is the volume?"],
+            tags: ["volume", "sound"]
+        )
+        let spotify = tool(
+            name: "spotify.get_current_track",
+            description: "Read the current Spotify track and volume.",
+            application: "Spotify",
+            provider: "Spotify",
+            tags: ["music", "track", "volume"]
+        )
+
+        let names = Set(search(
+            "Tell me whether this Mac is online, whether it is on battery power, and what the current output volume is.",
+            [network, battery, volume, spotify]
+        ).map(\.tool))
+        XCTAssertEqual(names, [network.name, battery.name, volume.name])
+    }
+
     func testAgenticBrowserRequestRanksManagedBrowserInsteadOfWebResearch() {
         let web = tool(
             name: "web_search",
