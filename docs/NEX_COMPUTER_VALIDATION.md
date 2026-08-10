@@ -936,3 +936,32 @@ attempt could not load the app-hosted test bundle because the standalone test
 loader lacks Nexus application symbols. Therefore the post-fix targeted test
 execution remains unverified in this locked-host session; this is not recorded
 as a pass.
+
+## 2026-08-10 durable permission-host signing repair
+
+macOS remembers a protected-resource decision by a program's designated code
+requirement. The prior project forced an identifier-only requirement for every
+build, including one signed with an Apple Development certificate. That weakens
+the identity binding needed for a durable privacy host and does not repair the
+ad-hoc build's version-bound identity.
+
+The build configuration now allows the normal macOS requirement to be emitted.
+`scripts/build-nexus.sh` detects exactly one installed Apple Development
+identity automatically, rejects an ambiguous choice, verifies both the Apple
+Development signing authority and the Apple-backed requirement after building,
+and refuses to install an ad-hoc app as the durable host. With no identity on
+this Mac, the verified output is an ad-hoc `cdhash` requirement and the install
+command exits with status 2 before copying an app or changing any privacy
+setting. Installing an Apple Development certificate remains an external,
+user-owned prerequisite; it cannot be simulated or granted by Nexus.
+
+```text
+zsh -n scripts/build-nexus.sh
+./scripts/build-nexus.sh
+  ** BUILD SUCCEEDED **
+  Ad-hoc requirement: designated => cdhash H"…"
+
+./scripts/build-nexus.sh --install
+  Refusing to install an ad-hoc build as the durable permission host …
+  exit status 2
+```

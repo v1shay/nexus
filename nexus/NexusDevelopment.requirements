@@ -1,3 +1,4 @@
-// Local Xcode builds use an explicit designated requirement so macOS can
-// recognize rebuilt copies of Nexus as the same app.
-designated => identifier "na.nexus"
+// This legacy template is deliberately not referenced by the Xcode project.
+// Nexus uses macOS's normal designated requirement: an Apple Development
+// signature supplies the durable signer identity, while an ad-hoc build keeps
+// its version-bound identity and cannot be installed as a privacy host.
