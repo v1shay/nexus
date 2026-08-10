@@ -799,6 +799,26 @@ actor NexGitHubActionCatalog {
                     : ["what changed in this repository", "show code changes", "review my changes"]
             )) { input, _ in guard let path = input["repository"]?.string else { throw NexToolError.missingField("repository") }; let result = try await cli.git(args, repository: URL(fileURLWithPath: path)); return Self.result(result.stdout.isEmpty ? "No changes." : result.stdout, output: result.stdout) }
         }
+        try await registry.register(manifest: Self.manifest(
+            "git.init",
+            "Initialize an explicitly supplied existing local directory as a new Git repository.",
+            ["Initialize a new local Git repository here"],
+            ["repository": .init(.string, required: true), "initialBranch": .init(.string, description: "Optional initial branch name; defaults to main.")],
+            risk: .medium,
+            confirmation: .always,
+            aliases: ["initialize git repository", "start local repository"]
+        )) { input, _ in
+            let path = try required(input, "repository")
+            let directory = URL(fileURLWithPath: path, isDirectory: true)
+            var isDirectory: ObjCBool = false
+            guard FileManager.default.fileExists(atPath: directory.path, isDirectory: &isDirectory), isDirectory.boolValue else {
+                throw NexToolError.executionFailed(code: "repository_directory_missing", message: "Git initialization requires an existing directory.")
+            }
+            let branch = input["initialBranch"]?.string ?? "main"
+            let result = try await cli.run(executable: "/usr/bin/git", arguments: ["init", "--initial-branch", branch, directory.path], cwd: directory.deletingLastPathComponent())
+            guard result.exitCode == 0 else { throw NexToolError.executionFailed(code: "git_failed", message: result.stderr) }
+            return Self.result(result.stdout.isEmpty ? "Initialized Git repository." : result.stdout, output: result.stdout)
+        }
         let gitMutations: [(String, String, [String: NexToolFieldSchema], @Sendable ([String: NexJSONValue]) throws -> [String])] = [
             ("git.create_branch", "Create and check out a new local Git branch.", ["repository": .init(.string, required: true), "branch": .init(.string, required: true)], { ["switch", "-c", try required($0, "branch")] }),
             ("git.checkout", "Switch to an existing local Git branch.", ["repository": .init(.string, required: true), "branch": .init(.string, required: true)], { ["switch", try required($0, "branch")] }),

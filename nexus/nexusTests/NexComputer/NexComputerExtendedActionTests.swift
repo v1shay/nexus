@@ -102,6 +102,15 @@ final class NexComputerExtendedActionTests: XCTestCase {
         let result = try await cli.git(["status", "--porcelain=v1"], repository: root); XCTAssertTrue(result.stdout.contains("README.md"))
     }
 
+    func testGitCatalogRegistersConfirmationBoundInitialization() async throws {
+        let tools = NexToolRegistry()
+        let computer = NexComputerRegistry(toolRegistry: tools, permissionManager: NexComputerPermissionManager(backend: AuthorizedPermissions()))
+        try await NexGitHubActionCatalog().register(on: computer)
+        let definition = await tools.definitions().first(where: { $0.name == "git.init" })
+        XCTAssertEqual(definition?.permission, .codeExecution)
+        XCTAssertTrue(definition?.schema.fields["repository"]?.required == true)
+    }
+
     func testFinderAcceptsNaturalOverwriteAliasForAFileCollision() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
