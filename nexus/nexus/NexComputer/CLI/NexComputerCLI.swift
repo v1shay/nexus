@@ -331,9 +331,19 @@ enum NexComputerCLI {
         for expected in auditedDefinitions {
             guard let prompt = expected.examples.first,
                   !prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
-                results.append(["tool": expected.name, "prompt": "", "outcome": "no_example", "selected": []])
+                results.append([
+                    "tool": expected.name,
+                    "prompt": "",
+                    "outcome": "no_example",
+                    "selected": [],
+                    "latency_ms": 0
+                ])
                 continue
             }
+            // This audit measures the full model-routing path—not only the
+            // Ollama request—so it includes semantic discovery and argument
+            // grounding as experienced by a real Nexus prompt.
+            let startedAt = Date()
             let discovery = await environment.search.search(query: prompt)
             var allowed = await environment.search.definitions(for: discovery)
             if let searchTool = allDefinitions.first(where: { $0.name == NexToolSearchService.actionName }) {
@@ -363,7 +373,8 @@ enum NexComputerCLI {
                     "prompt": prompt,
                     "outcome": outcome,
                     "selected": selected,
-                    "discovered": discovery.candidates.map(\.tool)
+                    "discovered": discovery.candidates.map(\.tool),
+                    "latency_ms": Int(Date().timeIntervalSince(startedAt) * 1_000)
                 ])
             } catch {
                 results.append([
@@ -371,7 +382,8 @@ enum NexComputerCLI {
                     "prompt": prompt,
                     "outcome": "planning_error",
                     "selected": [],
-                    "error": error.localizedDescription
+                    "error": error.localizedDescription,
+                    "latency_ms": Int(Date().timeIntervalSince(startedAt) * 1_000)
                 ])
             }
         }
