@@ -181,3 +181,51 @@ xcodebuild -quiet -project nexus/nexus.xcodeproj -scheme nexus \
 ./scripts/build-nexus.sh
   ** BUILD SUCCEEDED **
 ```
+
+## 2026-08-09 complete headless-registry bridge (GPT-OSS-20B)
+
+The planner and runtime must expose the same tool surface. The prior
+`nex-computer tools` command showed only 192 computer-manifest actions even
+though model discovery saw 199 registered actions (the 198 model-audited
+actions plus the meta `search_tools` action). This increment makes the CLI
+list, describe, and execute both registry surfaces while preserving the
+computer runtime for manifest-backed actions.
+
+| Prompt / operation | Expected / selected action | Result | Latency | Status |
+|---|---|---|---:|---|
+| `Find a short public YouTube video explaining how robotic arms work.` | `youtube_search` | GPT-OSS selected `youtube_search` with a complete natural query. | about 2.3 s planning | PASS |
+| Headless execute `youtube_search` for `robotic arms explained` | `youtube_search` | Returned five public candidates with title, URL, and stable 11-character video ID; no media was downloaded or played. | 1,637 ms execution | PASS after fix |
+| Headless execute `youtube_play` with the returned `C_UbBz59Te0` ID | `youtube_play` | Returned explicit `UNAVAILABLE`: a standalone CLI has no media-overlay host. The user-facing app remains the required presentation host. | 0 ms execution | EXPECTED LIMITATION |
+
+### Defect fixed in this increment
+
+`nex-computer plan` could select a real registry action such as
+`youtube_search`, but `nex-computer execute` always called only the computer
+manifest runtime and therefore returned `TOOL_NOT_FOUND`. The CLI now:
+
+1. Lists all 199 registered actions, including confirmation controls,
+   `search_tools`, and the four YouTube tools.
+2. Describes the actual schema and tool-managed permission for non-manifest
+   actions instead of pretending they do not exist.
+3. Executes a registered non-manifest action through the same validated
+   `NexToolRegistry` used by the planner, returning the standard headless
+   result envelope.
+4. Explicitly marks the three overlay-dependent YouTube controls unavailable
+   from a standalone headless process, with a recovery to use the Nexus app;
+   it never falsely claims that video playback happened.
+
+Focused tests and the signed Debug build passed:
+
+```text
+xcodebuild -quiet -project nexus/nexus.xcodeproj -scheme nexus \
+  -configuration Debug -destination 'platform=macOS,name=My Mac' \
+  -derivedDataPath .build test \
+  -only-testing:nexusTests/NexComputerFoundationTests \
+  -only-testing:nexusTests/NexComputerExtendedActionTests \
+  -only-testing:nexusTests/NexComputerToolSearchTests \
+  -only-testing:nexusTests/NexPrimaryToolPlannerTests
+  ** TEST SUCCEEDED **
+
+./scripts/build-nexus.sh
+  ** BUILD SUCCEEDED **
+```
