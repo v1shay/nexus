@@ -380,6 +380,28 @@ final class NexPrimaryToolPlannerTests: XCTestCase {
         )
     }
 
+    func testGroundingRejectsCrossDomainFocusAndObsidianSubstitutions() {
+        let focusPlan = NexPrimaryToolPlan(actions: [
+            .init(tool: "calendar.create_focus_block", arguments: [:])
+        ])
+        XCTAssertTrue(
+            NexPrimaryToolPlanner.groundingBrowserActions(
+                in: focusPlan,
+                userPrompt: "Turn on Focus mode."
+            ).actions.isEmpty
+        )
+
+        let obsidianPlan = NexPrimaryToolPlan(actions: [
+            .init(tool: "notion.append_content", arguments: [:])
+        ])
+        XCTAssertTrue(
+            NexPrimaryToolPlanner.groundingBrowserActions(
+                in: obsidianPlan,
+                userPrompt: "Append this decision to my Obsidian note."
+            ).actions.isEmpty
+        )
+    }
+
     private func parse(_ response: String) -> NexPrimaryToolPlan {
         NexPrimaryToolPlanner.parse(response, registeredTools: tools())
     }

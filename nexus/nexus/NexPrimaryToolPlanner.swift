@@ -207,9 +207,23 @@ enum NexPrimaryToolPlanner {
         in plan: NexPrimaryToolPlan,
         userPrompt: String
     ) -> NexPrimaryToolPlan {
-        guard !containsExplicitHTTPURL(userPrompt) else { return plan }
-        let actions = plan.actions.filter {
-            $0.tool != "browser.visit_url" && $0.tool != "browser.run_task"
+        let normalizedPrompt = userPrompt.lowercased()
+        var actions = plan.actions
+        // A calendar focus block is not macOS Focus mode. The latter has no
+        // stable public mutation API, so selecting a calendar tool here would
+        // silently perform a different external action than the user asked.
+        if normalizedPrompt.contains("focus mode") {
+            actions.removeAll { $0.tool.hasPrefix("calendar.") }
+        }
+        // An explicit Obsidian request must never be satisfied by the
+        // similarly-shaped Notion connector action.
+        if normalizedPrompt.contains("obsidian") {
+            actions.removeAll { $0.tool.hasPrefix("notion.") }
+        }
+        if !containsExplicitHTTPURL(userPrompt) {
+            actions.removeAll {
+                $0.tool == "browser.visit_url" || $0.tool == "browser.run_task"
+            }
         }
         guard actions.count != plan.actions.count else { return plan }
         return .init(status: plan.status, actions: actions, memoryWrite: plan.memoryWrite)
