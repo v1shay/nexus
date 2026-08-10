@@ -1604,6 +1604,23 @@ final class NotchController: ObservableObject {
                 if responseGeneration != requestGeneration {
                     return .init(ok: false, result: ["transcript": transcript], error: "Nexus request was cancelled or replaced.")
                 }
+                if let actionID = pendingHeadlessConfirmationID() {
+                    // A headless caller must be able to inspect and approve
+                    // the exact immutable proposal before Nexus spends time
+                    // generating a prose response about an action that has
+                    // not happened. The pending action is held by the same
+                    // live registry and can only be resumed by tool-confirm.
+                    responseTask?.cancel()
+                    responseIsStreaming = false
+                    responseSpeaker.stop()
+                    return .init(ok: true, result: [
+                        "state": "confirmation_required",
+                        "action_id": actionID,
+                        "answer": answer,
+                        "transcript": transcript,
+                        "tool_trace": headlessToolTraceJSON()
+                    ], error: nil)
+                }
                 if !responseIsStreaming, !answer.isEmpty, answer != priorAnswer {
                     // Tool lifecycle events travel through the same async bus
                     // that powers the notch.  Let its main-actor consumer
@@ -1651,6 +1668,17 @@ final class NotchController: ObservableObject {
               let data = try? JSONSerialization.data(withJSONObject: trace, options: [.sortedKeys]),
               let text = String(data: data, encoding: .utf8) else { return "[]" }
         return text
+    }
+
+    private func pendingHeadlessConfirmationID() -> String? {
+        for activity in headlessToolTrace.reversed() {
+            guard case .object(let result)? = activity.result,
+                  result["status"] == .string("confirmation_required"),
+                  let actionID = result["actionId"]?.string,
+                  UUID(uuidString: actionID) != nil else { continue }
+            return actionID
+        }
+        return nil
     }
 
     private func submitFinalizedPrompt() async {

@@ -260,6 +260,61 @@ it does not name any application, force a tool, or add model arguments.
 
 Focused `NexComputerToolSearchTests` and `./scripts/build-nexus.sh` passed.
 
+## 2026-08-10 Finder lifecycle and prompt-confirmation repair (GPT-OSS-20B)
+
+The planner model was local `gpt-oss:latest` (GPT-OSS 20B). Every mutation
+used only generated files and folders under `/tmp/nexus-finder-proof` or
+`.build/validation-fixtures`; every mutation crossed Nexus's normal immutable
+confirmation boundary. No existing user file was overwritten, moved, or
+deleted, and `finder.trash` was intentionally not exercised.
+
+| Prompt / operation | Expected / selected action | Result | Latency | Status |
+|---|---|---|---:|---|
+| `Create a folder named Finder Lifecycle Proof in the generated validation fixtures at …` | `finder.create_folder` | GPT-OSS selected the exact parent/name. The live headless host returned a confirmation; approval created the generated folder. | 4.6 s plan; 5 ms preview; 5 ms run | PASS |
+| `Find the generated Finder proof note inside …/Finder Lifecycle Proof.` | `finder.search` | Correct action, but GPT-OSS grounded `proof note` as a filename substring. The read-only search returned zero results and made no change. | 2.6 s plan; 0 ms run | FAIL / recorded |
+| `Find the generated Markdown note named FINDER_SOURCE in …/Finder Lifecycle Proof.` before repair | incorrectly selected `obsidian.search` | The narrow allowlist omitted Finder and supplied a vault-relative argument. It was not executed. | 2.9 s plan | FAIL / fixed |
+| Same named-Markdown request after repair | `finder.search` | Finder was admitted by generic path-capability retrieval; GPT-OSS selected it with the exact root and filename. The live result found `FINDER_SOURCE.md`. | about 3.4 s plan; 1 ms run | PASS after fix |
+| `Copy …/FINDER_SOURCE.md into …/Copies and keep both copies.` with the space-containing workspace fixture, before collision-semantics repair | `finder.copy` available, but no action | GPT-OSS sometimes returned an empty native plan because the contract did not describe the collision intent. No confirmation or file operation occurred. | 3.5–5.7 s plans | FAIL / fixed |
+| `Copy /Users/agarwal/Documents/nexus 2/.build/validation-fixtures/Finder Lifecycle Proof/FINDER_SOURCE.md into /Users/agarwal/Documents/nexus 2/.build/validation-fixtures/Finder Lifecycle Proof/Copies.` | `finder.copy` | GPT-OSS selected `finder.copy`, preserved both space-containing absolute paths, and selected `overwrite`; confirmation copied the generated source. A Finder search found one copy. | 2.7 s plan; 4 ms preview; 5 ms run; 0 ms verification | PASS |
+| Same exact workspace paths, with `and keep both copies.` after collision-semantics repair | `finder.copy` with `collisionPolicy: keep_both` | GPT-OSS selected the intended policy. The immutable 11 ms preview was approved; Nexus created `FINDER_SOURCE 2.md` without replacing the first generated copy. Nexus Finder search returned both generated Markdown files. | 4.9 s plan; 11 ms preview; 10 ms run; 4 ms verification | PASS after fix |
+| `Create a folder named nexus-finder-proof under /private/tmp.` | `finder.create_folder` | Confirmation created the generated target (macOS canonicalized it to `/tmp/nexus-finder-proof`). | 2.1 s plan; 3 ms preview; 4 ms run | PASS |
+| `Create a folder named copies inside /tmp/nexus-finder-proof.` | `finder.create_folder` | Confirmation created the distinct generated destination. | 1.9 s plan; 5 ms preview; 12 ms run | PASS |
+| `Copy /tmp/nexus-finder-proof/SOURCE.md into /tmp/nexus-finder-proof/copies.` | `finder.copy` | GPT-OSS supplied exact source/destination and `overwrite`; confirmation copied the generated file. | 2.2 s plan; 4 ms preview; 5 ms run | PASS |
+| `Rename the generated copied file at …/copies/SOURCE.md to RENAMED.md.` | `finder.rename` | GPT-OSS selected the exact path/name; confirmation returned the new generated path. | 2.0 s plan; 2 ms preview; 5 ms run | PASS |
+| `Create a folder named moved inside /tmp/nexus-finder-proof.` | `finder.create_folder` | Confirmation created the generated move destination. | 2.4 s plan; 2 ms preview; 5 ms run | PASS |
+| `Move …/copies/RENAMED.md into …/moved.` | `finder.move` | GPT-OSS selected the precise two-path move. Confirmation moved the file; a following Finder search found it only at `moved/RENAMED.md`. | 2.3 s plan; 3 ms preview; 5 ms run; 2 ms verification | PASS |
+| `Create a folder named headless-prompt-proof under /tmp/nexus-finder-proof.` through `nexusctl prompt` | `finder.create_folder` | The full conversational host returned `state: confirmation_required`, the immutable action ID, and tool trace instead of waiting for a prose answer. Confirming that ID created the folder; Finder search found it. | about 26 s to confirmation; 5 ms confirmed run; 2 ms verification | PASS after fix |
+| `Show /tmp/nexus-finder-proof/headless-prompt-proof in Finder.` | `finder.reveal` | GPT-OSS selected the exact reveal action; live Nexus returned `Revealed headless-prompt-proof in Finder.` | 1.8 s plan; 1 ms run | PASS (headless) |
+| Computer Use inspection of the Finder reveal | visual Finder proof | Computer Use was unable to read Finder because the Mac was locked. No UI bypass was attempted. | 6.2 s attempted inspection | BLOCKED — unlock required |
+
+### Defects fixed in this increment
+
+1. Absolute filesystem spans are correctly removed from ordinary lexical
+   matching, but that also hid the distinction between a generic local folder
+   and an app-managed vault. Retrieval now applies a generic structural bonus
+   only when a tool's declared schema explicitly accepts an absolute local
+   folder or path. It names no tool or app; a regression proves local Markdown
+   discovery ranks Finder above a vault-only action.
+2. Finder search now declares its absolute-root contract and its Markdown
+   capability. Copy/move schemas now describe their exact existing source and
+   absolute destination, and copy includes a natural duplicate-file example.
+3. The collision-policy schema now explains preservation versus overwrite, and
+   native planning maps a natural request to preserve both copies to the
+   declared `keep_both` value. The model still chooses from the schema enum;
+   no prompt keyword dispatch or fixed action selection is involved.
+4. Native planning now explicitly treats a concrete Finder source/target as
+   actionable even though confirmation will still be required. It still asks
+   for genuinely missing paths and never invents them.
+5. `nexusctl prompt` formerly waited for final prose after an action had
+   already entered `confirmation_required`, preventing a headless caller from
+   approving it. It now returns the opaque pending action ID and lifecycle
+   trace immediately, cancels only the unnecessary answer generation, and
+   leaves the immutable action in the live registry for `tool-confirm`.
+
+Focused `NexComputerToolSearchTests`, `NexFinderActionTests`, and the Debug
+build passed after the repairs. The full interactive computer-use screenshot
+remains pending only because the local Mac is locked.
+
 ## 2026-08-09 local Git initialization capability (GPT-OSS-20B)
 
 The Git catalog previously exposed only actions that require an existing

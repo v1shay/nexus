@@ -355,24 +355,32 @@ actor NexFinderActionCatalog {
 
     private static let output = NexToolInputSchema(fields: ["display": .init(.string, required: true), "status": .init(.string, required: true), "paths": .init(.stringArray, required: true), "count": .init(.integer, required: true)])
     private static let finderPermission = [NexComputerPermissionRequirement(id: "automation.com.apple.finder", permission: .automation)]
-    private static let collision = NexToolFieldSchema(.string, allowedValues: ["error", "replace", "overwrite", "keep_both"])
+    private static let collision = NexToolFieldSchema(
+        .string,
+        description: "Collision behavior. Use keep_both to preserve an existing destination and create a distinct generated copy; use overwrite only when replacing the existing destination is intended.",
+        allowedValues: ["error", "replace", "overwrite", "keep_both"]
+    )
     private static let pathInput = NexToolInputSchema(fields: ["path": .init(.string, required: true)])
     private static let openFinderManifest = manifest("finder.activate", "Open or activate Finder.", ["Open Finder"], .init(fields: [:]), .low, .never, [], .nativeAPI)
-    private static let searchManifest = manifest("finder.search", "Search an allowed folder by filename, extension, text content, modification date, byte size, and bounded result count.", ["Find PDFs named application", "Search this folder for text"], .init(fields: [
-        "root": .init(.string, required: true), "nameContains": .init(.string), "extension": .init(.string), "contentContains": .init(.string),
+    private static let searchManifest = manifest("finder.search", "Search an allowed local folder by filename, extension (including Markdown), text content, modification date, byte size, and bounded result count.", ["Find PDFs named application", "Find a Markdown file in this folder", "Search this folder for text"], .init(fields: [
+        "root": .init(.string, required: true, description: "Absolute existing local folder to search. Preserve every supplied path segment, including spaces."), "nameContains": .init(.string), "extension": .init(.string), "contentContains": .init(.string),
         "modifiedAfter": .init(.string), "modifiedBefore": .init(.string), "minimumSize": .init(.integer, minimum: 0), "maximumSize": .init(.integer, minimum: 0), "limit": .init(.integer, minimum: 1, maximum: 200)
     ]), .low, .never, [], .nativeAPI)
     private static let openManifest = manifest("finder.open", "Open a specific existing file or folder using its default macOS application.", ["Open this file"], pathInput, .low, .never, [], .nativeAPI)
     private static let revealManifest = manifest("finder.reveal", "Reveal a specific existing file or folder in Finder.", ["Show this file in Finder"], pathInput, .low, .never, [], .nativeAPI)
     private static let createFolderManifest = manifest("finder.create_folder", "Create one folder under an allowed existing parent with an explicit collision policy.", ["Create a Results folder"], .init(fields: ["parent": .init(.string, required: true), "name": .init(.string, required: true), "collisionPolicy": collision]), .high, .always, [], .nativeAPI)
-    private static let copyManifest = mutation("finder.copy", "Copy one file or folder into an allowed directory while preserving filesystem metadata.", ["Copy this file into Results"])
+    private static let copyManifest = mutation("finder.copy", "Copy one file or folder into an allowed directory while preserving filesystem metadata.", ["Copy this file into Results", "Duplicate this generated file in the same folder"])
     private static let moveManifest = mutation("finder.move", "Move one file or folder into an allowed directory with explicit collision handling.", ["Move this file into the Archive folder"])
     private static let renameManifest = manifest("finder.rename", "Rename one file or folder in place with explicit collision handling.", ["Rename this file"], .init(fields: ["path": .init(.string, required: true), "name": .init(.string, required: true), "collisionPolicy": collision]), .high, .always, [], .nativeAPI)
     private static let trashManifest = manifest("finder.trash", "Move one specific file or folder to the macOS Trash.", ["Move this file to Trash"], pathInput, .high, .always, [], .nativeAPI)
     private static let selectionManifest = manifest("finder.get_selection", "Return the current Finder selection as canonical paths.", ["What files are selected in Finder?"], .init(fields: [:]), .low, .never, finderPermission, .appleScript)
 
     private static func mutation(_ id: String, _ description: String, _ examples: [String]) -> NexComputerActionManifest {
-        manifest(id, description, examples, .init(fields: ["path": .init(.string, required: true), "destinationDirectory": .init(.string, required: true), "collisionPolicy": collision]), .high, .always, [], .nativeAPI)
+        manifest(id, description, examples, .init(fields: [
+            "path": .init(.string, required: true, description: "Exact existing source file or folder. Preserve every supplied path segment, including spaces."),
+            "destinationDirectory": .init(.string, required: true, description: "Absolute existing destination folder. Preserve every supplied path segment, including spaces."),
+            "collisionPolicy": collision
+        ]), .high, .always, [], .nativeAPI)
     }
     private static func manifest(_ id: String, _ description: String, _ examples: [String], _ input: NexToolInputSchema, _ risk: NexComputerRiskClass, _ confirmation: NexComputerConfirmationPolicy, _ permissions: [NexComputerPermissionRequirement], _ method: NexComputerImplementationMethod) -> NexComputerActionManifest {
         .init(actionID: id, application: "Finder", provider: "Nexus Native Files", bundleIdentifier: method == .appleScript ? "com.apple.finder" : nil,

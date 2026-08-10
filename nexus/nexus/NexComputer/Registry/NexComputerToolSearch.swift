@@ -194,6 +194,16 @@ struct NexToolSearchEngine: Sendable {
         if aliases.contains(where: { queryPhrase.contains($0) || $0.contains(queryPhrase) }) {
             score += 10
         }
+        // Absolute paths are deliberately removed from lexical retrieval: a
+        // directory named after an app must not become an app-routing hint.
+        // They still carry useful structural intent, though. Prefer a tool
+        // whose declared schema explicitly accepts an absolute local target
+        // over a similarly worded vault-only action. This derives solely from
+        // the action contract, never a tool or application name.
+        if Self.containsAbsoluteFilesystemPath(query),
+           fields.contains(where: { $0.localizedCaseInsensitiveContains("absolute") && ($0.localizedCaseInsensitiveContains("folder") || $0.localizedCaseInsensitiveContains("path")) }) {
+            score += 10
+        }
         return score
     }
 
@@ -299,6 +309,10 @@ struct NexToolSearchEngine: Sendable {
             ))
             .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
             .filter { !tokens($0).isEmpty }
+    }
+
+    private static func containsAbsoluteFilesystemPath(_ text: String) -> Bool {
+        text.range(of: #"(?:^|\s)/[^\s]+"#, options: .regularExpression) != nil
     }
 
     private static func normalizedPhrase(_ text: String) -> String {
