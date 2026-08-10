@@ -125,6 +125,8 @@ final class NexComputerExtendedActionTests: XCTestCase {
     func testSystemCatalogExposesExplicitFocusLimitation() async throws {
         let tools = NexToolRegistry(), computer = NexComputerRegistry(toolRegistry: tools, permissionManager: NexComputerPermissionManager(backend: AuthorizedPermissions())); try await NexSystemActionCatalog().register(on: computer)
         let names = Set(await tools.definitions().map(\.name)); XCTAssertTrue(Set(["system.open_setting", "system.get_volume", "system.set_volume", "system.get_display_state", "system.toggle_focus_mode", "system.get_battery", "system.get_network_state"]).isSubset(of: names))
+        let settings = try await computer.manifest(actionID: "system.open_setting")
+        XCTAssertEqual(settings.inputSchema.fields["pane"]?.description, "The allowed macOS Settings pane that semantically matches the user's requested setting.")
         let available = try await computer.availability(actionID: "system.toggle_focus_mode"); XCTAssertFalse(available.isAvailable); XCTAssertTrue((available.reason ?? "").contains("Focus"))
     }
 
