@@ -315,6 +315,33 @@ Focused `NexComputerToolSearchTests`, `NexFinderActionTests`, and the Debug
 build passed after the repairs. The full interactive computer-use screenshot
 remains pending only because the local Mac is locked.
 
+## 2026-08-10 Xcode absolute-project routing (GPT-OSS-20B)
+
+The planner model was local `gpt-oss:latest` (GPT-OSS 20B). The test built
+the Nexus Debug scheme through the confirmation-bound Nexus Xcode action. It
+wrote only normal Xcode DerivedData/build artifacts; no source file, user file,
+or repository state was changed by the tool.
+
+| Prompt / operation | Expected / selected action | Result | Latency | Status |
+|---|---|---|---:|---|
+| `Build the Nexus macOS app from /Users/agarwal/Documents/nexus 2/nexus/nexus.xcodeproj using the nexus scheme.` before schema repair | `xcode.build` | The absolute-path structural score promoted Finder tools, while the Xcode schema left its project path undescribed. The three-candidate allowlist omitted Xcode and GPT-OSS emitted no action. Nothing was executed. | 2.2 s plan | FAIL / fixed |
+| Same natural prompt after repair | `xcode.build` | Discovery returned Xcode build first. GPT-OSS preserved the space-containing project path, selected `nexus`, inferred `Debug` and `generic/platform=macOS`, and requested the normal immutable confirmation. | 4.5 s plan; 3 ms preview | PASS after fix |
+| Approved live build | `xcode.build` | Nexus ran the model-selected build and returned `Xcode succeeded.` plus the Debug `nexus.app` artifact path. Existing compiler warnings were returned as diagnostics, not reported as a false failure. | 22,278 ms confirmed run | PASS |
+| Read the latest build result | `xcode.get_build_status` | A separate Nexus action returned the persisted structured `succeeded` status, diagnostics, and artifacts from the confirmed build. | 0 ms execution | PASS |
+
+### Defect fixed in this increment
+
+The generic absolute-path ranker evaluates declared schema contracts, but the
+Xcode project/workspace fields did not declare that contract. Their semantic
+meaning is now explicit for build, test, run, project-open, and source-file
+open actions: an existing absolute path whose supplied segments must be
+preserved. This makes the same structural retrieval feature available to each
+tool that declares an absolute local target; it does not add an Xcode-specific
+route or force a model call. A regression test gives Finder and Xcode equally
+path-shaped input, then verifies a natural build request ranks Xcode first.
+
+Focused `NexComputerToolSearchTests` and the live Debug-host rebuild passed.
+
 ## 2026-08-09 local Git initialization capability (GPT-OSS-20B)
 
 The Git catalog previously exposed only actions that require an existing
