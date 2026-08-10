@@ -271,6 +271,9 @@ private struct NexusExperienceSettingsPage: View {
     @ObservedObject private var permissionHealth = NexusPermissionHealth.shared
     @State private var piperVoices: [PiperVoice] = []
     @State private var isImportingPiperVoice = false
+    @State private var secureVaultMessage = NexusUnifiedKeychainVault.shared.isConfigured
+        ? "Shared credential vault is active"
+        : "Migrate existing Nexus credentials into the shared vault"
 
     var body: some View {
         ScrollView {
@@ -352,6 +355,31 @@ private struct NexusExperienceSettingsPage: View {
                     Toggle("Hold Globe/Fn to dictate", isOn: $settings.globalPasteDictationEnabled)
                         .toggleStyle(.switch)
                         .help("Hold Globe/Fn in any editable field, then release to paste clean dictation.")
+                }
+                NexusHairline(axis: .horizontal)
+                NexusSettingsLine(label: "Credentials") {
+                    VStack(alignment: .trailing, spacing: 7) {
+                        HStack(spacing: 8) {
+                            Image(systemName: NexusUnifiedKeychainVault.shared.isConfigured ? "lock.fill" : "lock.badge.plus")
+                                .foregroundStyle(NexusUnifiedKeychainVault.shared.isConfigured ? .green : .orange)
+                            Button(NexusUnifiedKeychainVault.shared.isConfigured ? "Run migration again" : "Migrate credentials") {
+                                do {
+                                    let migration = try NexusUnifiedKeychainVault.shared.prepare()
+                                    secureVaultMessage = migration.skippedServices == 0
+                                        ? "Shared vault is active — migrated \(migration.copiedEntries) existing Nexus entries"
+                                        : "Migrated \(migration.copiedEntries) entries; \(migration.skippedServices) protected service(s) will retry when available"
+                                } catch {
+                                    secureVaultMessage = "Migration needs macOS Keychain authorization: \(error.localizedDescription)"
+                                }
+                            }
+                        }
+                        Text(secureVaultMessage)
+                            .font(.system(size: 10.5, weight: .medium))
+                            .foregroundStyle(.secondary)
+                            .multilineTextAlignment(.trailing)
+                            .frame(maxWidth: 390, alignment: .trailing)
+                    }
+                    .help("Migrates the Nexus credentials already on this Mac into one Keychain record. Nexus never stores your Mac password.")
                 }
                 NexusHairline(axis: .horizontal)
                 NexusSettingsLine(label: "Hotkey access") {
@@ -436,7 +464,8 @@ private struct NexusExperienceSettingsPage: View {
                         Task {
                             await duplexRuntime.reconcile(
                                 with: engine,
-                                personaPlexEndpoint: settings.personaPlexRemoteEndpoint
+                                personaPlexEndpoint: settings.personaPlexRemoteEndpoint,
+                                nemotronVoiceChatEndpoint: settings.nemotronVoiceChatRemoteEndpoint
                             )
                         }
                     }
@@ -479,6 +508,34 @@ private struct NexusExperienceSettingsPage: View {
                             .font(.system(size: 11, weight: .medium))
                             .foregroundStyle(.secondary)
                             .frame(maxWidth: 360, alignment: .trailing)
+                    }
+                }
+                if settings.duplexVoiceEngine == .nemotronVoiceChatRemoteCUDA {
+                    NexusHairline(axis: .horizontal)
+                    NexusSettingsLine(label: "CUDA host") {
+                        TextField("https://voicechat-host:9000", text: $settings.nemotronVoiceChatRemoteEndpoint)
+                            .textFieldStyle(.roundedBorder)
+                            .frame(width: 250)
+                            .onChange(of: settings.nemotronVoiceChatRemoteEndpoint) { _, endpoint in
+                                Task {
+                                    await duplexRuntime.reconcile(
+                                        with: .nemotronVoiceChatRemoteCUDA,
+                                        personaPlexEndpoint: settings.personaPlexRemoteEndpoint,
+                                        nemotronVoiceChatEndpoint: endpoint
+                                    )
+                                }
+                            }
+                    }
+                    NexusSettingsLine(label: "VoiceChat") {
+                        VStack(alignment: .trailing, spacing: 4) {
+                            Text(duplexRuntime.state.label)
+                                .font(.system(size: 11, weight: .medium, design: .monospaced))
+                                .foregroundStyle(duplexRuntime.state == .ready ? .green : .secondary)
+                            Text("Connects to NVIDIA's /v1/realtime WebSocket. Use headphones to prevent acoustic feedback.")
+                                .font(.system(size: 10.5, weight: .medium))
+                                .foregroundStyle(.secondary)
+                                .frame(maxWidth: 360, alignment: .trailing)
+                        }
                     }
                 }
             }

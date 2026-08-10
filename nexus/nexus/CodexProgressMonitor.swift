@@ -190,7 +190,6 @@ enum CodexProgressParser {
     }
 }
 
-@MainActor
 final class CodexProgressMonitor {
     typealias UpdateHandler = (CodexProgressUpdate, [CodexSessionProgress]) -> Void
     typealias UsageHandler = (CodexUsageLimit) -> Void
@@ -224,7 +223,7 @@ final class CodexProgressMonitor {
         guard task == nil else { return }
         handler = onUpdate
         usageHandler = onUsage
-        task = Task { [weak self] in
+        task = Task.detached { [weak self] in
             while !Task.isCancelled {
                 self?.poll()
                 try? await Task.sleep(for: .milliseconds(450))

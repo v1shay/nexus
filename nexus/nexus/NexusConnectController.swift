@@ -38,6 +38,12 @@ enum NexusConnectDisplayState: Equatable, Sendable {
     }
 }
 
+private struct NexusConnectRestoredTrust: Sendable {
+    let pairedNodes: [NexusPairedNode]
+    let authorizedClients: [NexusAuthorizedClient]
+    let isPaired: Bool
+}
+
 struct NexusPairingInvitation: Codable, Equatable, Sendable {
     let invitationID: UUID
     let hostNodeID: UUID
@@ -240,6 +246,12 @@ final class NexusConnectController: ObservableObject {
         self.discovery = discovery
         self.persistentHost = persistentHost
 
+        // Keychain reads can require macOS to resolve or display an access
+        // prompt. Never make app launch, the Notch, or nexusctl wait on that
+        // work; restore the exact same persisted trust state in the
+        // background and reconnect when it becomes available.
+        pairedNodes = []
+        authorizedClients = []
         let localNodeID: UUID
         if let saved = defaults.string(forKey: localNodeIDKey).flatMap(UUID.init(uuidString:)) {
             localNodeID = saved
@@ -266,48 +278,55 @@ final class NexusConnectController: ObservableObject {
                 ))
             }
         )
+        isPaired = false
         coordinator.$nodes
             .receive(on: DispatchQueue.main)
             .sink { [weak self] in self?.apply(nodes: $0) }
             .store(in: &cancellables)
         Task { await router.setRoute(modelRoute) }
-        restorePersistentState()
+        let roleAtLaunch = role
+        let preferredTailscaleID = defaults.string(forKey: preferredNodeKey)
+        Task { @MainActor [weak self, roster, clientVault, hostVault, hostTrust] in
+            let restored = await Task.detached {
+                Self.restoreKeychainBackedTrust(
+                    role: roleAtLaunch,
+                    preferredTailscaleID: preferredTailscaleID,
+                    roster: roster,
+                    clientVault: clientVault,
+                    hostVault: hostVault,
+                    hostTrust: hostTrust
+                )
+            }.value
+            guard let self else { return }
+            self.pairedNodes = restored.pairedNodes
+            self.authorizedClients = restored.authorizedClients
+            self.isPaired = restored.isPaired
+            if self.enabled { self.restart() }
+        }
+    }
+
+    nonisolated private static func restoreKeychainBackedTrust(
+        role: NexusConnectRole,
+        preferredTailscaleID: String?,
+        roster: NexusPairedNodeStore,
+        clientVault: NexusIdentityVault,
+        hostVault: NexusIdentityVault,
+        hostTrust: NexusHostTrustStore
+    ) -> NexusConnectRestoredTrust {
+        let clientPairing = try? clientVault.loadPairing()
+        if let migrated = try? roster.migrateLegacyPairing(clientPairing, displayName: "Paired Mac"),
+           let preferredTailscaleID {
+            try? roster.update(nodeID: migrated.id) { $0.tailscaleNodeID = preferredTailscaleID }
+        }
+        let pairedNodes = (try? roster.prepareForLaunch()) ?? []
+        let authorizedClients = (try? hostTrust.load()) ?? []
+        let isPaired = role == .client
+            ? !pairedNodes.isEmpty || clientPairing != nil
+            : !authorizedClients.filter({ $0.status != .revoked }).isEmpty || (try? hostVault.loadPairing()) != nil
+        return .init(pairedNodes: pairedNodes, authorizedClients: authorizedClients, isPaired: isPaired)
     }
 
     func start() { restart() }
-
-    /// Keychain entries can outlive a development signature.  Reading one of
-    /// those stale entries may wait for Security.framework even when no useful
-    /// prompt can be shown.  The notch must be usable before Connect restores
-    /// its optional state, so perform that restoration off the main actor.
-    private func restorePersistentState() {
-        let roster = roster
-        let hostTrust = hostTrust
-        let clientVault = clientVault
-        let hostVault = hostVault
-        let role = role
-
-        Task.detached { [weak self, roster, hostTrust, clientVault, hostVault, role] in
-            let nodes = (try? roster.load()) ?? []
-            let authorized = (try? hostTrust.load()) ?? []
-            let hasPairing: Bool
-            switch role {
-            case .client:
-                hasPairing = !nodes.isEmpty || (try? clientVault.loadPairing()) != nil
-            case .studioHost:
-                hasPairing = authorized.contains { $0.status != .revoked }
-                    || (try? hostVault.loadPairing()) != nil
-            }
-
-            await MainActor.run {
-                guard let self, self.role == role else { return }
-                self.pairedNodes = nodes
-                self.authorizedClients = authorized
-                self.isPaired = hasPairing
-                if self.enabled { self.restart() }
-            }
-        }
-    }
 
     func setEnabled(_ enabled: Bool) {
         self.enabled = enabled

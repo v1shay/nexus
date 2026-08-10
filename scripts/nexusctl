@@ -1,0 +1,15 @@
+#!/bin/zsh
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+APP="${NEXUS_APP:-$ROOT/.build/Build/Products/Debug/nexus.app}"
+EXECUTABLE="$APP/Contents/MacOS/nexus"
+
+if [[ ! -x "$EXECUTABLE" ]]; then
+  echo "Nexus is not built at $APP. Run ./scripts/build-nexus.sh --run first." >&2
+  exit 1
+fi
+
+# This executable is a client only. The running Nexus.app process receives the
+# request and performs it on its live controller, sharing all UI state and TCC.
+exec "$EXECUTABLE" --nexusctl "$@"

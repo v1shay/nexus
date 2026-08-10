@@ -1,0 +1,8 @@
+#!/bin/zsh
+set -euo pipefail
+
+# Natural-language control of the already-running Nexus app. This delegates to
+# nexusctl, whose `prompt` command always goes through Nexus inference and its
+# model-selected tool-routing path; it never manually invokes a tool.
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+exec "$ROOT/scripts/nexusctl" "$@"

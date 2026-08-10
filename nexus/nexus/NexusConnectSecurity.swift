@@ -35,6 +35,7 @@ final class NexusKeychainSecretStore: NexusSecretStore, @unchecked Sendable {
     private let service: String
     private let ephemeralStore: NexusMemorySecretStore?
     private let allowsAuthenticationUI: Bool
+    private let vault: NexusUnifiedKeychainVault
 
     init(
         service: String = "na.nexus.connect",
@@ -42,6 +43,7 @@ final class NexusKeychainSecretStore: NexusSecretStore, @unchecked Sendable {
         allowsAuthenticationUI: Bool = true
     ) {
         self.service = service
+        self.vault = .shared
         self.ephemeralStore = useEphemeralStore
             ? NexusMemorySecretStore()
             : nil
@@ -50,6 +52,41 @@ final class NexusKeychainSecretStore: NexusSecretStore, @unchecked Sendable {
 
     func data(for account: String) throws -> Data? {
         if let ephemeralStore { return try ephemeralStore.data(for: account) }
+        if let data = try vault.data(
+            service: service,
+            account: account,
+            allowsAuthenticationUI: allowsAuthenticationUI
+        ) {
+            return data
+        }
+        // Existing releases stored one Keychain item per service. Keep those
+        // usable, then fold each one into the single Nexus vault the first
+        // time it is accessed. New secrets never create another item.
+        if let data = try legacyData(for: account) {
+            try vault.set(data, service: service, account: account)
+            return data
+        }
+        return nil
+    }
+
+    func set(_ data: Data, for account: String) throws {
+        if let ephemeralStore {
+            try ephemeralStore.set(data, for: account)
+            return
+        }
+        try vault.set(data, service: service, account: account)
+    }
+
+    func delete(account: String) throws {
+        if let ephemeralStore {
+            try ephemeralStore.delete(account: account)
+            return
+        }
+        try vault.delete(service: service, account: account)
+        try? legacyDelete(account: account)
+    }
+
+    private func legacyData(for account: String) throws -> Data? {
         var query = baseQuery(account: account)
         query[kSecReturnData as String] = true
         query[kSecMatchLimit as String] = kSecMatchLimitOne
@@ -68,38 +105,7 @@ final class NexusKeychainSecretStore: NexusSecretStore, @unchecked Sendable {
         return data
     }
 
-    func set(_ data: Data, for account: String) throws {
-        if let ephemeralStore {
-            try ephemeralStore.set(data, for: account)
-            return
-        }
-        let query = baseQuery(account: account)
-        let updateStatus = SecItemUpdate(
-            query as CFDictionary,
-            [kSecValueData as String: data] as CFDictionary
-        )
-        if updateStatus == errSecSuccess { return }
-        guard updateStatus == errSecItemNotFound else {
-            throw NexusConnectError.unavailable("Keychain update failed (\(updateStatus))")
-        }
-        var add = query
-        add[kSecValueData as String] = data
-        add[kSecAttrSynchronizable as String] = false
-        // Allows normal background use after the user has unlocked the Mac
-        // once, while keeping credentials on this device.  It does not weaken
-        // the code-signing ACL that protects the item.
-        add[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
-        let addStatus = SecItemAdd(add as CFDictionary, nil)
-        guard addStatus == errSecSuccess else {
-            throw NexusConnectError.unavailable("Keychain write failed (\(addStatus))")
-        }
-    }
-
-    func delete(account: String) throws {
-        if let ephemeralStore {
-            try ephemeralStore.delete(account: account)
-            return
-        }
+    private func legacyDelete(account: String) throws {
         let status = SecItemDelete(baseQuery(account: account) as CFDictionary)
         guard status == errSecSuccess || status == errSecItemNotFound else {
             throw NexusConnectError.unavailable("Keychain delete failed (\(status))")
@@ -113,6 +119,171 @@ final class NexusKeychainSecretStore: NexusSecretStore, @unchecked Sendable {
             kSecAttrAccount as String: account
         ]
     }
+}
+
+/// A single Keychain item for all Nexus-owned credentials. macOS still owns
+/// authentication and may show its native dialog, but it happens against one
+/// signed Nexus item instead of a separate item for every provider, connector,
+/// pairing, and local worker credential. The value never leaves Keychain.
+final class NexusUnifiedKeychainVault: @unchecked Sendable {
+    static let shared = NexusUnifiedKeychainVault()
+
+    private static let service = "na.nexus.secure-vault"
+    private static let account = "secrets.v1"
+    private static let legacyServices = [
+        "na.nexus.connect",
+        "na.nexus.model-provider",
+        "na.nexus.managed-inference",
+        "na.nexus.nex-cli",
+        "na.nexus.connectors.registration",
+        "na.nexus.connectors.oauth"
+    ]
+    private let lock = NSLock()
+
+    private init() {}
+
+    var isConfigured: Bool {
+        lock.withLock { (try? read()) != nil }
+    }
+
+    /// Consolidates every currently-known Nexus service and account into the
+    /// shared record. Legacy items are deliberately left untouched: the copy
+    /// is verified before use and the originals remain a rollback path.
+    @discardableResult
+    func prepare() throws -> NexusKeychainMigrationReport {
+        try lock.withLock {
+            var values = try read() ?? [:]
+            var copied = 0
+            var skippedServices = 0
+            for legacyService in Self.legacyServices {
+                do {
+                    for (account, data) in try legacyEntries(service: legacyService) {
+                        let entryKey = key(legacyService, account)
+                        guard values[entryKey] == nil else { continue }
+                        values[entryKey] = data.base64EncodedString()
+                        copied += 1
+                    }
+                } catch {
+                    // One old ACL must not prevent the rest of the user's
+                    // credentials from moving. The unchanged source item can
+                    // still migrate later when macOS permits access.
+                    skippedServices += 1
+                }
+            }
+            try write(values)
+            let verified = try read() ?? [:]
+            guard verified == values else {
+                throw NexusConnectError.unavailable("Nexus secure vault verification failed")
+            }
+            return .init(copiedEntries: copied, skippedServices: skippedServices)
+        }
+    }
+
+    func data(
+        service: String,
+        account: String,
+        allowsAuthenticationUI: Bool = true
+    ) throws -> Data? {
+        try lock.withLock {
+            guard let values = try read(allowsAuthenticationUI: allowsAuthenticationUI),
+                  let encoded = values[key(service, account)] else { return nil }
+            guard let value = Data(base64Encoded: encoded) else {
+                throw NexusConnectError.unavailable("Nexus secure vault contains unreadable data")
+            }
+            return value
+        }
+    }
+
+    func set(_ data: Data, service: String, account: String) throws {
+        try lock.withLock {
+            var values = try read() ?? [:]
+            values[key(service, account)] = data.base64EncodedString()
+            try write(values)
+        }
+    }
+
+    func delete(service: String, account: String) throws {
+        try lock.withLock {
+            guard var values = try read() else { return }
+            values.removeValue(forKey: key(service, account))
+            try write(values)
+        }
+    }
+
+    private func key(_ service: String, _ account: String) -> String { "\(service)\u{1F}\(account)" }
+
+    private func legacyEntries(service: String) throws -> [(String, Data)] {
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service,
+            kSecReturnAttributes as String: true,
+            kSecReturnData as String: true,
+            kSecMatchLimit as String: kSecMatchLimitAll
+        ]
+        var result: CFTypeRef?
+        let status = SecItemCopyMatching(query as CFDictionary, &result)
+        if status == errSecItemNotFound { return [] }
+        guard status == errSecSuccess else {
+            throw NexusConnectError.unavailable("Keychain migration read failed (\(status))")
+        }
+        let items: [[String: Any]]
+        if let array = result as? [[String: Any]] { items = array }
+        else if let item = result as? [String: Any] { items = [item] }
+        else { return [] }
+        return items.compactMap { item in
+            guard let account = item[kSecAttrAccount as String] as? String,
+                  let data = item[kSecValueData as String] as? Data else { return nil }
+            return (account, data)
+        }
+    }
+
+    private func read(allowsAuthenticationUI: Bool = true) throws -> [String: String]? {
+        var query = baseQuery
+        query[kSecReturnData as String] = true
+        query[kSecMatchLimit as String] = kSecMatchLimitOne
+        if !allowsAuthenticationUI {
+            // Daemons and launch-time restoration must report a stale ACL as
+            // unavailable instead of blocking behind an invisible Keychain sheet.
+            query[kSecUseAuthenticationUI as String] = kSecUseAuthenticationUIFail
+        }
+        var item: CFTypeRef?
+        let status = SecItemCopyMatching(query as CFDictionary, &item)
+        if status == errSecItemNotFound { return nil }
+        guard status == errSecSuccess, let data = item as? Data else {
+            throw NexusConnectError.unavailable("Nexus secure vault read failed (\(status))")
+        }
+        return try JSONDecoder().decode([String: String].self, from: data)
+    }
+
+    private func write(_ values: [String: String]) throws {
+        let data = try JSONEncoder().encode(values)
+        let status = SecItemUpdate(baseQuery as CFDictionary, [kSecValueData as String: data] as CFDictionary)
+        if status == errSecSuccess { return }
+        guard status == errSecItemNotFound else {
+            throw NexusConnectError.unavailable("Nexus secure vault update failed (\(status))")
+        }
+        var item = baseQuery
+        item[kSecValueData as String] = data
+        item[kSecAttrSynchronizable as String] = false
+        item[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
+        let addStatus = SecItemAdd(item as CFDictionary, nil)
+        guard addStatus == errSecSuccess else {
+            throw NexusConnectError.unavailable("Nexus secure vault setup failed (\(addStatus))")
+        }
+    }
+
+    private var baseQuery: [String: Any] {
+        [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: Self.service,
+            kSecAttrAccount as String: Self.account
+        ]
+    }
+}
+
+struct NexusKeychainMigrationReport: Sendable {
+    let copiedEntries: Int
+    let skippedServices: Int
 }
 
 final class NexusMemorySecretStore: NexusSecretStore, @unchecked Sendable {

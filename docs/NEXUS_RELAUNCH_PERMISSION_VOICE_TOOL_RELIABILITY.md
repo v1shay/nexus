@@ -1,7 +1,7 @@
 # Nexus repeatable-launch reliability framework
 
-Status: audit and implementation plan  
-Audit date: 2026-07-29  
+Status: audit and implementation plan
+Audit date: 2026-07-29
 Repository baseline: `f655e39b4aab4bb063ad89824520426bf3c83b86`
 
 ## One-time local prerequisites

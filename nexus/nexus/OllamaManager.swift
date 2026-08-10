@@ -110,9 +110,11 @@ final class OllamaManager: @unchecked Sendable {
     /// especially with native reasoning enabled. This is deliberately far
     /// beyond normal model work; user cancellation remains immediate.
     static let inferenceRequestTimeout: TimeInterval = 7 * 24 * 60 * 60
-    /// Planning is advisory and runs before the normal response. It must not
-    /// leave the UI waiting indefinitely when Ollama is busy.
-    static let toolPlanningRequestTimeout: TimeInterval = 5
+    /// Tool selection is a short advisory pass.  It must never inherit the
+    /// effectively-unbounded answer timeout, otherwise a model that stalls
+    /// before its first tool token can leave both the notch and nexus CLI in
+    /// the thinking state indefinitely.
+    static let toolPlanningRequestTimeout: TimeInterval = 18
 
     private let session: URLSession
     private let fileManager: FileManager

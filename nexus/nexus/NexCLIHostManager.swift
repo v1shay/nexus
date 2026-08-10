@@ -40,15 +40,44 @@ enum NexCLILoopbackCredential {
         service: "na.nexus.nex-cli",
         allowsAuthenticationUI: false
     )
+    private static let leaseURL = FileManager.default.homeDirectoryForCurrentUser
+        .appendingPathComponent("Library/Application Support/Nexus/NexCLI/loopback.lease")
 
     static func loadOrCreate() throws -> String {
+        // The local daemon is launched by launchd, which is not permitted to
+        // present Keychain UI. Its password is an internal, rotating loopback
+        // lease—not a user credential—so keep it in a 0600 per-user runtime
+        // file and never make NexCLI readiness depend on a Keychain prompt.
+        if let lease = try? loadRuntimeLease() { return lease }
+        let bytes = (0..<32).map { _ in UInt8.random(in: .min ... .max) }
+        let password = Data(bytes).base64EncodedString()
+        try writeRuntimeLease(password)
+        return password
+    }
+
+    static func loadRuntimeLease() throws -> String {
+        let data = try Data(contentsOf: leaseURL)
+        guard let password = String(data: data, encoding: .utf8), !password.isEmpty else {
+            throw NexusConnectError.unavailable("NexCLI loopback lease is unavailable. Open Nexus once to restore it.")
+        }
+        return password
+    }
+
+    private static func writeRuntimeLease(_ password: String) throws {
+        let manager = FileManager.default
+        let directory = leaseURL.deletingLastPathComponent()
+        try manager.createDirectory(at: directory, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
+        try Data(password.utf8).write(to: leaseURL, options: .atomic)
+        try manager.setAttributes([.posixPermissions: 0o600], ofItemAtPath: leaseURL.path)
+    }
+
+    /// Legacy password lookup is intentionally retained only for a manual
+    /// recovery path; startup must not touch Keychain from launchd.
+    static func loadLegacyKeychainCredential() throws -> String? {
         if let data = try store.data(for: account), let password = String(data: data, encoding: .utf8), !password.isEmpty {
             return password
         }
-        let bytes = (0..<32).map { _ in UInt8.random(in: .min ... .max) }
-        let password = Data(bytes).base64EncodedString()
-        try store.set(Data(password.utf8), for: account)
-        return password
+        return nil
     }
 }
 
@@ -197,7 +226,7 @@ struct NexCLIHostManager: @unchecked Sendable {
         return output.split(whereSeparator: \.isNewline).compactMap { Int32($0) }.first
     }
 
-    private static func commandLine(for processID: Int32) -> String? {
+    static func commandLine(for processID: Int32) -> String? {
         capture(executable: URL(fileURLWithPath: "/bin/ps"), arguments: ["-p", "\(processID)", "-o", "command="])
     }
 
@@ -293,7 +322,7 @@ final class NexCLIHostDaemon {
     func start() async {
         installTerminationHandler()
         do {
-            let password = try NexCLILoopbackCredential.loadOrCreate()
+            let password = try NexCLILoopbackCredential.loadRuntimeLease()
             if await manager.isManagedDaemonReady(password: password) {
                 adoptedWorkerProcessID = manager.managedWorkerProcessID()
                 writeStatus(state: "ready", detail: nil, runtime: "managed Nex daemon")
@@ -440,10 +469,26 @@ final class NexCLIHostDaemon {
             ownsLock = true
             return true
         }
-        guard errno == EEXIST,
-              let contents = try? String(contentsOf: manager.lockURL),
-              let pid = Int32(contents.trimmingCharacters(in: .whitespacesAndNewlines)) else { return false }
-        if Darwin.kill(pid, 0) == 0 || errno == EPERM { return false }
+        guard errno == EEXIST else { return false }
+        // A prior host can be killed between O_EXCL creation and its small
+        // PID write, leaving a zero-byte lock forever. Give a concurrently
+        // starting host a moment to finish, then reclaim malformed or dead
+        // locks rather than waiting indefinitely for a daemon that cannot
+        // exist.
+        for _ in 0..<3 {
+            if let contents = try? String(contentsOf: manager.lockURL),
+               let pid = Int32(contents.trimmingCharacters(in: .whitespacesAndNewlines)) {
+                // PIDs are recycled. A live but unrelated process must never
+                // prevent this supervisor from recovering an old lock.
+                let owner = NexCLIHostManager.commandLine(for: pid) ?? ""
+                if (Darwin.kill(pid, 0) == 0 || errno == EPERM),
+                   owner.contains(NexCLIHostProcess.argument) {
+                    return false
+                }
+                break
+            }
+            Thread.sleep(forTimeInterval: 0.05)
+        }
         try? fileManager.removeItem(at: manager.lockURL)
         return try acquireLock()
     }
