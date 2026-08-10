@@ -119,7 +119,7 @@ enum NexPrimaryToolPlanner {
         }
         if names.contains(where: { $0.hasPrefix("finder.") }) {
             rules.append(
-                "- Finder actions are for macOS files, folders, paths, selections, and Finder. A request that says file, folder, path, or Finder must never select an email or Notion archive action; ask for a missing path or destination instead of guessing."
+                "- Finder actions are for macOS files, folders, paths, selections, and Finder. A request that says file, folder, path, or Finder must never select an email or Notion archive action. For a copy, move, rename, or folder request with exact absolute source and target paths, call the matching supplied Finder action directly; Nexus handles its confirmation. Paths may contain spaces: preserve every supplied absolute path verbatim in its matching input. When a supplied Finder collision policy offers keep_both and the user asks to preserve both copies or avoid overwriting an existing destination, use keep_both. Ask only when a required path or destination is genuinely missing, and never invent one."
             )
         }
         if names.contains(where: { $0.hasPrefix("obsidian.") }) {

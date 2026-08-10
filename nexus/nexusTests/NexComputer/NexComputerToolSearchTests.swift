@@ -203,6 +203,52 @@ final class NexComputerToolSearchTests: XCTestCase {
         )
     }
 
+    func testMarkdownFileInAbsoluteFolderRanksFinderInsteadOfObsidian() {
+        let finder = tool(
+            name: "finder.search",
+            description: "Search an allowed local folder by filename, extension (including Markdown), and text content.",
+            application: "Finder",
+            provider: "Nexus Native Files",
+            examples: ["Find a Markdown file in this folder"],
+            tags: ["file", "folder", "filesystem"],
+            fields: ["root": .init(.string, required: true, description: "Absolute existing local folder to search. Preserve every supplied path segment, including spaces.")]
+        )
+        let obsidian = tool(
+            name: "obsidian.search",
+            description: "Search canonical Markdown notes by title and content inside the configured vault.",
+            application: "Obsidian",
+            provider: "Obsidian Vault",
+            tags: ["notes", "markdown", "vault"]
+        )
+
+        XCTAssertEqual(
+            search(
+                "Find the generated Markdown note named FINDER_SOURCE in /Users/example/Documents/validation-fixtures/Finder Lifecycle Proof.",
+                [finder, obsidian]
+            ).first?.tool,
+            "finder.search"
+        )
+    }
+
+    func testFinderNativePlanningPolicyTreatsConcretePathsAsActionable() {
+        let finder = tool(
+            name: "finder.copy",
+            description: "Copy one file into an allowed folder.",
+            application: "Finder",
+            provider: "Nexus Native Files",
+            tags: ["file", "folder", "filesystem"]
+        )
+
+        let rules = NexPrimaryToolPlanner.nativePlanningMessages(
+            context: [.init(role: "user", content: "Copy /tmp/source.md into /tmp/destination.")],
+            tools: [finder]
+        ).first?.content ?? ""
+        XCTAssertTrue(rules.contains("exact absolute source and target paths"))
+        XCTAssertTrue(rules.contains("Paths may contain spaces"))
+        XCTAssertTrue(rules.contains("preserve both copies"))
+        XCTAssertTrue(rules.contains("never invent one"))
+    }
+
     func testExplicitArtifactLabelDoesNotRouteToAnApplicationWithTheSameName() {
         let finder = tool(
             name: "finder.create_folder",
@@ -465,7 +511,8 @@ final class NexComputerToolSearchTests: XCTestCase {
         examples: [String] = [],
         aliases: [String] = [],
         tags: [String] = [],
-        workflows: [String] = []
+        workflows: [String] = [],
+        fields: [String: NexToolFieldSchema] = [:]
     ) -> NexRegisteredTool {
         .init(
             name: name,
@@ -476,7 +523,7 @@ final class NexComputerToolSearchTests: XCTestCase {
             permission: .automation,
             schema: .init(fields: [
                 "query": .init(.string, description: "What to find or act on.")
-            ]),
+            ].merging(fields, uniquingKeysWith: { _, replacement in replacement })),
             application: application,
             provider: provider,
             examples: examples,
