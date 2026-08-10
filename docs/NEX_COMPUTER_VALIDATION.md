@@ -315,6 +315,49 @@ xcodebuild test -quiet -project nexus/nexus.xcodeproj -scheme nexus \
   ** BUILD SUCCEEDED **
 ```
 
+## 2026-08-10 GitHub CLI safe read/open workflow (GPT-OSS-20B)
+
+The planner model was local `gpt-oss:latest` (GPT-OSS 20B). These operations
+used the already-authenticated `gh` CLI only for public-repository search,
+pull-request check reading, and browser launch. They created, changed, merged,
+or commented on no GitHub resource. The browser-launch rows are process/URL
+launch evidence only because the macOS desktop is locked.
+
+| Prompt / operation | Expected / selected action | Result | Latency | Status |
+|---|---|---|---:|---|
+| `Find public GitHub repositories related to the Nexus agent project.` — before CLI compatibility repair | `github.search` | GPT-OSS correctly selected the authenticated CLI action with `query: Nexus agent`, `type: repositories`, and `limit: 10`. The real execution failed because the app requested `nameWithOwner`, which this installed `gh` version does not support. | 4.4 s plan; 40 ms failed run | FAIL / fixed |
+| Same prompt after repair | `github.search` | GPT-OSS selected the same valid arguments. The live action returned ten public matching repositories as `fullName`, URL, and description records. | 4.4 s earlier plan; 1,729 ms run | PASS after fix |
+| `Show current checks for pull request 29 in v1shay/nexus.` | `github.get_checks` | GPT-OSS selected the exact repository and number. The real CLI returned the GitGuardian check with `state: SUCCESS` and `bucket: pass`; it made no change. | 3.8 s plan; 1,197 ms run | PASS |
+| `Open pull request 29 in v1shay/nexus for review.` | `github.open_pull_request` | GPT-OSS selected the exact repository and number. Nexus returned `Opened the pull request.`; no pull request content or state was altered. | 1.9 s plan; 828 ms run | PASS (launch evidence) |
+| `Open GitHub.` | `github.open` | GPT-OSS selected the no-argument launch action. Nexus returned `Opened GitHub.`; no repository, account setting, or data changed. | 1.4 s plan; 21 ms run | PASS (launch evidence) |
+
+### Defects fixed in this increment
+
+1. The authenticated GitHub search action requested `nameWithOwner` from
+   `gh search repos --json`, but the installed CLI advertises `fullName` for
+   that value. The action now requests the supported `fullName,url,description`
+   field set, and a focused regression test asserts the exact command
+   arguments. This is execution compatibility, not a planner shortcut.
+2. GPT-OSS initially saw both an unavailable-looking connector candidate and
+   the working CLI search action, then emitted no action. The native planner
+   instruction now explains the installed authenticated CLI's semantic search
+   capability and its documented inputs. With the action's own schema
+   descriptions, GPT-OSS independently selected `github.search`; the repair
+   neither hardcodes the test query nor bypasses tool selection.
+
+Focused verification:
+
+```text
+xcodebuild test -quiet -project nexus/nexus.xcodeproj -scheme nexus \
+  -destination 'platform=macOS,arch=arm64,id=00006002-001869AC3489801E' \
+  -only-testing:nexusTests/NexPrimaryToolPlannerTests/testNativePlannerPromptIsCompactAndKeepsSemanticCoverageRules \
+  -only-testing:nexusTests/NexComputerExtendedActionTests/testGitHubRepositorySearchUsesFieldsSupportedByTheInstalledCLI
+  ** TEST SUCCEEDED **
+
+./scripts/build-nexus.sh --run
+  ** BUILD SUCCEEDED **
+```
+
 ## 2026-08-10 isolated Obsidian lifecycle and relative-path retrieval repair (GPT-OSS-20B)
 
 The planner model was local `gpt-oss:latest` (GPT-OSS 20B). Every operation
