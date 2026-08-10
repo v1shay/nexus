@@ -230,6 +230,33 @@ final class NexComputerToolSearchTests: XCTestCase {
         )
     }
 
+    func testAbsoluteXcodeProjectPathRanksBuildInsteadOfFinder() {
+        let finder = tool(
+            name: "finder.copy",
+            description: "Copy one file or folder into an allowed directory.",
+            application: "Finder",
+            provider: "Nexus Native Files",
+            tags: ["file", "folder", "filesystem"],
+            fields: ["path": .init(.string, required: true, description: "Exact existing source file or folder. Preserve every supplied path segment, including spaces.")]
+        )
+        let xcode = tool(
+            name: "xcode.build",
+            description: "Run xcodebuild build with an explicit project or workspace and scheme.",
+            application: "Xcode",
+            provider: "xcodebuild",
+            tags: ["xcode", "build", "swift", "developer"],
+            fields: ["path": .init(.string, required: true, description: "Absolute existing Xcode project or workspace path. Preserve every supplied path segment, including spaces.")]
+        )
+
+        XCTAssertEqual(
+            search(
+                "Build the Nexus macOS app from /Users/example/Documents/nexus 2/nexus/nexus.xcodeproj using the nexus scheme.",
+                [finder, xcode]
+            ).first?.tool,
+            "xcode.build"
+        )
+    }
+
     func testFinderNativePlanningPolicyTreatsConcretePathsAsActionable() {
         let finder = tool(
             name: "finder.copy",
