@@ -318,6 +318,41 @@ final class NexComputerToolSearchTests: XCTestCase {
         )
     }
 
+    func testAbsolutePreviewDocumentPathRanksPreviewInsteadOfEditors() {
+        let vscode = tool(
+            name: "vscode.open_file",
+            description: "Open an existing file at an optional line in VS Code.",
+            application: "Visual Studio Code",
+            provider: "VS Code CLI",
+            tags: ["vscode", "code", "editor", "workspace", "developer"],
+            fields: ["path": .init(.string, required: true, description: "Absolute existing source-file path. Preserve every supplied path segment, including spaces.")]
+        )
+        let xcode = tool(
+            name: "xcode.open_file",
+            description: "Open an existing source file with xed.",
+            application: "Xcode",
+            provider: "xcodebuild",
+            tags: ["xcode", "build", "swift", "developer"],
+            fields: ["path": .init(.string, required: true, description: "Absolute existing source-file path. Preserve every supplied path segment, including spaces.")]
+        )
+        let preview = tool(
+            name: "preview.open",
+            description: "Open a supported document with the default macOS Preview handler.",
+            application: "Preview",
+            provider: "PDFKit",
+            tags: ["preview", "pdf", "document", "image", "export"],
+            fields: ["path": .init(.string, required: true, description: "Absolute existing PDF or supported document path. Preserve every supplied path segment, including spaces.")]
+        )
+
+        XCTAssertEqual(
+            search(
+                "Open the generated combined PDF at /Users/example/Documents/nexus 2/COMBINED.pdf in Preview.",
+                [vscode, xcode, preview]
+            ).first?.tool,
+            "preview.open"
+        )
+    }
+
     func testFinderNativePlanningPolicyTreatsConcretePathsAsActionable() {
         let finder = tool(
             name: "finder.copy",
