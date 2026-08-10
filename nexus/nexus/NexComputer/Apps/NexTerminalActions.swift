@@ -93,10 +93,14 @@ actor NexTerminalSessionManager {
     private static let executableRoots = ["/bin", "/usr/bin", "/usr/sbin", "/sbin", "/opt/homebrew/bin", "/usr/local/bin"]
     private static let environmentAllowlist: Set<String> = ["LANG", "LC_ALL", "LC_CTYPE", "TERM", "NO_COLOR", "CI"]
     private static let maximumOutputBytes = 1_000_000
+    /// A command that neither finishes nor presents a bounded interactive
+    /// prompt must still yield its stable session ID. That makes the public
+    /// get-output and cancel actions reachable for long-running work instead
+    /// of trapping the caller inside the original run request.
+    private static let initialObservationWindow = Duration.milliseconds(750)
 
     private let allowedWorkingRoots: [URL]
     private var sessions: [UUID: Session] = [:]
-    private var stateWaiters: [UUID: [CheckedContinuation<Void, Never>]] = [:]
 
     init(
         allowedWorkingRoots: [URL]? = nil
@@ -224,11 +228,7 @@ actor NexTerminalSessionManager {
         case .stdout: session.stdout = Self.bounded(session.stdout + text)
         case .stderr: session.stderr = Self.bounded(session.stderr + text)
         }
-        let previousPrompt = session.promptState
         session.promptState = Self.detectPrompt(in: session.stdout + "\n" + session.stderr)
-        if previousPrompt == .none, session.promptState != .none {
-            stateWaiters.removeValue(forKey: sessionID)?.forEach { $0.resume() }
-        }
         let label = stream == .stdout ? "Terminal output" : "Terminal error output"
         await progress("\(label): \(Self.lastReadableLine(text))", nil)
     }
@@ -241,16 +241,17 @@ actor NexTerminalSessionManager {
         session.exitStatus = exitStatus
         session.finishedAt = Date()
         session.promptState = .none
-        stateWaiters.removeValue(forKey: sessionID)?.forEach { $0.resume() }
     }
 
     private func waitForCompletionOrPrompt(sessionID: UUID) async {
-        guard let session = sessions[sessionID], session.exitStatus == nil, session.promptState == .none else { return }
-        await withCheckedContinuation { continuation in
-            stateWaiters[sessionID, default: []].append(continuation)
-            if sessions[sessionID]?.exitStatus != nil || sessions[sessionID]?.promptState != NexTerminalPromptState.none {
-                stateWaiters[sessionID]?.removeLast().resume()
-            }
+        let clock = ContinuousClock()
+        let deadline = clock.now.advanced(by: Self.initialObservationWindow)
+        while !Task.isCancelled,
+              clock.now < deadline,
+              let session = sessions[sessionID],
+              session.exitStatus == nil,
+              session.promptState == .none {
+            try? await Task.sleep(for: .milliseconds(25))
         }
     }
 
@@ -547,7 +548,7 @@ actor NexTerminalActionCatalog {
         permissions: terminalPermissions, risk: .high, confirmation: .always, implementation: .appleScript
     )
     private static let runManifest = manifest(
-        id: "terminal.run_command", description: "Run an executable directly with a separate argv array in an isolated Nexus process and stream stdout and stderr. Shell strings and metacharacters are rejected.",
+        id: "terminal.run_command", description: "Run an executable directly with a separate argv array in an isolated Nexus process and stream stdout and stderr. Returns a stable session ID after completion, a supported prompt, or brief startup observation so long-running work can be inspected or cancelled. Shell strings and metacharacters are rejected.",
         examples: ["Run git status in this project", "Print the current directory"],
         input: .init(fields: [
             "executable": .init(.string, required: true, description: "Executable name or allowed absolute executable path."),

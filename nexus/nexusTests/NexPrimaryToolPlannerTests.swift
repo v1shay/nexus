@@ -456,6 +456,32 @@ final class NexPrimaryToolPlannerTests: XCTestCase {
         )
     }
 
+    func testGroundingRemovesAnUnrequestedOptionalFilesystemRoot() {
+        let command = NexRegisteredTool(
+            name: "terminal.run_command",
+            description: "Run an isolated command.",
+            statusLabel: "Working…",
+            spokenStatus: "Working.",
+            iconSystemName: "terminal",
+            permission: .codeExecution,
+            schema: .init(fields: [
+                "executable": .init(.string, required: true),
+                "workingDirectory": .init(.string, description: "Existing directory under an allowed root.")
+            ])
+        ) { _, _ in .null }
+        let plan = NexPrimaryToolPlan(actions: [.init(
+            tool: command.name,
+            arguments: ["executable": .string("printf"), "workingDirectory": .string("/")]
+        )])
+
+        let grounded = NexPrimaryToolPlanner.groundingActions(
+            in: plan,
+            userPrompt: "Run a harmless print command and show me its output.",
+            registeredTools: [command]
+        )
+        XCTAssertNil(grounded.actions.first?.arguments["workingDirectory"])
+    }
+
     private func browserTaskTool() -> NexRegisteredTool {
         NexRegisteredTool(
             name: "browser.run_task",

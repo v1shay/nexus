@@ -9,6 +9,35 @@ enum NexusHeadlessControlCodec {
     static func jsonString<T: Encodable>(_ value: T) -> String {
         String(data: (try? JSONEncoder.cli.encode(value)) ?? Data("{}".utf8), encoding: .utf8) ?? "{}"
     }
+
+    /// The control plane carries one JSON object as a string because its
+    /// request envelope intentionally contains only small string values.
+    /// Decode it at the app boundary so a headless command uses the same
+    /// strongly-typed computer runtime as the visible Nexus UI.
+    static func toolArguments(json: String) -> [String: NexJSONValue]? {
+        guard let data = json.data(using: .utf8),
+              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            return nil
+        }
+        return try? object.mapValues(nexJSON)
+    }
+
+    private static func nexJSON(_ value: Any) throws -> NexJSONValue {
+        switch value {
+        case let value as String:
+            .string(value)
+        case let value as NSNumber:
+            CFGetTypeID(value) == CFBooleanGetTypeID() ? .bool(value.boolValue) : .number(value.doubleValue)
+        case let value as [Any]:
+            .array(try value.map(nexJSON))
+        case let value as [String: Any]:
+            .object(try value.mapValues(nexJSON))
+        case is NSNull:
+            .null
+        default:
+            throw CLIError.invalidJSON
+        }
+    }
 }
 
 enum NexusHeadlessControlPaths {
@@ -71,7 +100,7 @@ final class NexusHeadlessControlHost {
 
 enum NexusHeadlessControlClient {
     static func run(arguments: [String]) async -> Int32 {
-        guard let command = arguments.first else { return fail("Usage: nexusctl <status|nexcli-status|prompt|cancel|models|model-select|permissions|permission-open|permission-repair|memory-status|memory-save|settings|settings-set|tools|connect-enable|connect-role|connect-route>") }
+        guard let command = arguments.first else { return fail("Usage: nexusctl <status|nexcli-status|prompt|cancel|models|model-select|permissions|permission-open|permission-repair|memory-status|memory-save|settings|settings-set|tools|tool-execute|tool-dry-run|tool-confirm|tool-cancel-confirmation|connect-enable|connect-role|connect-route>") }
         var values: [String: String] = [:]
         if ["prompt", "model-select", "permission-open", "connect-enable", "connect-role", "connect-route"].contains(command) {
             guard arguments.count > 1 else { return fail("Missing value for \(command).") }
@@ -81,6 +110,19 @@ enum NexusHeadlessControlClient {
             guard arguments.count == 3 else { return fail("Usage: nexusctl settings-set <key> <value>") }
             values["key"] = arguments[1]
             values["value"] = arguments[2]
+        }
+        if command == "tool-execute" || command == "tool-dry-run" {
+            guard arguments.count == 4, arguments[2] == "--json" else {
+                return fail("Usage: nexusctl \(command) <action> --json <object>")
+            }
+            values["action"] = arguments[1]
+            values["json"] = arguments[3]
+        }
+        if command == "tool-confirm" || command == "tool-cancel-confirmation" {
+            guard arguments.count == 2 else {
+                return fail("Usage: nexusctl \(command) <pending-action-id>")
+            }
+            values["actionId"] = arguments[1]
         }
         do {
             try NexusHeadlessControlPaths.prepare()
