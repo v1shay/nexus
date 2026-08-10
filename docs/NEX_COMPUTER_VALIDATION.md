@@ -6,7 +6,8 @@ This ledger began on 2026-07-22 and is extended by dated validation increments b
 
 ## Environment
 
-- Registry: 201 actions; 193 available in the current environment.
+- Registry: 202 definitions (201 operational actions plus `search_tools`); 111
+  are currently available in the headless environment.
 - Managed browser: provisioned and isolated under Nexus Application Support.
 - Connectors: Google, Notion, Slack, GitHub, and Discord are not configured on this Mac, and are reported as disconnected.
 - Current permission gaps: Messages Full Disk Access and Photos access are not granted to this signed build.
@@ -245,6 +246,45 @@ xcodebuild test -quiet -project nexus/nexus.xcodeproj -scheme nexus \
 The Codex UI launch actions are process-verified only. Computer Use cannot
 inspect this locked macOS desktop session, so this ledger makes no visual
 claim about the opened window or session content.
+
+## 2026-08-10 complete GPT-OSS-20B operational-tool routing audit
+
+The final audited registry contains 201 operational tools; the separate
+`search_tools` definition is discovery-only and excluded. Every tool's own
+first natural-language example was run through the production semantic
+retrieval and native function-planning path with local `gpt-oss:latest`.
+Ollama reports that model as GPT-OSS, 20.9B parameters, with tool support.
+This audit does not execute the selected capability, so it cannot change a
+file, account, message, browser, or remote service.
+
+| Check | Result |
+|---|---|
+| Registered-example discovery | 201 / 201 actions appeared in the top candidate set. |
+| GPT-OSS direct selection | 57 / 201 examples selected their expected action in one pass. |
+| GPT-OSS discovery-first | 22 / 201 examples selected `search_tools`, which is the intended two-pass boundary for unavailable or underspecified capabilities. |
+| GPT-OSS safe no-action | 122 / 201 examples produced no grounded call. These prompts deliberately omit a required target, ID, path, recipient, or currently available capability; the audit correctly made no side effect. |
+| Wrong-action selection | 0 / 201. |
+| Full-path latency | 919 ms min, 1,793 ms mean, 1,631 ms median, 2,881 ms p95, 4,854 ms max. |
+
+The audit uncovered and fixed six discovery regressions: Contact phone lookup,
+Finder file search, GitHub pull-request read/comment, VS Code workspace
+search, and Xcode test. The repair preserves action identity during retrieval
+(rather than collapsing actions that share broad provider vocabulary), adds
+action-owned Finder/VS Code search language, and gives exact registered
+examples the same ranking weight as exact aliases. The final discovery gate
+is 201 / 201.
+
+`./scripts/build-nexus.sh` and `xcodebuild ... build-for-testing` both passed.
+The app-hosted XCTest runner retains its earlier loader/harness limitation, so
+this increment claims compilation and CLI audit evidence, not a new XCTest
+runtime pass. The locked desktop still prevents Computer Use visual checks;
+account/TCC prerequisites and the safe real-test targets for every blocked
+action remain in [NEX_TOOL_AUTHORIZATION_MATRIX.md](NEX_TOOL_AUTHORIZATION_MATRIX.md).
+
+The complete machine-readable per-tool record—exact prompt, expected action,
+discovery candidates, GPT-OSS output, routing outcome, reason, and latency—is
+checked in as [NEX_GPT_OSS_20B_TOOL_AUDIT_20260810.md](NEX_GPT_OSS_20B_TOOL_AUDIT_20260810.md)
+and [NEX_GPT_OSS_20B_TOOL_AUDIT_20260810.json](NEX_GPT_OSS_20B_TOOL_AUDIT_20260810.json).
 
 ## 2026-08-10 managed browser running-task lifecycle (GPT-OSS-20B)
 

@@ -365,7 +365,7 @@ actor NexFinderActionCatalog {
     private static let searchManifest = manifest("finder.search", "Search an allowed local folder by filename, extension (including Markdown), text content, modification date, byte size, and bounded result count.", ["Find PDFs named application", "Find a Markdown file in this folder", "Search this folder for text"], .init(fields: [
         "root": .init(.string, required: true, description: "Absolute existing local folder to search. Preserve every supplied path segment, including spaces."), "nameContains": .init(.string), "extension": .init(.string), "contentContains": .init(.string),
         "modifiedAfter": .init(.string), "modifiedBefore": .init(.string), "minimumSize": .init(.integer, minimum: 0), "maximumSize": .init(.integer, minimum: 0), "limit": .init(.integer, minimum: 1, maximum: 200)
-    ]), .low, .never, [], .nativeAPI)
+    ]), .low, .never, [], .nativeAPI, aliases: ["find files", "find PDFs", "search folder files"])
     private static let openManifest = manifest("finder.open", "Open a specific existing file or folder using its default macOS application.", ["Open this file"], pathInput, .low, .never, [], .nativeAPI)
     private static let revealManifest = manifest("finder.reveal", "Reveal a specific existing file or folder in Finder.", ["Show this file in Finder"], pathInput, .low, .never, [], .nativeAPI)
     private static let createFolderManifest = manifest("finder.create_folder", "Create one folder under an allowed existing parent with an explicit collision policy.", ["Create a Results folder"], .init(fields: ["parent": .init(.string, required: true), "name": .init(.string, required: true), "collisionPolicy": collision]), .high, .always, [], .nativeAPI)
@@ -382,9 +382,9 @@ actor NexFinderActionCatalog {
             "collisionPolicy": collision
         ]), .high, .always, [], .nativeAPI)
     }
-    private static func manifest(_ id: String, _ description: String, _ examples: [String], _ input: NexToolInputSchema, _ risk: NexComputerRiskClass, _ confirmation: NexComputerConfirmationPolicy, _ permissions: [NexComputerPermissionRequirement], _ method: NexComputerImplementationMethod) -> NexComputerActionManifest {
+    private static func manifest(_ id: String, _ description: String, _ examples: [String], _ input: NexToolInputSchema, _ risk: NexComputerRiskClass, _ confirmation: NexComputerConfirmationPolicy, _ permissions: [NexComputerPermissionRequirement], _ method: NexComputerImplementationMethod, aliases extraAliases: [String] = []) -> NexComputerActionManifest {
         .init(actionID: id, application: "Finder", provider: "Nexus Native Files", bundleIdentifier: method == .appleScript ? "com.apple.finder" : nil,
-              description: description, examples: examples, aliases: [id.replacingOccurrences(of: ".", with: " ")], tags: ["finder", "file", "folder", "filesystem"],
+              description: description, examples: examples, aliases: [id.replacingOccurrences(of: ".", with: " ")] + extraAliases, tags: ["finder", "file", "folder", "filesystem"],
               inputSchema: input, outputSchema: output, implementationMethod: method, requiredPermissions: permissions, registryPermission: .files,
               riskClass: risk, confirmationPolicy: confirmation, availabilityCheck: method == .appleScript ? .application(bundleIdentifier: "com.apple.finder") : .always,
               timeoutSeconds: id == "finder.search" ? 60 : 20, supportsCancellation: id == "finder.search", dryRunBehavior: .supported("Would perform \(id) without changing files."), previewRenderer: "finder.action", tests: ["NexFinderActionTests"])
