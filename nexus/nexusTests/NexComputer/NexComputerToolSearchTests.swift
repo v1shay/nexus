@@ -318,6 +318,41 @@ final class NexComputerToolSearchTests: XCTestCase {
         )
     }
 
+    func testVaultRelativePathDoesNotPolluteIntentRetrieval() {
+        let append = tool(
+            name: "obsidian.append_note",
+            description: "Atomically append Markdown to an exact existing note and return a diff.",
+            application: "Obsidian",
+            provider: "Obsidian Vault",
+            aliases: ["add to an existing note", "add a line to an existing note", "record a note follow-up"],
+            tags: ["notes", "markdown", "vault"],
+            fields: ["path": .init(.string, required: true)]
+        )
+        let branch = tool(
+            name: "git.create_branch",
+            description: "Create and check out a new local Git branch.",
+            application: "Git",
+            provider: "Git CLI",
+            aliases: ["start a separate local line of work"],
+            tags: ["git", "repository", "branch"]
+        )
+        let confirmation = tool(
+            name: "confirm_action",
+            description: "Confirm and execute one exact pending Nexus action.",
+            application: "Nex",
+            provider: "Nexus Confirmation Gateway",
+            tags: ["confirmation", "nexus"]
+        )
+
+        XCTAssertEqual(
+            search(
+                "In the validation note at validation/test_nexus_tools_checklist.md, add a short completed line saying the isolated vault check passed.",
+                [append, branch, confirmation]
+            ).first?.tool,
+            "obsidian.append_note"
+        )
+    }
+
     func testAbsolutePreviewDocumentPathRanksPreviewInsteadOfEditors() {
         let vscode = tool(
             name: "vscode.open_file",

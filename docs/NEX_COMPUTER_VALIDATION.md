@@ -182,6 +182,46 @@ xcodebuild -quiet -project nexus/nexus.xcodeproj -scheme nexus \
   ** BUILD SUCCEEDED **
 ```
 
+## 2026-08-10 isolated Obsidian lifecycle and relative-path retrieval repair (GPT-OSS-20B)
+
+The planner model was local `gpt-oss:latest` (GPT-OSS 20B). Every operation
+used only the generated vault at
+`.build/validation-fixtures/Nexus Obsidian Test Vault`; its note path was
+`validation/test_nexus_tools_checklist.md`. The vault provider rejects absolute
+and parent-traversal paths. No personal Obsidian note was read, created,
+updated, or opened. Computer Use visual proof remains unavailable while the
+Mac is locked, so the open actions below are supported by the real URL-scheme
+and application-launch results rather than a UI claim.
+
+| Prompt / operation | Expected / selected action | Result | Latency | Status |
+|---|---|---|---:|---|
+| `Create a brief test note in the validation vault with a checklist for reviewing Nexus tools.` | `obsidian.create_note` | GPT-OSS selected a vault-relative Markdown path and checklist content. The 4 ms immutable confirmation preview was approved; Nexus created only the generated note. | 3.5 s plan; 4 ms preview; under 0.7 s confirmation round trip | PASS |
+| `Find the Nexus Obsidian Validation note in the isolated validation vault.` | `obsidian.search` | GPT-OSS selected search with `folder: validation`; the live action found exactly the generated note and matching excerpt. | part of a 7.4 s four-prompt planning batch; 1 ms run | PASS |
+| `Read the validation note at validation/test_nexus_tools_checklist.md.` | `obsidian.read_note` | GPT-OSS selected the exact relative path; live read returned the final title and completed-test line verbatim. | same planning batch; 0 ms run | PASS |
+| `In the validation note at validation/test_nexus_tools_checklist.md, add a short completed line saying the isolated vault check passed.` before repair | `obsidian.append_note` expected | Relative filename terms (notably `nexus`) polluted the narrow retrieval set; it returned Git/confirmation candidates and GPT-OSS emitted no action. Nothing changed. | about 2.7 s plan | FAIL / fixed |
+| Same append request after repair | `obsidian.append_note` | Discovery ranked append first; GPT-OSS supplied the exact relative path and line. The 3 ms immutable preview was approved and returned an atomic diff. | 3.2 s plan; 3 ms preview; under 0.7 s confirmation round trip | PASS after fix |
+| `Replace the contents of validation/test_nexus_tools_checklist.md with a short checklist titled Nexus Obsidian Validation and include that the isolated vault test passed.` | `obsidian.update_note` | GPT-OSS selected the atomic replacement action and exact path. The 3 ms preview was approved; the returned diff showed the old checklist replaced with the requested title and passed item. A later read/search independently verified it. | 2.4 s plan; 3 ms preview; under 0.7 s confirmation round trip | PASS |
+| `Open the validation note at validation/test_nexus_tools_checklist.md in Obsidian.` | `obsidian.open_note` | GPT-OSS selected the URL-scheme action with the exact path. The real action returned `Opened the Obsidian note.` | same planning batch; 291 ms run | PASS (headless) |
+| `Open Obsidian.` | `obsidian.open` | GPT-OSS selected the application action with no invented arguments. The live provider launched/activated Obsidian. | same planning batch; 26 ms run | PASS (headless) |
+
+### Defect fixed in this increment
+
+The semantic index previously stripped absolute paths but retained
+vault-relative path tokens. A target such as
+`validation/test_nexus_tools_checklist.md` could therefore make unrelated
+Nexus- or Git-labelled actions outrank the request's actual operation. The
+shared retrieval layer now removes only slash-shaped relative path tokens from
+its local ranking text while preserving the original prompt for model argument
+generation. This is generic filesystem-target grounding, not application or
+prompt routing.
+
+`obsidian.append_note` additionally declares ordinary capability aliases for
+adding to an existing note, adding a line to it, and recording a follow-up.
+Those are action-contract semantics exposed to the model, not a special-case
+planner rule. `NexComputerToolSearchTests` contains a competing Obsidian/Git/
+confirmation regression and the complete class passed, along with the rebuilt
+Debug CLI.
+
 ## 2026-08-10 full disposable local-Git lifecycle (GPT-OSS-20B)
 
 This completed the local Git surface in a generated-only environment under
