@@ -381,6 +381,14 @@ actor NexVSCodeCLIProvider: NexVSCodeProviding {
     func activeWorkspace() async -> URL? { workspace }
 
     func search(workspace: URL, query: String, limit: Int) async throws -> [(URL, Int, String)] {
+        try Self.searchFiles(workspace: workspace, query: query, limit: limit)
+    }
+
+    private nonisolated static func searchFiles(
+        workspace: URL,
+        query: String,
+        limit: Int
+    ) throws -> [(URL, Int, String)] {
         guard !query.isEmpty else { throw NexToolError.executionFailed(code: "invalid_query", message: "Search query cannot be empty.") }
         var isDirectory: ObjCBool = false
         guard FileManager.default.fileExists(atPath: workspace.path, isDirectory: &isDirectory), isDirectory.boolValue else { throw NexVSCodeError.workspaceRequired }

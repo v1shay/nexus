@@ -965,3 +965,16 @@ zsh -n scripts/build-nexus.sh
   Refusing to install an ad-hoc build as the durable permission host …
   exit status 2
 ```
+
+### Swift 6 tool-runtime follow-up
+
+The Debug build also exposed two filesystem-enumerator warnings that become
+errors under Swift 6 concurrency checking: the VS Code fixture search and the
+paired-host file-list operation iterated Foundation's synchronous directory
+enumerator from actor-isolated async methods. Each now delegates enumeration to
+a nonisolated synchronous helper and emits the same structured results from
+the actor. A fresh `./scripts/build-nexus.sh` completed successfully with no
+`makeIterator`-from-asynchronous-context warning. The focused
+`NexComputerExtendedActionTests` Xcode run again hung before test execution on
+this locked host and was stopped without affecting user data, so that run is
+not claimed as a pass.
