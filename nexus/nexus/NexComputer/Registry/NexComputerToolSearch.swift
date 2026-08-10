@@ -342,8 +342,18 @@ struct NexToolSearchEngine: Sendable {
         // confirmation-control tools outrank Finder search. Keep the original
         // query for argument generation; remove only absolute-path spans from
         // the local semantic index.
-        let withoutPaths = text.replacingOccurrences(
+        let withoutAbsolutePaths = text.replacingOccurrences(
             of: #"(?:^|\s)/.*?(?=\s+(?:to|into|from|and|then|also)\b|[,;]|\.(?=\s|$)|$)"#,
+            with: " ",
+            options: .regularExpression
+        )
+        // Vault-relative paths are concrete arguments too. Leaving a token
+        // such as `validation/nexus-checklist.md` in the intent index lets
+        // the filename's incidental words outweigh the requested operation.
+        // Strip only path-shaped slash tokens, preserving ordinary prose and
+        // the original prompt used later for argument generation.
+        let withoutPaths = withoutAbsolutePaths.replacingOccurrences(
+            of: #"(?:^|\s)(?:\.?\.?/)?[[:alnum:]_][[:alnum:]_.-]*(?:/[[:alnum:]_][[:alnum:]_.-]*)+(?=$|[\s,;])"#,
             with: " ",
             options: .regularExpression
         )
