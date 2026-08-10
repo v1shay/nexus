@@ -132,7 +132,16 @@ final class NexComputerExtendedActionTests: XCTestCase {
     }
     func testManagedBrowserRejectsInvalidStepPayloadBeforeProvisioning() async throws { do { _ = try await NexManagedBrowserProvider(root: FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)).run(goal: "test", stepsJSON: "{}") { _ in }; XCTFail("Expected invalid steps") } catch let error as NexToolError { XCTAssertEqual(error.code, "invalid_browser_steps") } }
 
-    func testManagedBrowserReadsExampleDomainEndToEnd() async throws {
+    func testBrowserScreenshotRequestDiscoversAgenticBrowserAction() async throws {
+        let tools = NexToolRegistry()
+        let computer = NexComputerRegistry(toolRegistry: tools, permissionManager: NexComputerPermissionManager(backend: AuthorizedPermissions()))
+        try await NexBrowserActionCatalog().register(on: computer)
+        let search = NexToolSearchService(registry: tools)
+        let result = await search.search(query: "On https://www.wikipedia.org/, take a full-page screenshot and tell me which languages are prominently displayed.")
+        XCTAssertEqual(result.candidates.first?.tool, "browser.run_task")
+    }
+
+    func testManagedBrowserReadsPublicPageAndPersistsItsResult() async throws {
         let chrome = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
         let node = "/opt/homebrew/bin/node"
         guard FileManager.default.isExecutableFile(atPath: chrome),
@@ -142,12 +151,17 @@ final class NexComputerExtendedActionTests: XCTestCase {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("NexBrowserE2E-\(UUID().uuidString)", isDirectory: true)
         defer { try? FileManager.default.removeItem(at: root) }
         let result = try await NexManagedBrowserProvider(root: root).run(
-            goal: "Read the Example Domain page heading",
-            stepsJSON: "[{\"action\":\"navigate\",\"url\":\"https://example.com\"},{\"action\":\"extract\",\"selector\":\"h1\"}]"
+            goal: "Read the IANA reserved-domains page heading",
+            stepsJSON: "[{\"action\":\"navigate\",\"url\":\"https://www.iana.org/domains/reserved\"},{\"action\":\"extract\",\"selector\":\"h1\"}]"
         ) { _ in }
         XCTAssertEqual(result.status, "completed")
-        XCTAssertTrue(result.text.localizedCaseInsensitiveContains("Example Domain"))
+        XCTAssertTrue(result.text.localizedCaseInsensitiveContains("IANA-managed Reserved Domains"))
         XCTAssertTrue(result.error.isEmpty)
+        let reloaded = NexManagedBrowserProvider(root: root)
+        let persisted = await reloaded.status(result.taskID)
+        XCTAssertEqual(persisted?.taskID, result.taskID)
+        XCTAssertEqual(persisted?.status, "completed")
+        XCTAssertEqual(persisted?.text, result.text)
     }
     func testBrowserProfileImportCopiesOnlySafeState() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)

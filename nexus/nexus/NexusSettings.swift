@@ -747,7 +747,7 @@ final class NexusNemotronVoiceChatSession {
     private static func realtimeTool(_ tool: NexRegisteredTool) -> [String: Any] {
         var properties: [String: Any] = [:]
         var required: [String] = []
-        for (name, field) in tool.schema.fields {
+        for (name, field) in tool.schema.fields where !field.deprecated {
             var schema: [String: Any] = ["type": jsonType(field.type)]
             if let description = field.description { schema["description"] = description }
             if !field.allowedValues.isEmpty { schema["enum"] = field.allowedValues }

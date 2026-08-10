@@ -64,3 +64,31 @@ The final targeted run completed 37 tests and the complete focused Nex Computer 
 - The temporary Obsidian validation note was removed after its update was verified.
 - Test files, repositories, generated PDFs, and browser screenshots live only in `/tmp` or Nexus Application Support.
 - No live connector authorization was initiated because no credential was available.
+
+## 2026-08-09 headless hardening increment (GPT-OSS-20B)
+
+This is a rolling ledger for the current headless pass. The model for every
+planned prompt below was local `gpt-oss:latest` (GPT-OSS 20B). Browser writes
+and the disposable Obsidian writes crossed Nexus's own confirmation boundary;
+no message, email, remote Git mutation, or personal note was sent or changed.
+
+| Prompt / operation | Expected action | Actual outcome | Latency | Status |
+|---|---|---|---:|---|
+| `Visit https://www.wikipedia.org/ and describe the page.` | `browser.visit_url` | Correct tool and URL selected; the isolated browser returned the real Wikipedia language portal text. | 1,427 ms execution | PASS |
+| Fresh `browser.get_task` for that visit | `browser.get_task` | Restored the completed task and page text after the originating CLI process exited. | 0 ms execution | PASS after fix |
+| `On https://www.wikipedia.org/, take a full-page screenshot and tell me which languages are prominently displayed.` | `browser.run_task` with navigate, screenshot, extract | Correct agentic browser action was selected, but GPT-OSS alternated between screenshot-only and extract-only three-step plans. The compound-plan completeness issue remains open. | about 2–3 s planning | PARTIAL / recorded failure |
+| `Take a full-page screenshot of https://www.wikipedia.org/.` | `browser.run_task` | GPT-OSS selected structured `navigate`, `wait_for_element`, and `screenshot` steps. The action required confirmation, then completed and saved a 1280×1100 Wikipedia image. Computer Use opened and visually inspected that image in Preview. | 2 ms to request confirmation; 1.7 s confirmed run | PASS |
+| Existing runtime running a new `wait_for_element` step | `browser.run_task` | Initially failed because an old generated `agent.mjs` remained on disk after the app changed. The runtime now refreshes its Nexus-owned script when its bundled content changes; the same structured task then passed. | 1.7 s confirmed run | FIXED + PASS |
+| `Create a short note called Tool Validation in my validation vault explaining that this is a disposable test.` | `obsidian.create_note` | Discovery ranked the correct action, but GPT-OSS first selected invalid `open_note`, then returned no action after contract guidance. This is retained as a routing failure. | 1.9–2.8 s planning | FAIL / recorded |
+| Disposable-vault `obsidian.create_note` | `obsidian.create_note` | Confirmation bound the exact note content and relative path; confirmed create completed. | 2 ms to request confirmation; about 0.3 s confirmed run | PASS |
+| Disposable-vault `obsidian.read_note` | `obsidian.read_note` | Returned the exact created content. | 0 ms execution | PASS |
+| Disposable-vault `obsidian.append_note` | `obsidian.append_note` | Returned an atomic diff after confirmation. | 2 ms to request confirmation; about 0.3 s confirmed run | PASS |
+| Disposable-vault `obsidian.search` for `headless CLI` | `obsidian.search` | Found the one generated note with its matching excerpt. | 1 ms execution | PASS |
+| Disposable-vault `obsidian.update_note` then read | `obsidian.update_note`, `obsidian.read_note` | Confirmed atomic replacement returned its diff; a final read returned the replacement content. | 2 ms to request confirmation; 0 ms final read | PASS |
+
+### Defects fixed in this increment
+
+1. `browser.get_task` kept results only in memory, so a later headless CLI invocation reported `BROWSER_TASK_MISSING`. Final non-secret task results now persist beside the task's own screenshots/downloads and are read only by validated UUID.
+2. Agentic browser screenshot requests did not rank `browser.run_task` above a simple visit. The action's semantic metadata now describes full-page screenshots and a registered-catalog regression test covers that natural request.
+3. Native function calls embedded browser steps as a JSON string, which caused GPT-OSS/Ollama tool-call decoding to truncate the outer call. New calls use a structured `steps` array; the accepted legacy `steps_json` field is hidden from model-facing schemas.
+4. The managed browser script was not refreshed after an application update. Nexus now rewrites only its own generated script when its bundled implementation changes, preventing stale runtimes from advertising unsupported behavior.

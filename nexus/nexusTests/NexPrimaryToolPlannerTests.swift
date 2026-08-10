@@ -47,6 +47,22 @@ final class NexPrimaryToolPlannerTests: XCTestCase {
             tools: tools() + [messageTriageTool()]
         )[0].content
         XCTAssertTrue(messageInstructions.contains("opening the app never returns contents"))
+
+        let browserInstructions = NexPrimaryToolPlanner.nativePlanningMessages(
+            context: context,
+            tools: tools() + [browserTaskTool()]
+        )[0].content
+        XCTAssertTrue(browserInstructions.contains("structured step in steps"))
+        XCTAssertTrue(browserInstructions.contains("wait_for_element"))
+        XCTAssertTrue(browserInstructions.contains("screenshot alone returns no readable evidence"))
+        XCTAssertTrue(browserInstructions.contains("Never use the legacy steps_json input"))
+
+        let obsidianInstructions = NexPrimaryToolPlanner.nativePlanningMessages(
+            context: context,
+            tools: tools() + [obsidianCreateNoteTool()]
+        )[0].content
+        XCTAssertTrue(obsidianInstructions.contains("requested new note"))
+        XCTAssertTrue(obsidianInstructions.contains("vault-relative path"))
     }
 
     func testPlannerRequiresCapabilityDiscoveryBeforeAnExternalActionIsRefused() {
@@ -354,14 +370,14 @@ final class NexPrimaryToolPlannerTests: XCTestCase {
             permission: .network,
             schema: .init(fields: [
                 "goal": .init(.string, required: true),
-                "steps_json": .init(.string, required: true)
+                "steps": .init(.array, required: true)
             ])
         ) { _, _ in .null }
         let plan = NexPrimaryToolPlan(actions: [.init(
             tool: "browser.run_task",
             arguments: [
                 "goal": .string("Inspect a form"),
-                "steps_json": .string(#"[{"action":"navigate","url":"https://example.com/form"}]"#)
+                "steps": .array([.object(["action": .string("navigate"), "url": .string("https://example.com/form")])])
             ]
         )])
 
@@ -378,6 +394,30 @@ final class NexPrimaryToolPlannerTests: XCTestCase {
             ).actions.map(\.tool),
             [browser.name]
         )
+    }
+
+    private func browserTaskTool() -> NexRegisteredTool {
+        NexRegisteredTool(
+            name: "browser.run_task",
+            description: "Run a managed browser task.",
+            statusLabel: "Working…",
+            spokenStatus: "Working.",
+            iconSystemName: "globe",
+            permission: .network,
+            schema: .init(fields: ["goal": .init(.string, required: true), "steps": .init(.array)])
+        ) { _, _ in .null }
+    }
+
+    private func obsidianCreateNoteTool() -> NexRegisteredTool {
+        NexRegisteredTool(
+            name: "obsidian.create_note",
+            description: "Create a note.",
+            statusLabel: "Working…",
+            spokenStatus: "Working.",
+            iconSystemName: "note.text",
+            permission: .files,
+            schema: .init(fields: ["path": .init(.string, required: true), "content": .init(.string, required: true)])
+        ) { _, _ in .null }
     }
 
     func testGroundingRejectsCrossDomainFocusAndObsidianSubstitutions() {
