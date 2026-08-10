@@ -3,10 +3,28 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 DERIVED_DATA="${NEXUS_DERIVED_DATA:-$ROOT/.build}"
-EXPECTED_REQUIREMENT='designated => identifier "na.nexus"'
 XCODE_DEVELOPER_DIR="${NEXUS_DEVELOPER_DIR:-}"
 SIGNING_IDENTITY="${NEXUS_CODE_SIGN_IDENTITY:-}"
 INSTALL_APP_PATH="${NEXUS_INSTALL_APP_PATH:-$HOME/Applications/Nexus.app}"
+
+if [[ -z "$SIGNING_IDENTITY" ]]; then
+  DISCOVERED_IDENTITIES="$(
+    /usr/bin/security find-identity -v -p codesigning 2>/dev/null |
+      /usr/bin/sed -n 's/^[[:space:]]*[0-9][0-9]*) [0-9A-F]* "\(Apple Development:.*\)"$/\1/p'
+  )"
+  if [[ -n "$DISCOVERED_IDENTITIES" ]]; then
+    APPLE_DEVELOPMENT_IDENTITIES=("${(@f)DISCOVERED_IDENTITIES}")
+  else
+    APPLE_DEVELOPMENT_IDENTITIES=()
+  fi
+  if (( ${#APPLE_DEVELOPMENT_IDENTITIES[@]} == 1 )); then
+    SIGNING_IDENTITY="$APPLE_DEVELOPMENT_IDENTITIES[1]"
+    echo "Using the only available Apple Development signing identity: $SIGNING_IDENTITY"
+  elif (( ${#APPLE_DEVELOPMENT_IDENTITIES[@]} > 1 )); then
+    echo "Multiple Apple Development signing identities are available. Set NEXUS_CODE_SIGN_IDENTITY to the identity intended for the durable Nexus permission host." >&2
+    exit 2
+  fi
+fi
 
 if [[ -z "$XCODE_DEVELOPER_DIR" ]]; then
   if [[ -d /Applications/Xcode-beta.app/Contents/Developer ]]; then
@@ -32,20 +50,26 @@ DEVELOPER_DIR="$XCODE_DEVELOPER_DIR" /usr/bin/xcodebuild "${BUILD_ARGUMENTS[@]}"
 APP="$DERIVED_DATA/Build/Products/Debug/nexus.app"
 /usr/bin/codesign --verify --deep --strict --verbose=2 "$APP"
 ACTUAL_REQUIREMENT="$(/usr/bin/codesign --display --requirements - "$APP" 2>&1 |
-  /usr/bin/sed -n 's/^[[:space:]]*\(designated =>.*\)$/\1/p')"
-if [[ "$ACTUAL_REQUIREMENT" != "$EXPECTED_REQUIREMENT" ]]; then
-  echo "Nexus has an unexpected designated requirement: $ACTUAL_REQUIREMENT" >&2
-  exit 1
-fi
+  /usr/bin/sed -n 's/^# \(designated =>.*\)$/\1/p')"
 echo "Built Nexus at $APP"
-echo "Durable requirement: $ACTUAL_REQUIREMENT"
-if [[ -z "$SIGNING_IDENTITY" ]]; then
-  echo "Note: this is an ad-hoc development build. macOS privacy grants are only durable across rebuilt copies when NEXUS_CODE_SIGN_IDENTITY names a stable Apple Development certificate." >&2
+if [[ -n "$SIGNING_IDENTITY" ]]; then
+  SIGNER_AUTHORITY="$(/usr/bin/codesign -dvv "$APP" 2>&1 | /usr/bin/sed -n 's/^Authority=\(Apple Development:.*\)$/\1/p' | /usr/bin/head -1)"
+  if [[ -z "$SIGNER_AUTHORITY" || "$ACTUAL_REQUIREMENT" != *'anchor apple generic'* || "$ACTUAL_REQUIREMENT" != *'identifier "na.nexus"'* ]]; then
+    echo "Nexus was not signed with a stable Apple Development identity. Refusing to present it as a durable macOS privacy-permission host." >&2
+    echo "Requirement: $ACTUAL_REQUIREMENT" >&2
+    echo "Authority: ${SIGNER_AUTHORITY:-unavailable}" >&2
+    exit 1
+  fi
+  echo "Durable signer: $SIGNER_AUTHORITY"
+  echo "Durable requirement: $ACTUAL_REQUIREMENT"
+else
+  echo "Ad-hoc requirement: $ACTUAL_REQUIREMENT"
+  echo "Note: this is an ad-hoc development build. macOS privacy grants are only durable across rebuilt copies after an Apple Development certificate is installed." >&2
 fi
 
 install_app() {
   if [[ -z "$SIGNING_IDENTITY" ]]; then
-    echo "Refusing to install an ad-hoc build as the durable permission host. Set NEXUS_CODE_SIGN_IDENTITY to a stable Apple Development signing identity first." >&2
+    echo "Refusing to install an ad-hoc build as the durable permission host. Install an Apple Development signing identity in Xcode Settings > Accounts, then rerun this command (or set NEXUS_CODE_SIGN_IDENTITY explicitly)." >&2
     exit 2
   fi
   local install_parent="${INSTALL_APP_PATH:h}"

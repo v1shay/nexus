@@ -26,8 +26,12 @@ recovery object; it does not make an OAuth request or expose a token.
 
 The present Debug build is ad-hoc signed. Its TCC grants are not durable across
 rebuilds because `security find-identity -v -p codesigning` reports no valid
-Apple Development identity. A stable Apple Development certificate is the
-required workaround before granting the rows above.
+Apple Development identity. The durable build flow now preserves macOS's
+normal Apple-backed designated requirement (rather than forcing an
+identifier-only requirement), automatically selects exactly one installed
+Apple Development identity, and refuses durable installation unless that
+identity is verified. A stable Apple Development certificate is still required
+before granting the rows above.
 
 ## Account connection needed
 
