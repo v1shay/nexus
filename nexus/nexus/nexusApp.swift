@@ -1522,6 +1522,48 @@ final class NotchController: ObservableObject {
             }
             let tools = await computerRegistry.manifests().map(\.actionID).sorted().joined(separator: "\n")
             return .init(ok: true, result: ["tools": tools], error: nil)
+        case "tool-execute", "tool-dry-run":
+            guard let action = request.arguments["action"],
+                  let rawArguments = request.arguments["json"],
+                  let arguments = NexusHeadlessControlCodec.toolArguments(json: rawArguments) else {
+                return .init(ok: false, result: [:], error: "Use an action ID and a valid JSON object for --json.")
+            }
+            guard await waitForHeadlessTools(action: action) else {
+                return .init(ok: false, result: [:], error: "Nexus did not register \(action).")
+            }
+            let envelope = await computerRuntime.execute(
+                actionID: action,
+                arguments: arguments,
+                options: .init(dryRun: request.command == "tool-dry-run", invocation: .app)
+            )
+            return .init(
+                ok: envelope.ok,
+                result: ["envelope": NexusHeadlessControlCodec.jsonString(envelope)],
+                error: envelope.error?.message
+            )
+        case "tool-confirm", "tool-cancel-confirmation":
+            guard let actionID = request.arguments["actionId"], UUID(uuidString: actionID) != nil else {
+                return .init(ok: false, result: [:], error: "Use the pending action ID returned by a confirmation-required result.")
+            }
+            let tool = request.command == "tool-confirm" ? "confirm_action" : "cancel_action"
+            let startedAt = Date()
+            do {
+                let result = try await memory.registry.execute(
+                    name: tool,
+                    arguments: ["actionId": .string(actionID)],
+                    invocation: .app
+                )
+                return .init(
+                    ok: true,
+                    result: [
+                        "result": NexusHeadlessControlCodec.jsonString(result),
+                        "durationMs": String(Int(Date().timeIntervalSince(startedAt) * 1_000))
+                    ],
+                    error: nil
+                )
+            } catch {
+                return .init(ok: false, result: [:], error: error.localizedDescription)
+            }
         case "connect-enable":
             guard let value = request.arguments["value"], let enabled = Bool(value) else {
                 return .init(ok: false, result: [:], error: "Use true or false.")

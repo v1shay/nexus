@@ -84,6 +84,24 @@ final class NexTerminalActionTests: XCTestCase {
         XCTAssertTrue(completed.stdout.contains("yes"))
     }
 
+    func testLongRunningCommandReturnsASessionThatCanBeCancelled() async throws {
+        let directory = try temporaryDirectory()
+        let manager = NexTerminalSessionManager(allowedWorkingRoots: [directory])
+        let running = try await manager.run(
+            executable: "/bin/sleep",
+            arguments: ["5"],
+            workingDirectory: directory.path,
+            environmentEntries: [],
+            progress: { _, _ in }
+        )
+
+        XCTAssertTrue(running.isRunning)
+        await manager.cancel(sessionID: running.id)
+        let completed = try await waitForCompletion(manager: manager, id: running.id)
+        XCTAssertFalse(completed.isRunning)
+        XCTAssertNotEqual(completed.exitStatus, 0)
+    }
+
     func testRegisteredRunCommandUsesConfirmationGatewayBeforeProcessStarts() async throws {
         let directory = try temporaryDirectory()
         let pendingURL = directory.appendingPathComponent("pending.json")

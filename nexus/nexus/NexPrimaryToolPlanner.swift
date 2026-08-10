@@ -234,6 +234,15 @@ enum NexPrimaryToolPlanner {
                     arguments.removeValue(forKey: name)
                 case .number(let value) where value == 0 && !promptSuppliesZero:
                     arguments.removeValue(forKey: name)
+                case .string(let text)
+                where text == "/"
+                    && optionalFilesystemTarget(name: name, field: field)
+                    && !promptSuppliesFilesystemRoot(userPrompt):
+                    // A model occasionally fills an optional working/root
+                    // field with the global filesystem root. It is not a
+                    // concrete target unless the user explicitly supplied
+                    // it, and it violates the executor's safe-root contract.
+                    arguments.removeValue(forKey: name)
                 case .null:
                     arguments.removeValue(forKey: name)
                 default:
@@ -295,6 +304,17 @@ enum NexPrimaryToolPlanner {
             of: #"\bzero\b"#,
             options: [.regularExpression, .caseInsensitive]
         ) != nil
+    }
+
+    private static func optionalFilesystemTarget(name: String, field: NexToolFieldSchema) -> Bool {
+        let schemaText = (name + " " + (field.description ?? "")).lowercased()
+        return ["path", "directory", "folder", "root"].contains { schemaText.contains($0) }
+    }
+
+    private static func promptSuppliesFilesystemRoot(_ text: String) -> Bool {
+        let range = NSRange(text.startIndex..., in: text)
+        return (try? NSRegularExpression(pattern: #"(?<!\S)/(?!\S)"#))?
+            .firstMatch(in: text, range: range) != nil
     }
 
     /// Returns nil when the model answered in prose instead of returning the

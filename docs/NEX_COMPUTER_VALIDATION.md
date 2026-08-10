@@ -182,6 +182,60 @@ xcodebuild -quiet -project nexus/nexus.xcodeproj -scheme nexus \
   ** BUILD SUCCEEDED **
 ```
 
+## 2026-08-09 terminal session continuity and live headless bridge (GPT-OSS-20B)
+
+The local planner model was `gpt-oss:latest` (GPT-OSS 20B). The natural
+requests below selected the tool; the new `nexusctl tool-*` commands then
+executed the model-selected action through the already-running Nexus app,
+which is necessary for stateful sessions to retain their in-memory process,
+stdin pipe, and captured output. All commands were harmless. The one shell
+file existed only at `/private/tmp/nexus-terminal-prompt-test.sh` and was
+created exclusively for this validation.
+
+| Prompt / operation | Expected / selected action | Result | Latency | Status |
+|---|---|---|---:|---|
+| `Run a harmless print command and show me its output.` | `terminal.run_command` | GPT-OSS selected `echo` with the separate argument `Hello, world!`; the generic grounding layer removed the model-invented optional working directory `/` because the user had not supplied a filesystem root. | 1,800 ms planning | PASS after fix |
+| Confirmed live-app echo, then separate `terminal.get_output` | `terminal.run_command`, `terminal.get_output` | Immutable confirmation ran `echo persistent terminal proof`; a later headless call to the same app returned that exact stdout, exit 0, and the same session ID. | 2 ms preview; 8 ms confirmed run; 0 ms output read | PASS after fix |
+| Generated prompt script: `Continue?`, respond `yes`, then read output | `terminal.run_command`, `terminal.respond_to_prompt`, `terminal.get_output` | The run returned a live `yes_no` prompt session; a second immutable confirmation sent `yes`; output read returned `Continue?reply=yes` and exit 0. | 2 ms run preview; 11 ms initial confirmed run; 4 ms response confirmation; 0 ms output read | PASS after fix |
+| Start generated `/bin/sleep 15`, then cancel by returned session ID | `terminal.run_command`, `terminal.cancel`, `terminal.get_output` | After the 750 ms initial observation, Nexus returned a running session. `terminal.cancel` targeted only that session. The later read reported exit status 15, proving the generated process was terminated rather than naturally completed. | 2 ms preview; 777 ms initial run; 0 ms cancel; 0 ms output read | PASS after fix |
+| `Open Terminal.` | `terminal.open` | GPT-OSS selected the low-risk open action. The live action returned `Opened Terminal.` and the macOS Terminal process was present afterward. Computer Use could not inspect Terminal because that app is safety-restricted by the Computer Use environment, so no visual claim is made. | 3,600 ms planning; 104 ms execution | PASS (process evidence) |
+| `Which terminal session is active?` before macOS Automation is granted | `terminal.get_active_session` | GPT-OSS selected the correct action; execution returned the exact `automation.com.apple.Terminal` permission recovery. No existing Terminal tab was read or written. | prior live probe | EXPECTED PERMISSION LIMITATION |
+
+### Defects fixed in this increment
+
+1. A standalone `nex-computer execute` process created a terminal session in
+   its own short-lived memory, so a later `get_output`, `respond_to_prompt`,
+   or `cancel` invocation could never find it. `nexusctl tool-execute`,
+   `tool-dry-run`, `tool-confirm`, and `tool-cancel-confirmation` now route
+   generic action requests to the existing Nexus app and its ordinary
+   registry, runtime, permission checks, and immutable confirmation gateway.
+   They do not select tools or manufacture arguments.
+2. `terminal.run_command` waited indefinitely for a noninteractive command to
+   finish, making its advertised `terminal.cancel` action unreachable. It now
+   returns the stable session ID after completion, a bounded supported prompt,
+   or a 750 ms initial observation window. Short commands still return their
+   complete output; long-running commands can be safely inspected or
+   cancelled by their exact session ID.
+3. GPT-OSS sometimes filled an optional filesystem field with `/`. Generic
+   schema-aware grounding now removes only that unrequested global root from
+   optional path/directory/folder/root fields. It preserves an explicitly
+   supplied `/`, never changes the model's selected tool, and never adds an
+   argument.
+
+Focused verification:
+
+```text
+xcodebuild -quiet -project nexus/nexus.xcodeproj -scheme nexus \
+  -configuration Debug -destination 'platform=macOS,name=My Mac' \
+  -derivedDataPath .build test \
+  -only-testing:nexusTests/NexTerminalActionTests \
+  -only-testing:nexusTests/NexPrimaryToolPlannerTests
+  ** TEST SUCCEEDED **
+
+./scripts/build-nexus.sh
+  ** BUILD SUCCEEDED **
+```
+
 ## 2026-08-09 macOS permission-pane routing (GPT-OSS-20B + Computer Use)
 
 This safe UI flow did not toggle, add, or remove any privacy control. It used local `gpt-oss:latest` / GPT-OSS 20B to select the tool, then Computer Use to verify the actual macOS System Settings destination.
