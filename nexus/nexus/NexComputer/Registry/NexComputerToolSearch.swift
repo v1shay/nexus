@@ -75,6 +75,11 @@ struct NexToolSearchEngine: Sendable {
                 && (availabilityPolicy == .includeUnavailable || $0.isAvailable)
         }
         var bestScores: [String: RankedDocument] = [:]
+        // A compound request can contain one low-scoring but essential clause
+        // alongside a high-scoring clause with several near-duplicate tools.
+        // Keep the best semantic candidate for each clause separately before
+        // applying the small native-function budget below.
+        var segmentLeaders: [String: RankedDocument] = [:]
         for segment in segments {
             let ranked = eligible.compactMap { document -> RankedDocument? in
                 let score = score(document, for: segment)
@@ -83,9 +88,19 @@ struct NexToolSearchEngine: Sendable {
             }
             .sorted(by: Self.rankOrder)
 
+            if let leader = ranked.first {
+                let name = leader.document.tool.name
+                // The same tool can be the right answer for multiple clauses;
+                // preserve its strongest evidence once.
+                if segmentLeaders[name].map({ $0.score < leader.score }) ?? true {
+                    segmentLeaders[name] = leader
+                }
+            }
+
             // Retain at least one strong candidate per independent clause, then
-            // globally rerank. This keeps compound requests from being consumed
-            // by several near-identical actions from only one app.
+            // fill the remaining budget by global rank. This keeps compound
+            // requests from being consumed by several near-identical actions
+            // from only one app.
             for candidate in ranked.prefix(max(1, min(3, limit))) {
                 let name = candidate.document.tool.name
                 if let existing = bestScores[name], existing.score >= candidate.score { continue }
@@ -93,7 +108,14 @@ struct NexToolSearchEngine: Sendable {
             }
         }
 
-        let ranked = bestScores.values.sorted(by: Self.rankOrder).prefix(limit)
+        var ranked: [RankedDocument] = []
+        for leader in segmentLeaders.values.sorted(by: Self.rankOrder) where ranked.count < limit {
+            ranked.append(leader)
+        }
+        for candidate in bestScores.values.sorted(by: Self.rankOrder)
+        where ranked.count < limit && !ranked.contains(where: { $0.document.tool.name == candidate.document.tool.name }) {
+            ranked.append(candidate)
+        }
         return .init(
             query: query,
             candidates: ranked.map {
@@ -312,7 +334,7 @@ struct NexToolSearchEngine: Sendable {
 
     private static let stopWords: Set<String> = [
         "a", "an", "and", "are", "as", "at", "be", "by", "can", "do", "for",
-        "from", "i", "in", "is", "it", "me", "my", "of", "on", "or", "please",
+        "current", "from", "i", "in", "is", "it", "me", "my", "of", "on", "or", "please",
         "that", "the", "this", "to", "with", "you"
     ]
 

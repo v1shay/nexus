@@ -182,6 +182,20 @@ xcodebuild -quiet -project nexus/nexus.xcodeproj -scheme nexus \
   ** BUILD SUCCEEDED **
 ```
 
+## 2026-08-09 compound system-read discovery (GPT-OSS-20B)
+
+This safe read-only check used local `gpt-oss:latest` (GPT-OSS 20B). The request was intentionally natural and asked for three independent facts; it did not direct the model to specific tools. No system setting, account, file, message, or network configuration changed. Network-address details returned by the tool are deliberately omitted here.
+
+| Prompt / operation | Expected / selected action | Result | Latency | Status |
+|---|---|---|---:|---|
+| `Tell me whether this Mac is online, whether it is on battery power, and what the current output volume is.` — semantic discovery | `system.get_network_state`, `system.get_battery`, `system.get_volume` | Discovery returned exactly those three system-read capabilities as its strongest candidates; an unrelated media-current-state action was no longer selected. | 669 ms discovery | PASS after fix |
+| Same natural prompt — first native planning pass | GPT-OSS selects one independently needed read | GPT-OSS selected `system.get_network_state` in 2.2 s. This is expected for the local native-call interface: the app's existing bounded re-planning loop removes completed tools and asks for the next missing action, rather than treating a single native call as a complete answer. | 2,225 ms planning | PASS / staged planning |
+| Direct headless execution of discovered reads | `system.get_network_state`, `system.get_battery`, `system.get_volume` | Each returned structured, non-mutating current state: reachable network, AC power, and 100% output volume. | 8 ms; 14 ms; 124 ms execution | PASS |
+
+### Defect fixed in this increment
+
+Compound discovery split the natural request into independent clauses, but then globally truncated its ranked list. A lower-scoring clause leader could therefore disappear before the model saw it, while generic words such as `current` could promote an unrelated action. Search now preserves the best semantic candidate for each independent clause before filling remaining slots by global relevance, and treats `current` as conversational filler. This is a generic ranking repair: it does not name or force any particular tool. A regression test creates competing network, battery, volume, and media-current tools and asserts that all three requested semantic domains survive a three-candidate allowlist.
+
 ## 2026-08-09 complete visual browser workflow (GPT-OSS-20B + Computer Use)
 
 This row replaces the earlier partial browser-plan result with a fresh,
