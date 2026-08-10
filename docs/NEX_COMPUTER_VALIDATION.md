@@ -182,6 +182,68 @@ xcodebuild -quiet -project nexus/nexus.xcodeproj -scheme nexus \
   ** BUILD SUCCEEDED **
 ```
 
+## 2026-08-10 complete Codex CLI lifecycle (GPT-OSS-20B)
+
+All Codex work used the local `gpt-oss:latest` planner (GPT-OSS 20B) and the
+empty generated folder
+`.build/validation-fixtures/Codex Dummy Task`. No user workspace, file, or
+repository content was an action target. Confirmations were approved only
+after their immutable preview named that generated folder and the exact
+non-mutating prompt.
+
+| Prompt / operation | Expected / selected action | Result | Latency | Status |
+|---|---|---|---:|---|
+| `In the disposable workspace at …/Codex Dummy Task, start a short Codex task that reports the workspace contents and does not change any files.` | `codex.start_task` | GPT-OSS selected the Codex action and preserved the generated workspace. The confirmed task reported the workspace empty, `files_changed: []`, and an empty test summary. | about 5 s planning; 12 ms preview; 15,986 ms confirmed run | PASS after reporting fix |
+| Direct state read for session `019fed99-20a1-7e13-b04f-c607db6a1194` | `codex.get_status` | Returned the persisted completed result, empty change list, empty test summary, and no error. | 1 ms | PASS |
+| `Continue the Codex session 019fed99-20a1-7e13-b04f-c607db6a1194 in the disposable workspace at …/Codex Dummy Task and again report the workspace contents without changing files.` | `codex.continue_task` | GPT-OSS selected the existing session and preserved its session ID and workspace. After the prompt-schema repair, it also preserved the complete non-empty follow-up instruction. Confirmed execution reported the workspace empty and `files_changed: []`. | 5.8 s initial planning (defect); about 7.5 s repaired planning; 10 ms preview; 9,525 ms confirmed run | PASS after planner fix |
+| `Open the completed Codex session 019fed99-20a1-7e13-b04f-c607db6a1194 so I can review its result.` | `codex.open_session` | GPT-OSS selected the session-review action; the app returned `Opened Codex for session review.` | about 2 s planning; 34 ms execution | PASS (launch evidence) |
+| `Open Codex so I can review the coding tool.` | `codex.open` | GPT-OSS selected the generic open action; the app returned `Opened Codex.` | about 2 s planning; 22 ms execution | PASS (launch evidence) |
+| `In the disposable workspace at …/Codex Dummy Task, start a Codex task that waits for 45 seconds before reporting that it made no changes.` | `codex.start_task` | GPT-OSS selected the start action. The confirmation returned Codex's real thread ID `019feda1-10a6-76b1-945a-a953612075ec` while the CLI was still running. `codex.get_status` then returned `running` with no files changed. | about 5 s planning; 3 ms preview; 1,160 ms confirmed start; 0 ms status read | PASS after lifecycle fix |
+| `Stop the running Codex task 019feda1-10a6-76b1-945a-a953612075ec before it changes anything.` | `codex.cancel_task` | GPT-OSS selected the cancellation action with the returned stable ID. Immutable confirmation stopped that live task; the subsequent status read returned `cancelled`, an empty change list, and no error. | about 2 s planning; 3 ms preview; 413 ms confirmed cancellation; 0 ms status read | PASS after lifecycle fix |
+
+### Defects fixed in this increment
+
+1. Codex change reporting previously used `git -C <workspace> status`, which
+   can walk upward into an enclosing repository and report unrelated
+   pre-existing parent-repository changes. The provider now snapshots only
+   regular files beneath the exact supplied workspace before and after the
+   task, excluding `.git`, and returns their relative delta.
+2. The test-summary collector treated any raw transcript line containing
+   `test` as test evidence. A Codex command transcript could consequently
+   expose unrelated source paths. It now accepts only explicit build/test
+   result markers such as `test suite`, `tests passed`, or `build failed`.
+3. Native GPT-OSS discovery selected `codex.continue_task` but supplied an
+   empty required `prompt`. The Codex input schema now describes `prompt` as
+   a complete non-empty instruction and native planning explains that session
+   IDs and workspaces are context, not the follow-up work. This is
+   schema-grounded argument completion; it does not choose or force a tool.
+4. `codex.cancel_task` was advertised but unreachable for real work because
+   `codex.start_task` withheld the stable Codex thread ID until the CLI
+   completed. The start action now returns on Codex's `thread.started` event
+   while a provider-owned collector continues streaming and records terminal
+   state. `get_status` and `cancel_task` can therefore address a live task by
+   its real session ID. Cancellation remains confirmation-bound.
+
+Focused verification:
+
+```text
+xcodebuild test -quiet -project nexus/nexus.xcodeproj -scheme nexus \
+  -destination 'platform=macOS,arch=arm64,id=00006002-001869AC3489801E' \
+  -only-testing:nexusTests/NexComputerExtendedActionTests/testCodexStartExposesAStableSessionThatCanBeCancelled \
+  -only-testing:nexusTests/NexComputerExtendedActionTests/testCodexCatalogPreservesSpecializedActionFamily \
+  -only-testing:nexusTests/NexComputerExtendedActionTests/testCodexReportsOnlyChangesInsideTheRequestedWorkspace \
+  -only-testing:nexusTests/NexComputerExtendedActionTests/testCodexDoesNotExposeRawCommandOutputAsATestSummary \
+  -only-testing:nexusTests/NexPrimaryToolPlannerTests/testNativePlannerPromptIsCompactAndKeepsSemanticCoverageRules
+  ** TEST SUCCEEDED **
+
+./scripts/build-nexus.sh --run
+  ** BUILD SUCCEEDED **
+```
+
+The Codex UI launch actions are process-verified only. Computer Use cannot
+inspect this locked macOS desktop session, so this ledger makes no visual
+claim about the opened window or session content.
+
 ## 2026-08-10 isolated Obsidian lifecycle and relative-path retrieval repair (GPT-OSS-20B)
 
 The planner model was local `gpt-oss:latest` (GPT-OSS 20B). Every operation

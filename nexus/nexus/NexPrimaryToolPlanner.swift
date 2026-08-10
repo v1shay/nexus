@@ -100,6 +100,11 @@ enum NexPrimaryToolPlanner {
         if names.contains("nex_cli_set_workspace") {
             rules.append("- nex_cli_set_workspace: call it only for an explicit request to switch the coding workspace.")
         }
+        if names.contains("codex.start_task") || names.contains("codex.continue_task") {
+            rules.append(
+                "- Codex tasks: `prompt` is the complete, non-empty instruction for Codex. Preserve the requested outcome and safety constraints in it. For a continuation, keep the new follow-up work in `prompt`; session IDs and workspace paths identify context and must not replace the instruction."
+            )
+        }
         if names.contains(where: { $0.hasPrefix("browser.") || $0.hasPrefix("chrome.") }) {
             rules.append("- Browser functions perform navigation or interaction; web_search only retrieves public facts.")
         }
