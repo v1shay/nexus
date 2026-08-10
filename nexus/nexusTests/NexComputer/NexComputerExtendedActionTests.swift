@@ -183,6 +183,16 @@ final class NexComputerExtendedActionTests: XCTestCase {
         XCTAssertTrue(definition?.schema.fields["repository"]?.required == true)
     }
 
+    func testGitHubRepositorySearchUsesFieldsSupportedByTheInstalledCLI() {
+        let arguments = NexGitHubActionCatalog.githubSearchArguments(
+            query: "Nexus agent",
+            type: "repositories",
+            limit: 10
+        )
+        XCTAssertEqual(arguments, ["search", "repos", "Nexus agent", "--limit", "10", "--json", "fullName,url,description"])
+        XCTAssertFalse(arguments.contains("nameWithOwner,url,description"))
+    }
+
     func testGitCatalogStagesOnlyExplicitFilesAndCanReadTheIndexDiff() async throws {
         let tools = NexToolRegistry()
         let computer = NexComputerRegistry(toolRegistry: tools, permissionManager: NexComputerPermissionManager(backend: AuthorizedPermissions()))

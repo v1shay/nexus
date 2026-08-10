@@ -64,6 +64,13 @@ final class NexPrimaryToolPlannerTests: XCTestCase {
         XCTAssertTrue(obsidianInstructions.contains("requested new note"))
         XCTAssertTrue(obsidianInstructions.contains("vault-relative path"))
 
+        let githubInstructions = NexPrimaryToolPlanner.nativePlanningMessages(
+            context: context,
+            tools: tools() + [githubSearchTool()]
+        )[0].content
+        XCTAssertTrue(githubInstructions.contains("github.search"))
+        XCTAssertTrue(githubInstructions.contains("public GitHub repository"))
+
         let codexInstructions = NexPrimaryToolPlanner.nativePlanningMessages(
             context: context,
             tools: tools() + [codexContinuationTool()]
@@ -616,6 +623,21 @@ final class NexPrimaryToolPlannerTests: XCTestCase {
                 "workspace": .init(.string, required: true, description: "Exact existing workspace for this Codex task."),
                 "session_id": .init(.string, required: true),
                 "prompt": .init(.string, required: true, description: "Complete non-empty instruction for Codex.")
+            ])
+        ) { _, _ in .null }
+    }
+
+    private func githubSearchTool() -> NexRegisteredTool {
+        .init(
+            name: "github.search",
+            description: "Search GitHub repositories, issues, or pull requests through authenticated gh.",
+            statusLabel: "Searching GitHub…",
+            spokenStatus: "Searching GitHub.",
+            iconSystemName: "chevron.left.forwardslash.chevron.right",
+            permission: .network,
+            schema: .init(fields: [
+                "query": .init(.string, required: true, description: "Complete GitHub search phrase."),
+                "type": .init(.string, allowedValues: ["repositories", "issues", "pull_requests"])
             ])
         ) { _, _ in .null }
     }

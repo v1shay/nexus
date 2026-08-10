@@ -1029,9 +1029,17 @@ actor NexGitHubActionCatalog {
             let result = try await cli.git(arguments, repository: URL(fileURLWithPath: path))
             return Self.result(result.stdout.isEmpty ? "Git push completed." : result.stdout, output: result.stdout)
         }
-        try await registry.register(manifest: Self.manifest("github.search", "Search GitHub repositories, issues, or pull requests through authenticated gh.", ["Search GitHub for Nexus issues"], ["query": .init(.string, required: true), "type": .init(.string, allowedValues: ["repositories", "issues", "pull_requests"]), "limit": .init(.integer, minimum: 1, maximum: 100)], method: .cli)) { input, _ in
-            let query = try required(input, "query"), type = input["type"]?.string ?? "repositories", command = type == "repositories" ? "repos" : "issues"; var args = ["search", command, query, "--limit", String(input["limit"]?.integer ?? 20), "--json", command == "repos" ? "nameWithOwner,url,description" : "title,url,repository,state"]
-            if type == "pull_requests" { args += ["--include-prs"] }; let result = try await cli.gh(args, repository: nil); return Self.result("GitHub search completed.", output: result.stdout)
+        try await registry.register(manifest: Self.manifest("github.search", "Search GitHub repositories, issues, or pull requests through authenticated gh.", ["Search GitHub for Nexus issues"], ["query": .init(.string, required: true, description: "Complete GitHub search phrase for the requested repositories, issues, or pull requests."), "type": .init(.string, description: "Search domain. Use repositories unless the request specifically asks for issues or pull requests.", allowedValues: ["repositories", "issues", "pull_requests"]), "limit": .init(.integer, description: "Maximum number of matching results to return.", minimum: 1, maximum: 100)], method: .cli)) { input, _ in
+            let query = try required(input, "query")
+            let result = try await cli.gh(
+                Self.githubSearchArguments(
+                    query: query,
+                    type: input["type"]?.string ?? "repositories",
+                    limit: input["limit"]?.integer ?? 20
+                ),
+                repository: nil
+            )
+            return Self.result("GitHub search completed.", output: result.stdout)
         }
         try await registry.register(manifest: Self.manifest("github.open_repository", "Open an exact GitHub repository URL or name.", ["Open v1shay/nexusV2"], ["repository": .init(.string, required: true, description: "Exact GitHub repository in owner/name form or a complete GitHub URL.")], method: .urlScheme)) { input, _ in let name = try required(input, "repository"); let url = name.hasPrefix("http") ? URL(string: name) : URL(string: "https://github.com/\(name)"); guard let url, NSWorkspace.shared.open(url) else { throw NexToolError.executionFailed(code: "invalid_repository", message: "Invalid GitHub repository.") }; return Self.result("Opened the GitHub repository.") }
         let remoteActions: [(String, String, [String: NexToolFieldSchema], @Sendable ([String: NexJSONValue]) throws -> [String])] = [
@@ -1042,6 +1050,13 @@ actor NexGitHubActionCatalog {
         try await registry.register(manifest: Self.manifest("github.open_pull_request", "Open an exact pull request URL or number for a repository.", ["Open PR 42"], ["repository": .init(.string, required: true), "number": .init(.integer, required: true, minimum: 1)])) { input, _ in let result = try await cli.gh(["pr", "view", String(input["number"]!.integer!), "--repo", try required(input, "repository"), "--web"], repository: nil); return Self.result("Opened the pull request.", output: result.stdout) }
         try await registry.register(manifest: Self.manifest("github.get_checks", "Read GitHub pull-request checks through authenticated gh.", ["Show PR checks"], ["repository": .init(.string, required: true), "number": .init(.integer, required: true, minimum: 1)])) { input, _ in let result = try await cli.gh(["pr", "checks", String(input["number"]!.integer!), "--repo", try required(input, "repository"), "--json", "name,state,bucket,link"], repository: nil); return Self.result("Read GitHub checks.", output: result.stdout) }
         registered = true
+    }
+
+    nonisolated static func githubSearchArguments(query: String, type: String, limit: Int) -> [String] {
+        let command = type == "repositories" ? "repos" : "issues"
+        var arguments = ["search", command, query, "--limit", String(limit), "--json", command == "repos" ? "fullName,url,description" : "title,url,repository,state"]
+        if type == "pull_requests" { arguments += ["--include-prs"] }
+        return arguments
     }
     private static func validatedString(_ input: [String: NexJSONValue], _ key: String) throws -> String { guard let value = input[key]?.string, !value.isEmpty else { throw NexToolError.missingField(key) }; return value }
     private static func stageablePaths(_ input: [String: NexJSONValue], repository: URL) throws -> [String] {
