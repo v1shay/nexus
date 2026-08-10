@@ -201,6 +201,18 @@ This safe UI flow did not toggle, add, or remove any privacy control. It used lo
 
 The durable permission-host requirement remains intentionally enforced: `security find-identity -p codesigning -v` reports no valid Apple Development identity, so the build script refuses to install an ad-hoc app as the TCC host. That prevents a misleading “granted” claim which would disappear on the next rebuilt copy. A stable Apple Development certificate is required before the remaining manual TCC grants can persist across rebuilds.
 
+## 2026-08-09 LaunchServices and confirmation-bound macOS actions (GPT-OSS-20B + Computer Use)
+
+These checks used only a built-in app and a reversible system value. The system volume began at 100%, was changed to 99% for the confirmation-path check, and was restored and verified at 100% before this row was recorded.
+
+| Prompt / operation | Expected / selected action | Result | Latency | Status |
+|---|---|---|---:|---|
+| `What applications can I open on this Mac?` | `applications.list` | GPT-OSS selected application discovery. The headless result returned 33 installed applications as names, bundle identifiers, and paths. | about 1.7 s planning; 9 ms execution | PASS |
+| `Open Calculator.` | `applications.open` with the model-inferred Calculator bundle identifier | The headless action returned `Opened Calculator.` Computer Use inspected the actual Calculator window and visible keypad. | about 2.0 s planning; 245 ms execution; visual inspection | PASS |
+| `Set the output volume to 99 percent.` | `system.set_volume` with `volume: 99` | GPT-OSS selected the correct macOS action. Nexus returned an exact immutable confirmation preview; confirmation changed volume to 99%, and a direct read verified it. | 2,100 ms planning; 2 ms preview; 239 ms confirmed write; 106 ms read | PASS |
+| Restoration to the original volume | `system.set_volume` with `volume: 100` | A second immutable confirmation was required. Confirmed execution restored 100%, and a final read returned 100%. | 2 ms preview; 125 ms confirmed write; 105 ms read | PASS / restored |
+| `Turn on Focus mode.` | explicitly unavailable `system.toggle_focus_mode` | Discovery does not offer an unavailable mutation. Direct execution returned the documented stable-public-API limitation and made no change; `system.open_setting` remains the safe navigation recovery. | about 2.9 s planning; 0 ms unavailable response | EXPECTED PLATFORM LIMITATION |
+
 ## 2026-08-09 compound system-read discovery (GPT-OSS-20B)
 
 This safe read-only check used local `gpt-oss:latest` (GPT-OSS 20B). The request was intentionally natural and asked for three independent facts; it did not direct the model to specific tools. No system setting, account, file, message, or network configuration changed. Network-address details returned by the tool are deliberately omitted here.
