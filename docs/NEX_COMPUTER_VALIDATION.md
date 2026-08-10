@@ -358,6 +358,50 @@ xcodebuild test -quiet -project nexus/nexus.xcodeproj -scheme nexus \
   ** BUILD SUCCEEDED **
 ```
 
+## 2026-08-10 GitHub CLI confirmed-write workflow (GPT-OSS-20B)
+
+The planner model was local `gpt-oss:latest` (GPT-OSS 20B). The only remote
+write target was the deliberately created private repository
+`v1shay/nexus-tool-validation-20260810`; it contains only a generated README,
+issue #1, `nexus-e2e-pr`, and PR #2. The fixture repository is intentionally
+retained for auditability. No production repository, issue, pull request, or
+workflow was a mutation target.
+
+| Prompt / operation | Expected / selected action | Result | Latency | Status |
+|---|---|---|---:|---|
+| `In the Nexus tool validation repository v1shay/nexus-tool-validation-20260810, add a short issue titled Nexus E2E validation marker explaining it is a disposable tool check.` — before action-metadata repair | `github.create_issue` | The generic `add` wording and an owner/name identifier did not rank the create action in the three-candidate allowlist, so GPT-OSS emitted no action. No external operation was attempted. | 2.6 s plan | FAIL / fixed |
+| Same prompt after semantic action metadata repair | `github.create_issue` | GPT-OSS selected the exact repository, title, and body. Nexus returned a 3 ms immutable preview. After explicit confirmation, it published issue #1; an independent `gh issue list` read matched the exact title and body. | 4.6 s plan; 3 ms preview; 1,753 ms confirmed run | PASS after fix |
+| `Open a pull request in v1shay/nexus-tool-validation-20260810 from the prepared nexus-e2e-pr branch into main titled Nexus E2E pull request marker, noting that it is a generated tool validation change.` | `github.create_pull_request` | GPT-OSS selected the repository, exact source branch, target `main`, title, and body. Nexus returned a 4 ms immutable preview; confirmation created PR #2. An independent GitHub read verified `nexus-e2e-pr → main` and the exact title/body. | 5.5 s plan; 4 ms preview; 2,767 ms confirmed run | PASS after source-branch fix |
+
+### Defects fixed in this increment
+
+1. `github.create_issue` and `github.create_pull_request` had only generic
+   descriptions and field names. A natural request to add an issue therefore
+   lost to generic repository-opening and Git actions. The action-owned
+   descriptions, examples, aliases, and input contracts now express filing an
+   issue or opening a pull request against an exact `owner/name` repository.
+   The generic retrieval engine ranks those declared semantics; no prompt or
+   repository name is hardcoded.
+2. The pull-request action did not accept a source branch, leaving `gh pr
+   create` dependent on ambient current-directory state. Its `head` input is
+   now required and is passed as `--head`. The preview binds both branch ends
+   before a write can be confirmed, which made the isolated fixture test
+   deterministic and auditable.
+
+Focused verification:
+
+```text
+xcodebuild test -quiet -project nexus/nexus.xcodeproj -scheme nexus \
+  -destination 'platform=macOS,arch=arm64,id=00006002-001869AC3489801E' \
+  -only-testing:nexusTests/NexComputerExtendedActionTests/testGitHubIssueCreationIsDiscoverableForANaturalRepositoryRequest \
+  -only-testing:nexusTests/NexComputerExtendedActionTests/testGitHubPullRequestCreationRequiresAnExplicitSourceBranch \
+  -only-testing:nexusTests/NexComputerExtendedActionTests/testGitHubRepositorySearchUsesFieldsSupportedByTheInstalledCLI
+  ** TEST SUCCEEDED **
+
+./scripts/build-nexus.sh --run
+  ** BUILD SUCCEEDED **
+```
+
 ## 2026-08-10 isolated Obsidian lifecycle and relative-path retrieval repair (GPT-OSS-20B)
 
 The planner model was local `gpt-oss:latest` (GPT-OSS 20B). Every operation

@@ -193,6 +193,27 @@ final class NexComputerExtendedActionTests: XCTestCase {
         XCTAssertFalse(arguments.contains("nameWithOwner,url,description"))
     }
 
+    func testGitHubIssueCreationIsDiscoverableForANaturalRepositoryRequest() async throws {
+        let tools = NexToolRegistry()
+        let computer = NexComputerRegistry(toolRegistry: tools, permissionManager: NexComputerPermissionManager(backend: AuthorizedPermissions()))
+        try await NexGitHubActionCatalog().register(on: computer)
+        let candidates = NexToolSearchEngine().search(
+            query: "In v1shay/nexus, add a short issue describing a validation marker.",
+            documents: await tools.definitions().map { NexToolSearchEngine.Document(tool: $0) }
+        ).candidates
+        XCTAssertEqual(candidates.first?.tool, "github.create_issue")
+    }
+
+    func testGitHubPullRequestCreationRequiresAnExplicitSourceBranch() async throws {
+        let tools = NexToolRegistry()
+        let computer = NexComputerRegistry(toolRegistry: tools, permissionManager: NexComputerPermissionManager(backend: AuthorizedPermissions()))
+        try await NexGitHubActionCatalog().register(on: computer)
+        let definitions = await tools.definitions()
+        let pullRequest = try XCTUnwrap(definitions.first { $0.name == "github.create_pull_request" })
+        XCTAssertTrue(pullRequest.schema.fields["head"]?.required == true)
+        XCTAssertTrue(pullRequest.schema.fields["head"]?.description?.contains("source branch") == true)
+    }
+
     func testGitCatalogStagesOnlyExplicitFilesAndCanReadTheIndexDiff() async throws {
         let tools = NexToolRegistry()
         let computer = NexComputerRegistry(toolRegistry: tools, permissionManager: NexComputerPermissionManager(backend: AuthorizedPermissions()))

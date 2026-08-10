@@ -1042,11 +1042,35 @@ actor NexGitHubActionCatalog {
             return Self.result("GitHub search completed.", output: result.stdout)
         }
         try await registry.register(manifest: Self.manifest("github.open_repository", "Open an exact GitHub repository URL or name.", ["Open v1shay/nexusV2"], ["repository": .init(.string, required: true, description: "Exact GitHub repository in owner/name form or a complete GitHub URL.")], method: .urlScheme)) { input, _ in let name = try required(input, "repository"); let url = name.hasPrefix("http") ? URL(string: name) : URL(string: "https://github.com/\(name)"); guard let url, NSWorkspace.shared.open(url) else { throw NexToolError.executionFailed(code: "invalid_repository", message: "Invalid GitHub repository.") }; return Self.result("Opened the GitHub repository.") }
-        let remoteActions: [(String, String, [String: NexToolFieldSchema], @Sendable ([String: NexJSONValue]) throws -> [String])] = [
-            ("github.create_issue", "Create a GitHub issue through authenticated gh.", ["repository": .init(.string, required: true), "title": .init(.string, required: true), "body": .init(.string, required: true)], { ["issue", "create", "--repo", try required($0, "repository"), "--title", try required($0, "title"), "--body", try required($0, "body")] }),
-            ("github.create_pull_request", "Create a GitHub pull request through authenticated gh.", ["repository": .init(.string, required: true), "title": .init(.string, required: true), "body": .init(.string, required: true), "base": .init(.string, required: true)], { ["pr", "create", "--repo", try required($0, "repository"), "--title", try required($0, "title"), "--body", try required($0, "body"), "--base", try required($0, "base")] })
+        let remoteActions: [(String, String, [String], [String], [String: NexToolFieldSchema], @Sendable ([String: NexJSONValue]) throws -> [String])] = [
+            (
+                "github.create_issue",
+                "Create or file a GitHub issue through authenticated gh for an explicitly named repository.",
+                ["File a short issue in v1shay/nexus", "Add a bug report to this repository"],
+                ["file a GitHub issue", "add a GitHub issue", "report a repository issue"],
+                [
+                    "repository": .init(.string, required: true, description: "Exact target repository in owner/name form, for example v1shay/nexus."),
+                    "title": .init(.string, required: true, description: "Short issue title describing the reported work or problem."),
+                    "body": .init(.string, required: true, description: "Complete Markdown issue body to publish in the target repository.")
+                ],
+                { ["issue", "create", "--repo", try required($0, "repository"), "--title", try required($0, "title"), "--body", try required($0, "body")] }
+            ),
+            (
+                "github.create_pull_request",
+                "Create or open a GitHub pull request through authenticated gh for an explicitly named repository.",
+                ["Open a pull request from my branch to main", "Propose this change for review"],
+                ["open a GitHub pull request", "propose a pull request", "submit a pull request"],
+                [
+                    "repository": .init(.string, required: true, description: "Exact target repository in owner/name form, for example v1shay/nexus."),
+                    "title": .init(.string, required: true, description: "Short pull-request title describing the proposed change."),
+                    "body": .init(.string, required: true, description: "Complete Markdown pull-request body to publish for review."),
+                    "base": .init(.string, required: true, description: "Existing target branch to merge into, such as main."),
+                    "head": .init(.string, required: true, description: "Existing source branch in the target repository that contains the proposed change.")
+                ],
+                { ["pr", "create", "--repo", try required($0, "repository"), "--title", try required($0, "title"), "--body", try required($0, "body"), "--base", try required($0, "base"), "--head", try required($0, "head")] }
+            )
         ]
-        for (id, description, fields, builder) in remoteActions { try await registry.register(manifest: Self.manifest(id, description, [description], fields, risk: .high, confirmation: .always)) { input, _ in let result = try await cli.gh(try builder(input), repository: nil); return Self.result("GitHub action completed.", output: result.stdout) } }
+        for (id, description, examples, aliases, fields, builder) in remoteActions { try await registry.register(manifest: Self.manifest(id, description, examples, fields, risk: .high, confirmation: .always, aliases: aliases)) { input, _ in let result = try await cli.gh(try builder(input), repository: nil); return Self.result("GitHub action completed.", output: result.stdout) } }
         try await registry.register(manifest: Self.manifest("github.open_pull_request", "Open an exact pull request URL or number for a repository.", ["Open PR 42"], ["repository": .init(.string, required: true), "number": .init(.integer, required: true, minimum: 1)])) { input, _ in let result = try await cli.gh(["pr", "view", String(input["number"]!.integer!), "--repo", try required(input, "repository"), "--web"], repository: nil); return Self.result("Opened the pull request.", output: result.stdout) }
         try await registry.register(manifest: Self.manifest("github.get_checks", "Read GitHub pull-request checks through authenticated gh.", ["Show PR checks"], ["repository": .init(.string, required: true), "number": .init(.integer, required: true, minimum: 1)])) { input, _ in let result = try await cli.gh(["pr", "checks", String(input["number"]!.integer!), "--repo", try required(input, "repository"), "--json", "name,state,bucket,link"], repository: nil); return Self.result("Read GitHub checks.", output: result.stdout) }
         registered = true
