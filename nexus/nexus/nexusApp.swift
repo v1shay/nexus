@@ -1791,9 +1791,10 @@ final class NotchController: ObservableObject {
                         messages: planningMessages,
                         registeredTools: definitions
                     )
-                    plan = NexPrimaryToolPlanner.groundingBrowserActions(
+                    plan = NexPrimaryToolPlanner.groundingActions(
                         in: planned,
-                        userPrompt: prompt
+                        userPrompt: prompt,
+                        registeredTools: definitions
                     )
                 }
                 guard !Task.isCancelled, responseGeneration == generation else { return }
@@ -1872,9 +1873,10 @@ final class NotchController: ObservableObject {
                             ),
                             registeredTools: remainingDefinitions
                         )
-                        pendingPlan = NexPrimaryToolPlanner.groundingBrowserActions(
+                        pendingPlan = NexPrimaryToolPlanner.groundingActions(
                             in: planned,
-                            userPrompt: prompt
+                            userPrompt: prompt,
+                            registeredTools: remainingDefinitions
                         )
                         if plannerAdvisory == nil { plannerAdvisory = pendingPlan.memoryWrite }
                     }

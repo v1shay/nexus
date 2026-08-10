@@ -396,6 +396,66 @@ final class NexPrimaryToolPlannerTests: XCTestCase {
         )
     }
 
+    func testGroundingRemovesOnlyModelInventedEmptyOptionalPlaceholders() {
+        let finderSearch = NexRegisteredTool(
+            name: "finder.search",
+            description: "Find files in a folder.",
+            statusLabel: "Searching…",
+            spokenStatus: "Searching.",
+            iconSystemName: "folder",
+            permission: .files,
+            schema: .init(fields: [
+                "root": .init(.string, required: true),
+                "nameContains": .init(.string),
+                "contentContains": .init(.string),
+                "maximumSize": .init(.integer),
+                "limit": .init(.integer)
+            ])
+        ) { _, _ in .null }
+        let plan = NexPrimaryToolPlan(actions: [.init(
+            tool: finderSearch.name,
+            arguments: [
+                "root": .string("/tmp/validation"),
+                "nameContains": .string("Validation"),
+                "contentContains": .string(""),
+                "maximumSize": .number(0),
+                "limit": .number(10)
+            ]
+        )])
+
+        let grounded = NexPrimaryToolPlanner.groundingActions(
+            in: plan,
+            userPrompt: "In the disposable validation workspace, find files whose names contain Validation.",
+            registeredTools: [finderSearch]
+        )
+        XCTAssertEqual(grounded.actions.first?.arguments["root"], .string("/tmp/validation"))
+        XCTAssertEqual(grounded.actions.first?.arguments["nameContains"], .string("Validation"))
+        XCTAssertEqual(grounded.actions.first?.arguments["limit"], .number(10))
+        XCTAssertNil(grounded.actions.first?.arguments["contentContains"])
+        XCTAssertNil(grounded.actions.first?.arguments["maximumSize"])
+    }
+
+    func testGroundingPreservesExplicitZeroOptionalInput() {
+        let tool = NexRegisteredTool(
+            name: "fixture.limit",
+            description: "Limit fixture records.",
+            statusLabel: "Working…",
+            spokenStatus: "Working.",
+            iconSystemName: "number",
+            permission: .files,
+            schema: .init(fields: ["limit": .init(.integer)])
+        ) { _, _ in .null }
+        let plan = NexPrimaryToolPlan(actions: [.init(tool: tool.name, arguments: ["limit": .number(0)])])
+        XCTAssertEqual(
+            NexPrimaryToolPlanner.groundingActions(
+                in: plan,
+                userPrompt: "Return zero records from the disposable fixture.",
+                registeredTools: [tool]
+            ).actions.first?.arguments["limit"],
+            .number(0)
+        )
+    }
+
     private func browserTaskTool() -> NexRegisteredTool {
         NexRegisteredTool(
             name: "browser.run_task",

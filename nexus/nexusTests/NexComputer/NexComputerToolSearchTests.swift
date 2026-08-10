@@ -129,6 +129,40 @@ final class NexComputerToolSearchTests: XCTestCase {
         XCTAssertTrue(search("explain mitochondrial inheritance", tools).isEmpty)
     }
 
+    func testDefaultNativeAllowlistStaysFocusedAtThreeCandidates() {
+        let tools = (0..<5).map { index in
+            tool(
+                name: "notes.action_\(index)",
+                description: "Create and organize Markdown notes variation \(index).",
+                application: "Notes",
+                provider: "Fixture",
+                tags: ["notes", "markdown"]
+            )
+        }
+        XCTAssertEqual(search("organize a Markdown note", tools).count, 3)
+    }
+
+    func testAbsolutePathDoesNotOutrankFilesystemIntent() {
+        let finder = tool(
+            name: "finder.search",
+            description: "Search an allowed folder by filename and text content.",
+            application: "Finder",
+            provider: "Nexus Native Files",
+            tags: ["file", "folder", "filesystem", "search"]
+        )
+        let confirmation = tool(
+            name: "cancel_action",
+            description: "Cancel one pending Nexus action.",
+            application: "Nex",
+            provider: "Nexus Confirmation Gateway",
+            tags: ["confirmation", "cancel"]
+        )
+        XCTAssertEqual(
+            search("In /Users/example/Documents/nexus workspace, find files named Validation", [finder, confirmation]).first?.tool,
+            "finder.search"
+        )
+    }
+
     func testUnavailableActionsAreOmittedOrClearlyMarked() {
         let unavailable = NexToolSearchEngine.Document(
             tool: tool(
