@@ -182,6 +182,22 @@ xcodebuild -quiet -project nexus/nexus.xcodeproj -scheme nexus \
   ** BUILD SUCCEEDED **
 ```
 
+## 2026-08-09 complete visual browser workflow (GPT-OSS-20B + Computer Use)
+
+This row replaces the earlier partial browser-plan result with a fresh,
+target-complete natural request. The browser target was public Wikipedia in
+Nexus's isolated profile; no private browser session, sign-in, download, or
+form submission was involved.
+
+| Prompt / operation | Expected / selected action | Result | Latency | Status |
+|---|---|---|---:|---|
+| `Visit https://www.wikipedia.org, take a full-page screenshot, and describe the different languages shown on the page.` | `browser.run_task` with navigate, screenshot, extract | GPT-OSS selected exactly the three structured steps: navigate to Wikipedia, full-page screenshot, and `extract` on `body`. Confirmation bound that exact immutable workflow. The completed task returned actual Wikipedia language evidence (English, Japanese, German, Russian, French, Spanish, Chinese, Italian, Polish, Portuguese, and the full language menu). | 3,516 ms planning; 2 ms confirmation request; 1.8 s confirmed run | PASS |
+| Computer Use visual check of the generated browser image | generated `shot-1.png` | Preview showed the real Wikipedia language portal: title/logo, central globe, the ten prominent language links, search bar, and Wikimedia project grid. This verifies the screenshot is page evidence rather than a synthetic placeholder. | visual inspection | PASS |
+| Fresh headless `browser.get_task` for the completed UUID | `browser.get_task` | A separate CLI process restored the complete text, screenshot path, and tab URL from Nexus-owned persisted task state. | 0 ms execution | PASS |
+
+The browser task image lives only in Nexus Application Support under the
+Nexus-owned task UUID directory. No user Chrome state was read or modified.
+
 ## 2026-08-09 complete headless-registry bridge (GPT-OSS-20B)
 
 The planner and runtime must expose the same tool surface. The prior
