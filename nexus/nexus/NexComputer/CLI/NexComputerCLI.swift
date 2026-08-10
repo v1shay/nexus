@@ -140,7 +140,12 @@ struct NexComputerCLIEnvironment: Sendable {
             NexYouTubeToolController(registry: tools) { _, _ in false }
         }
         try await youtube.registerIfNeeded()
-        try await connectors.reloadStoredConnections(registry: registry)
+        // This standalone process must not read the login Keychain while it
+        // is merely listing, planning, or dry-running tools. A stale ACL can
+        // otherwise make every headless command hang before it produces a
+        // structured permission result. Account-bound execution is routed
+        // through the running app's authenticated connector flow.
+        try await connectors.registerDisconnectedCapabilities(on: registry)
         let search = NexToolSearchService(registry: tools, computerRegistry: registry)
         try await search.registerIfNeeded()
         return .init(tools: tools, registry: registry, runtime: NexComputerRuntime(registry: registry), search: search, connectors: connectors)
@@ -404,12 +409,18 @@ enum NexComputerCLI {
         let manifests = await env.registry.manifests(), availability = await env.registry.availabilitySnapshot()
         let permissions = Set(manifests.flatMap { $0.requiredPermissions.map(\.id) })
         let previews = Set(manifests.map(\.previewRenderer))
+        let connectorStatus = await env.connectors.allDocuments()
+            .map { document in
+                let state = document.connected ? "connected" : "not connected"
+                return "\(document.provider.capitalized): \(state)"
+            }
+            .sorted()
         let browserRoot = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first?.appendingPathComponent("Nexus/Browser")
         return [
             "ok": true, "tools": manifests.count, "available_tools": availability.values.filter(\.isAvailable).count,
             "permissions_declared": permissions.sorted(), "preview_renderers": previews.sorted(),
             "browser_profile": browserRoot.map { FileManager.default.fileExists(atPath: $0.path) ? "ready" : "not provisioned (created lazily after confirmation)" } ?? "unavailable",
-            "connectors": (try? NexConnectorManagementService().doctor()) ?? [],
+            "connectors": connectorStatus,
             "safety": "Read-only diagnostics only; no messages, files, calls, pushes, purchases, or personal data were changed."
         ]
     }
