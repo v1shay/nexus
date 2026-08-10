@@ -85,6 +85,17 @@ final class NexComputerExtendedActionTests: XCTestCase {
         do { _ = try await provider.read(relativePath: "../secret"); XCTFail("Expected traversal rejection") } catch { }
     }
 
+    func testObsidianWriteActionsAreFilesystemToolsNotInternalMemoryWrites() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let tools = NexToolRegistry()
+        let computer = NexComputerRegistry(toolRegistry: tools, permissionManager: NexComputerPermissionManager(backend: AuthorizedPermissions()))
+        try await NexObsidianActionCatalog(provider: NexObsidianFileProvider(root: root)).register(on: computer)
+        let definitions = await tools.definitions()
+        for name in ["obsidian.create_note", "obsidian.append_note", "obsidian.update_note"] {
+            XCTAssertEqual(definitions.first(where: { $0.name == name })?.permission, .files)
+        }
+    }
+
     func testGitStatusUsesArgvAndReturnsRepositoryState() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString); try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true); defer { try? FileManager.default.removeItem(at: root) }
         let cli = NexGitHubCLIProvider(); _ = try await cli.git(["init", "-q"], repository: root); try "hello".write(to: root.appendingPathComponent("README.md"), atomically: true, encoding: .utf8)

@@ -107,7 +107,7 @@ enum NexPrimaryToolPlanner {
             rules.append("- browser.run_task: give every requested browser operation its own complete structured step in steps. Only navigate, new_tab, activate_tab, close_tab, click, type, form, extract, upload, download, wait_for_element, and screenshot are supported. For a requested screenshot include screenshot. Whenever the user asks what a page says, looks like, contains, or which items it shows, include extract after the interaction; a screenshot alone returns no readable evidence. Never use the legacy steps_json input or invent another step name.")
         }
         if names.contains("obsidian.create_note") {
-            rules.append("- Obsidian: for a requested new note, call obsidian.create_note with both a vault-relative path and the requested note content. Use open_note only for an existing note the user asks to open, append_note only to add to an existing note, and update_note only to replace an existing note.")
+            rules.append("- Obsidian: for a requested new note, call obsidian.create_note with both a vault-relative path and the requested note content. obsidian.open only launches the app and must never be a preparatory or substitute action for creating, reading, appending, or updating a note. Use open_note only for an existing note the user asks to open, append_note only to add to an existing note, and update_note only to replace an existing note.")
         }
         if names.contains(where: { $0.hasPrefix("youtube_") }) {
             rules.append("- YouTube playback requests require the matching supplied playback function; never claim playback without it.")
@@ -133,7 +133,7 @@ enum NexPrimaryToolPlanner {
         formatter.dateFormat = "MMMM d, yyyy"
         let system = """
         NEXUS_NATIVE_TOOL_PLANNING_PASS
-        Select tools from the user's meaning and complete active conversation, never from a keyword checklist. The supplied native functions are the only functions available on this pass. Call every independently necessary supplied function directly, with complete arguments. If saved personal evidence and current public evidence are both required, call both memory_search and web_search. If a prior tool result is present, call only a still-missing function and never repeat a completed function. Use no function for stable explanations, conversational reply-writing, math, or facts already visible in the active conversation. Do not confuse conversational writing with an instruction to change a file, note, browser state, app state, message, or service record: those are external actions and require a matching supplied function when the user has provided enough concrete target information. Do not decline or omit a requested external action merely because it is confirmable; Nexus independently handles permission and confirmation. Never answer, narrate, emit JSON, or expose reasoning during this pass. Today is \(formatter.string(from: date)).
+        Select tools from the user's meaning and complete active conversation, never from a keyword checklist. The supplied native functions are the only functions available on this pass. Call every independently necessary supplied function directly, with complete arguments. If saved personal evidence and current public evidence are both required, call both memory_search and web_search. If a prior tool result is present, call only a still-missing function and never repeat a completed function. Supply optional inputs only when explicitly requested or essential; never invent empty, zero, false, generic, or default values. Use no function for stable explanations, conversational reply-writing, math, or facts already visible in the active conversation. Do not confuse conversational writing with an instruction to change a file, note, browser state, app state, message, or service record: those are external actions and require a matching supplied function when the user has provided enough concrete target information. Do not decline or omit a requested external action merely because it is confirmable; Nexus independently handles permission and confirmation. Never answer, narrate, emit JSON, or expose reasoning during this pass. Today is \(formatter.string(from: date)).
         \(rules.joined(separator: "\n"))
         """
         return [.init(role: "system", content: system)] + context
@@ -209,12 +209,39 @@ enum NexPrimaryToolPlanner {
     /// actions before execution unless the user's own request supplied a
     /// concrete HTTP(S) URL.  The normal answer pass can then ask which site
     /// the user intends, rather than navigating to a fabricated one.
-    static func groundingBrowserActions(
+    /// Normalizes a model-produced plan immediately before it becomes an
+    /// executable proposal. This is deliberately schema-driven: it never
+    /// selects a tool or manufactures an argument. It only removes omitted
+    /// optional placeholders that smaller native-tool models sometimes emit
+    /// for every property in a JSON Schema.
+    static func groundingActions(
         in plan: NexPrimaryToolPlan,
-        userPrompt: String
+        userPrompt: String,
+        registeredTools: [NexRegisteredTool]
     ) -> NexPrimaryToolPlan {
         let normalizedPrompt = userPrompt.lowercased()
-        var actions = plan.actions
+        let knownTools = Dictionary(uniqueKeysWithValues: registeredTools.map { ($0.name, $0) })
+        let promptSuppliesZero = containsExplicitZero(userPrompt)
+        var actions = plan.actions.map { action in
+            guard let schema = knownTools[action.tool]?.schema else { return action }
+            var arguments = action.arguments
+            for (name, value) in action.arguments {
+                guard let field = schema.fields[name], !field.required else { continue }
+                switch value {
+                case .string(let text) where text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty:
+                    arguments.removeValue(forKey: name)
+                case .array(let values) where values.isEmpty:
+                    arguments.removeValue(forKey: name)
+                case .number(let value) where value == 0 && !promptSuppliesZero:
+                    arguments.removeValue(forKey: name)
+                case .null:
+                    arguments.removeValue(forKey: name)
+                default:
+                    break
+                }
+            }
+            return .init(tool: action.tool, arguments: arguments)
+        }
         // A calendar focus block is not macOS Focus mode. The latter has no
         // stable public mutation API, so selecting a calendar tool here would
         // silently perform a different external action than the user asked.
@@ -231,14 +258,43 @@ enum NexPrimaryToolPlanner {
                 $0.tool == "browser.visit_url" || $0.tool == "browser.run_task"
             }
         }
-        guard actions.count != plan.actions.count else { return plan }
+        guard actions != plan.actions else { return plan }
         return .init(status: plan.status, actions: actions, memoryWrite: plan.memoryWrite)
+    }
+
+    /// Retained for the existing browser-specific call sites and tests. New
+    /// production planning paths use `groundingActions` with their discovered
+    /// allowlist, so schema cleanup remains scoped to model-originated plans.
+    static func groundingBrowserActions(
+        in plan: NexPrimaryToolPlan,
+        userPrompt: String
+    ) -> NexPrimaryToolPlan {
+        groundingActions(in: plan, userPrompt: userPrompt, registeredTools: [])
     }
 
     private static func containsExplicitHTTPURL(_ text: String) -> Bool {
         let range = NSRange(text.startIndex..., in: text)
         return (try? NSRegularExpression(pattern: #"https?://[^\s<>\"]+"#, options: [.caseInsensitive]))?
             .firstMatch(in: text, range: range) != nil
+    }
+
+    private static func containsExplicitZero(_ text: String) -> Bool {
+        // Paths commonly contain digits (for example a project called
+        // "nexus 2"). They are targets, not a user-supplied numeric filter.
+        let promptWithoutPaths = text.replacingOccurrences(
+            of: #"(?:^|\s)/[^\s,;]+"#,
+            with: " ",
+            options: .regularExpression
+        )
+        let range = NSRange(promptWithoutPaths.startIndex..., in: promptWithoutPaths)
+        if (try? NSRegularExpression(pattern: #"(?<![0-9])0(?![0-9])"#))?
+            .firstMatch(in: promptWithoutPaths, range: range) != nil {
+            return true
+        }
+        return promptWithoutPaths.range(
+            of: #"\bzero\b"#,
+            options: [.regularExpression, .caseInsensitive]
+        ) != nil
     }
 
     /// Returns nil when the model answered in prose instead of returning the

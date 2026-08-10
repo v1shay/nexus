@@ -135,3 +135,49 @@ natural prompts instead.
    now an explicit, confirmation-gated synonym with the same nonempty-folder
    safeguard. A focused regression test verifies the alias replaces only the
    generated file collision and preserves the source.
+
+## 2026-08-09 routing-boundary follow-up (GPT-OSS-20B)
+
+This follow-up exercised the rebuilt headless app using the same local
+`gpt-oss:latest` / GPT-OSS 20B model. All targets remained under
+`.build/validation-fixtures`; the Finder operation below was read-only.
+
+| Prompt / operation | Expected / selected action | Result | Latency | Status |
+|---|---|---|---:|---|
+| `In the validation Obsidian vault, create Tool Routing Proof.md with the heading Tool Routing Proof and one sentence saying this is a disposable model-routing test.` | `obsidian.create_note` | GPT-OSS selected the create action with a vault-relative path and supplied Markdown content. Immutable confirmation then created the generated note; direct read returned the exact content. | about 2–3 s planning; about 0.3 s confirmed run | PASS after fix |
+| `In the disposable validation workspace at …, find files whose names contain Validation.` | `finder.search` | GPT-OSS selected Finder search and returned `root`, `nameContains: Validation`, and a bounded limit. Execution found the generated `ValidationNote.md`. | 2,773 ms planning; 1 ms execution | PASS after fix |
+
+### Defects fixed in this follow-up
+
+1. Obsidian's external-vault actions were incorrectly registered as internal
+   memory permissions. The native planner intentionally filters internal
+   memory writes, so real `create_note`, `append_note`, and `update_note`
+   actions were absent from its model-facing allowlist. They are now correctly
+   filesystem tools; their existing confirmation policy still governs writes.
+2. Absolute filesystem targets contributed directory tokens such as `nexus`
+   to capability ranking and could crowd out the requested Finder action.
+   Search now removes only absolute path spans for semantic ranking while
+   preserving the original prompt for argument generation, and native
+   allowlists default to the three strongest candidates.
+3. GPT-OSS can emit an optional placeholder for every JSON-Schema property
+   despite native instructions—for example empty Finder filters and
+   `maximumSize: 0`, which rejects ordinary files. Before execution, Nexus now
+   schema-checks model-originated plans and removes only empty optional values,
+   nulls, and an unrequested zero optional number. It never adds arguments,
+   changes tool selection, or changes direct CLI/user-supplied calls. A user
+   request that explicitly says `zero` preserves a zero value.
+
+Focused regression suites passed after this change:
+
+```text
+xcodebuild -quiet -project nexus/nexus.xcodeproj -scheme nexus \
+  -configuration Debug -destination 'platform=macOS,name=My Mac' \
+  -derivedDataPath .build test \
+  -only-testing:nexusTests/NexPrimaryToolPlannerTests \
+  -only-testing:nexusTests/NexComputerToolSearchTests \
+  -only-testing:nexusTests/NexComputerExtendedActionTests
+  ** TEST SUCCEEDED **
+
+./scripts/build-nexus.sh
+  ** BUILD SUCCEEDED **
+```

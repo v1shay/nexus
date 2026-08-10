@@ -52,7 +52,12 @@ struct NexToolSearchEngine: Sendable {
         let score: Double
     }
 
-    static let defaultMaximumResults = 5
+    /// Native function calling is more reliable when the model sees a small
+    /// semantic boundary. Three strong candidates preserve alternatives for
+    /// an ambiguous request while avoiding unrelated broad connector schemas
+    /// crowding out the requested local action. Callers can still explicitly
+    /// request up to `maximumResults` for capability discovery.
+    static let defaultMaximumResults = 3
     static let maximumResults = 8
 
     func search(
@@ -286,7 +291,18 @@ struct NexToolSearchEngine: Sendable {
     /// `tokens(_:)` above and may stem words; embeddings must receive natural
     /// forms such as “messages,” not the index-only form “messag.”
     private static func semanticTokens(_ text: String) -> [String] {
-        return text
+        // A concrete filesystem target is valuable to the selected tool, but
+        // its directory components are not the user's capability intent. For
+        // example, a project path containing "Nexus" must not make the
+        // confirmation-control tools outrank Finder search. Keep the original
+        // query for argument generation; remove only absolute-path spans from
+        // the local semantic index.
+        let intentText = text.replacingOccurrences(
+            of: #"(?:^|\s)/[^\s,;]+"#,
+            with: " ",
+            options: .regularExpression
+        )
+        return intentText
             .lowercased()
             .replacingOccurrences(of: "_", with: " ")
             .replacingOccurrences(of: ".", with: " ")

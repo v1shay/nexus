@@ -257,9 +257,10 @@ enum NexComputerCLI {
             messages: messages,
             registeredTools: definitions
         )
-        let result = NexPrimaryToolPlanner.groundingBrowserActions(
+        let result = NexPrimaryToolPlanner.groundingActions(
             in: planned,
-            userPrompt: prompt
+            userPrompt: prompt,
+            registeredTools: definitions
         )
         return [
             "model": model,
@@ -364,9 +365,10 @@ enum NexComputerCLI {
                     ),
                     registeredTools: allowed
                 )
-                let selected = NexPrimaryToolPlanner.groundingBrowserActions(
+                let selected = NexPrimaryToolPlanner.groundingActions(
                     in: planned,
-                    userPrompt: prompt
+                    userPrompt: prompt,
+                    registeredTools: allowed
                 ).actions.map(\.tool)
                 let outcome: String
                 if selected.contains(expected.name) { outcome = "selected" }
