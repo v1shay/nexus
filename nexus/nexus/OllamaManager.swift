@@ -28,7 +28,7 @@ enum NexusResponseInstructions {
     - `conversation_recall`: The active conversation is already supplied, so do not use `scope: "current"` for ordinary follow-ups. Use `scope: "saved"` with a focused `query` only when an explicitly saved past conversation, rather than a durable memory, is needed and is absent from the active conversation. Use `scope: "all"` only when both the live summary and saved history are genuinely needed.
     - `web_search`: Search the live web whenever the answer needs current, changing, time-sensitive, uncertain, niche, documentation, pricing, news, weather, sports, regulations, versions, releases, APIs, calendars, companies, or another verifiable public fact. Never say you lack real-time access without trying it. Use a focused standalone `query` containing the real objective, important entities, location, and relevant date/recency. Never copy the full request, reuse an unrelated earlier topic, or issue a one-word query.
     - `browser.visit_url`: Use Nexus's separate managed browser for a simple explicit request to visit, open, or inspect one complete HTTP(S) URL. Supply only `url`; Nexus itself safely navigates and extracts the readable page text. Prefer this over `browser.run_task` for ordinary one-page inspection so you do not need to construct browser-step JSON.
-    - `browser.run_task`: Use Nexus's separate managed browser for a complex agentic browser action: navigation across multiple pages, click, sign in, fill a form, upload/download, or take a screenshot. Supply one concise `goal` and `steps_json`, a JSON array made only of supported steps (`navigate`, `new_tab`, `activate_tab`, `close_tab`, `click`, `type`, `form`, `extract`, `upload`, `download`, `screenshot`). Do not use it to answer a normal current-facts question when web search results are enough.
+    - `browser.run_task`: Use Nexus's separate managed browser for a complex agentic browser action: navigation across multiple pages, click, sign in, fill a form, upload/download, or take a screenshot. Supply one concise `goal` and a structured `steps` array made only of supported steps (`navigate`, `new_tab`, `activate_tab`, `close_tab`, `click`, `type`, `form`, `extract`, `upload`, `download`, `screenshot`); do not encode that array in a JSON string. Do not use it to answer a normal current-facts question when web search results are enough.
     - `browser.open_profile`: Use when Sir wants to sign in to a private site for future Nexus browser work. It opens a separate persistent Nexus Chrome profile. Tell him to sign in there once and close that Nexus Chrome window before automated tasks; never claim that normal Chrome passwords or cookies can be imported.
     - `browser.import_chrome_profile`: Use only when Sir asks to import normal Chrome browser state. It imports bookmarks, history, and preferences after Chrome is closed; passwords, cookies, and Keychain sessions are intentionally not copied.
     - `chrome.*`: Use live Chrome only if Sir explicitly refers to an existing tab, asks to switch/open/close a live tab, or uses an existing Chrome tab for YouTube playback. Otherwise, browser work stays in the Nexus-managed browser.
@@ -406,7 +406,12 @@ final class OllamaManager: @unchecked Sendable {
                 // complete call; the planner still returns as soon as Ollama
                 // finishes the tool response.
                 keepAlive: "30m",
-                options: .init(temperature: 0, numPredict: 512, numContext: 32_768),
+                // Complex native calls can contain a JSON-encoded browser
+                // step list.  Give that one bounded planning response enough
+                // room to close both the outer tool object and its nested
+                // argument string; 512 tokens can truncate a valid call
+                // before Ollama emits it as structured data.
+                options: .init(temperature: 0, numPredict: 1_024, numContext: 32_768),
                 tools: registeredTools
                     .filter { $0.permission != .writeMemory && $0.permission != .forgetMemory }
                     .map(OllamaToolPlanningRequest.Tool.init)
@@ -663,7 +668,8 @@ private struct OllamaToolPlanningRequest: Encodable {
         let function: Function
 
         init(_ registered: NexRegisteredTool) {
-            let properties = Dictionary(uniqueKeysWithValues: registered.schema.fields.map { name, field in
+            let activeFields = registered.schema.fields.filter { !$0.value.deprecated }
+            let properties = Dictionary(uniqueKeysWithValues: activeFields.map { name, field in
                 (name, Function.Parameters.Property(type: field.type.rawValue, enumValues: field.allowedValues.isEmpty ? nil : field.allowedValues))
             })
             function = .init(
@@ -671,7 +677,7 @@ private struct OllamaToolPlanningRequest: Encodable {
                 description: registered.description,
                 parameters: .init(
                     properties: properties,
-                    required: registered.schema.fields.compactMap { $0.value.required ? $0.key : nil }.sorted()
+                    required: activeFields.compactMap { $0.value.required ? $0.key : nil }.sorted()
                 )
             )
         }

@@ -173,6 +173,13 @@ struct NexDeletionTombstone: Codable, Equatable, Identifiable, Sendable {
 
 enum NexVaultLocation {
     static func defaultURL(fileManager: FileManager = .default) -> URL {
+        // A bounded override keeps headless validation and automated tests out
+        // of a person's real notes while preserving the production default.
+        // It is a storage location only; tool selection remains semantic.
+        if let override = ProcessInfo.processInfo.environment["NEXUS_OBSIDIAN_VAULT"],
+           !override.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return URL(fileURLWithPath: override, isDirectory: true)
+        }
         let home = fileManager.homeDirectoryForCurrentUser
         let obsidianICloud = home
             .appendingPathComponent("Library/Mobile Documents/iCloud~md~obsidian/Documents", isDirectory: true)

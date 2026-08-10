@@ -62,6 +62,13 @@ struct NexToolFieldSchema: Codable, Equatable, Sendable {
     let allowedValues: [String]
     let minimum: Double?
     let maximum: Double?
+    /// Retained for accepted older calls, but intentionally omitted from new
+    /// model-facing function schemas so the model chooses the current shape.
+    let deprecated: Bool
+
+    enum CodingKeys: String, CodingKey {
+        case type, required, description, allowedValues, minimum, maximum, deprecated
+    }
 
     init(
         _ type: NexToolFieldType,
@@ -69,7 +76,8 @@ struct NexToolFieldSchema: Codable, Equatable, Sendable {
         description: String? = nil,
         allowedValues: [String] = [],
         minimum: Double? = nil,
-        maximum: Double? = nil
+        maximum: Double? = nil,
+        deprecated: Bool = false
     ) {
         self.type = type
         self.required = required
@@ -77,6 +85,18 @@ struct NexToolFieldSchema: Codable, Equatable, Sendable {
         self.allowedValues = allowedValues
         self.minimum = minimum
         self.maximum = maximum
+        self.deprecated = deprecated
+    }
+
+    init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        type = try values.decode(NexToolFieldType.self, forKey: .type)
+        required = try values.decode(Bool.self, forKey: .required)
+        description = try values.decodeIfPresent(String.self, forKey: .description)
+        allowedValues = try values.decodeIfPresent([String].self, forKey: .allowedValues) ?? []
+        minimum = try values.decodeIfPresent(Double.self, forKey: .minimum)
+        maximum = try values.decodeIfPresent(Double.self, forKey: .maximum)
+        deprecated = try values.decodeIfPresent(Bool.self, forKey: .deprecated) ?? false
     }
 }
 

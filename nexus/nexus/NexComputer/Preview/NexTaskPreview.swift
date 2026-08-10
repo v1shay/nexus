@@ -164,7 +164,7 @@ struct NexTaskPreviewModel: Equatable, Sendable {
             rendered.append(NexTaskPreviewItem(title: body, detail: "Draft", emphasis: true))
         }
         if kind == .browser,
-           let rawPlan = string("steps_json", arguments: arguments, result: result),
+           let rawPlan = browserStepsJSON(arguments: arguments, result: result),
            let data = rawPlan.data(using: .utf8),
            let steps = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]] {
             rendered = steps.prefix(6).enumerated().map { index, step in
@@ -178,6 +178,15 @@ struct NexTaskPreviewModel: Equatable, Sendable {
             }
         }
         return rendered
+    }
+
+    private static func browserStepsJSON(arguments: [String: NexJSONValue], result: [String: NexJSONValue]) -> String? {
+        if let steps = arguments["steps"]?.array,
+           let data = try? JSONEncoder().encode(steps),
+           let json = String(data: data, encoding: .utf8) {
+            return json
+        }
+        return string("steps_json", arguments: arguments, result: result)
     }
 
     private static func item(kind: NexTaskPreviewKind, value: NexJSONValue) -> NexTaskPreviewItem? {

@@ -2,7 +2,7 @@ import AppKit
 import CryptoKit
 import Foundation
 
-struct NexBrowserTaskResult: Sendable {
+struct NexBrowserTaskResult: Codable, Sendable {
     let taskID: String
     let status: String
     let text: String
@@ -25,17 +25,17 @@ actor NexManagedBrowserProvider {
     }
 
     func run(goal: String, stepsJSON: String, progress: @escaping @Sendable (String) async -> Void) async throws -> NexBrowserTaskResult {
-        guard let stepsData = stepsJSON.data(using: .utf8), (try? JSONSerialization.jsonObject(with: stepsData)) is [Any] else { throw NexToolError.executionFailed(code: "invalid_browser_steps", message: "steps_json must be a JSON array of browser steps.") }
+        guard let stepsData = stepsJSON.data(using: .utf8), (try? JSONSerialization.jsonObject(with: stepsData)) is [Any] else { throw NexToolError.executionFailed(code: "invalid_browser_steps", message: "Browser steps must be a JSON array.") }
         let taskID = UUID().uuidString.lowercased(), runtime = try await ensureRuntime(), taskRoot = root.appendingPathComponent("tasks/\(taskID)", isDirectory: true); try FileManager.default.createDirectory(at: taskRoot, withIntermediateDirectories: true)
         let request: [String: Any] = ["taskID": taskID, "goal": goal, "steps": try JSONSerialization.jsonObject(with: stepsData), "profile": root.appendingPathComponent("Profile").path, "taskRoot": taskRoot.path, "chrome": "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"]
         let input = try JSONSerialization.data(withJSONObject: request)
         let process = Process(), stdin = Pipe(), stdout = Pipe(); process.executableURL = URL(fileURLWithPath: "/opt/homebrew/bin/node"); process.arguments = [runtime.appendingPathComponent("agent.mjs").path]; process.standardInput = stdin; process.standardOutput = stdout; process.standardError = stdout; processes[taskID] = process; try process.run(); try stdin.fileHandleForWriting.write(contentsOf: input); try stdin.fileHandleForWriting.close()
         var final = NexBrowserTaskResult(taskID: taskID, status: "running", text: "", tabs: [], downloads: [], screenshots: [], error: "")
         for try await line in stdout.fileHandleForReading.bytes.lines { guard let data = line.data(using: .utf8), let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { continue }; if let event = json["event"] as? String, event != "completed" { await progress((json["message"] as? String) ?? event) }; if json["event"] as? String == "completed" { final = .init(taskID: taskID, status: json["status"] as? String ?? "completed", text: json["text"] as? String ?? "", tabs: json["tabs"] as? [String] ?? [], downloads: json["downloads"] as? [String] ?? [], screenshots: json["screenshots"] as? [String] ?? [], error: json["error"] as? String ?? "") } }
-        process.waitUntilExit(); processes[taskID] = nil; if process.terminationStatus != 0, final.status == "running" { final = .init(taskID: taskID, status: "failed", text: "", tabs: [], downloads: [], screenshots: [], error: "Managed browser process exited \(process.terminationStatus).") }; results[taskID] = final; return final
+        process.waitUntilExit(); processes[taskID] = nil; if process.terminationStatus != 0, final.status == "running" { final = .init(taskID: taskID, status: "failed", text: "", tabs: [], downloads: [], screenshots: [], error: "Managed browser process exited \(process.terminationStatus).") }; results[taskID] = final; try persist(final); return final
     }
-    func status(_ id: String) -> NexBrowserTaskResult? { results[id] ?? (processes[id] != nil ? .init(taskID: id, status: "running", text: "", tabs: [], downloads: [], screenshots: [], error: "") : nil) }
-    func cancel(_ id: String) throws { guard let process = processes[id] else { throw NexToolError.executionFailed(code: "browser_task_missing", message: "Browser task is not running.") }; process.terminate(); processes[id] = nil; results[id] = .init(taskID: id, status: "cancelled", text: "", tabs: [], downloads: [], screenshots: [], error: "") }
+    func status(_ id: String) -> NexBrowserTaskResult? { results[id] ?? (processes[id] != nil ? .init(taskID: id, status: "running", text: "", tabs: [], downloads: [], screenshots: [], error: "") : persistedResult(id)) }
+    func cancel(_ id: String) throws { guard let process = processes[id] else { throw NexToolError.executionFailed(code: "browser_task_missing", message: "Browser task is not running.") }; process.terminate(); processes[id] = nil; let cancelled = NexBrowserTaskResult(taskID: id, status: "cancelled", text: "", tabs: [], downloads: [], screenshots: [], error: ""); results[id] = cancelled; try persist(cancelled) }
     func importProfile(chromeRoot: URL) throws -> [String] {
         guard !chromeIsRunning() else { throw NexToolError.executionFailed(code: "chrome_must_close", message: "Quit Chrome before importing browser state.") }
         let source = chromeRoot.appendingPathComponent("Default"), destination = root.appendingPathComponent("Profile/Default"); try FileManager.default.createDirectory(at: destination, withIntermediateDirectories: true); var copied: [String] = []
@@ -60,6 +60,28 @@ actor NexManagedBrowserProvider {
     }
     func reset() throws { for process in processes.values { process.terminate() }; processes.removeAll(); try? FileManager.default.removeItem(at: root.appendingPathComponent("Profile")); try FileManager.default.createDirectory(at: root.appendingPathComponent("Profile"), withIntermediateDirectories: true) }
 
+    /// Browser actions may be started and inspected by separate `nex-computer`
+    /// invocations.  Keep the final, non-secret task result beside the task's
+    /// screenshots and downloads so `browser.get_task` remains useful after
+    /// the originating CLI process exits.
+    private func persist(_ result: NexBrowserTaskResult) throws {
+        guard let taskDirectory = taskDirectory(for: result.taskID) else { return }
+        try FileManager.default.createDirectory(at: taskDirectory, withIntermediateDirectories: true)
+        let encoded = try JSONEncoder().encode(result)
+        try encoded.write(to: taskDirectory.appendingPathComponent("result.json"), options: .atomic)
+    }
+
+    private func persistedResult(_ id: String) -> NexBrowserTaskResult? {
+        guard let taskDirectory = taskDirectory(for: id),
+              let data = try? Data(contentsOf: taskDirectory.appendingPathComponent("result.json")) else { return nil }
+        return try? JSONDecoder().decode(NexBrowserTaskResult.self, from: data)
+    }
+
+    private func taskDirectory(for id: String) -> URL? {
+        guard UUID(uuidString: id) != nil else { return nil }
+        return root.appendingPathComponent("tasks", isDirectory: true).appendingPathComponent(id.lowercased(), isDirectory: true)
+    }
+
     private func ensureRuntime() async throws -> URL {
         let runtime = root.appendingPathComponent("Runtime", isDirectory: true), module = runtime.appendingPathComponent("node_modules/playwright-core")
         try FileManager.default.createDirectory(at: runtime, withIntermediateDirectories: true)
@@ -74,7 +96,14 @@ actor NexManagedBrowserProvider {
             process.environment = environment
             process.standardOutput = pipe; process.standardError = pipe; try process.run(); process.waitUntilExit(); guard process.terminationStatus == 0 else { throw NexToolError.executionFailed(code: "playwright_install_failed", message: String(data: pipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? "Playwright provisioning failed.") }
         }
-        let script = runtime.appendingPathComponent("agent.mjs"); if !FileManager.default.fileExists(atPath: script.path) { try Self.script.write(to: script, atomically: true, encoding: .utf8) }; return runtime
+        let script = runtime.appendingPathComponent("agent.mjs")
+        // The runtime directory persists across app updates. Refresh this
+        // Nexus-owned script whenever its bundled implementation changes so
+        // new supported steps are not documented before they are executable.
+        if (try? String(contentsOf: script, encoding: .utf8)) != Self.script {
+            try Self.script.write(to: script, atomically: true, encoding: .utf8)
+        }
+        return runtime
     }
 
     private static let script = #"""
@@ -96,12 +125,13 @@ try {
       case 'activate_tab': { const pages=context.pages(); if(!pages[step.index]) throw new Error('Tab index unavailable'); page=pages[step.index]; await page.bringToFront(); break; }
       case 'close_tab': await page.close(); page=context.pages()[0] || await context.newPage(); break;
       case 'click': await page.locator(step.selector).click(); break;
+      case 'wait_for_element': await page.locator(step.selector).waitFor({state:step.state || 'visible',timeout:step.timeout || 30000}); break;
       case 'type': await page.locator(step.selector).fill(step.text || ''); break;
       case 'form': for(const field of step.fields || []) await page.locator(field.selector).fill(field.value); if(step.submitSelector) await page.locator(step.submitSelector).click(); break;
       case 'extract': extracted.push(await page.locator(step.selector || 'body').innerText({timeout:15000})); break;
       case 'upload': await page.locator(step.selector).setInputFiles(step.paths || []); break;
       case 'download': await Promise.all([page.waitForEvent('download'),page.locator(step.selector).click()]); break;
-      case 'screenshot': { const target=`${request.taskRoot}/${step.name || `shot-${index}.png`}`; await page.screenshot({path:target,fullPage:step.fullPage ?? true}); screenshots.push(target); break; }
+      case 'screenshot': { const target=`${request.taskRoot}/${step.name || `shot-${index}.png`}`; await page.screenshot({path:target,fullPage:step.fullPage ?? step.full_page ?? true}); screenshots.push(target); break; }
       default: throw new Error(`Unsupported browser step: ${step.action}`);
     }
   }
@@ -122,7 +152,7 @@ actor NexBrowserActionCatalog {
             let result = try await managed.run(goal: "Visit \(url.host ?? url.absoluteString) and extract its readable page text.", stepsJSON: steps) { await context.reportProgress($0, nil) }
             return Self.result(result)
         }
-        try await registry.register(manifest: Self.manifest("browser.run_task", "Run a bounded Playwright task in Nexus's separate persistent browser profile. Steps support navigation, tabs, click, type, forms, extraction, downloads, uploads, and screenshots.", ["Research this site and extract the results", "Fill this form but do not submit without confirmation"], ["goal": .init(.string, required: true), "steps_json": .init(.string, required: true)], risk: .high, confirmation: .always, method: .browserAgent)) { args, context in let result = try await managed.run(goal: try Self.required(args, "goal"), stepsJSON: try Self.required(args, "steps_json")) { await context.reportProgress($0, nil) }; return Self.result(result) }
+        try await registry.register(manifest: Self.manifest("browser.run_task", "Run a bounded Playwright task in Nexus's separate persistent browser profile. Use it for an agentic, multi-step website workflow: navigate pages, wait for elements, click controls, fill forms, extract evidence, download or upload files, or take a full-page screenshot. Supply structured steps, not a JSON string.", ["Take a full-page screenshot of this website", "Research this site and extract the results", "Fill this form but do not submit without confirmation"], ["goal": .init(.string, required: true), "steps": .init(.array, description: "Structured array of browser step objects. Supported actions: navigate, new_tab, activate_tab, close_tab, click, type, form, extract, upload, download, wait_for_element, screenshot."), "steps_json": .init(.string, description: "Legacy JSON-encoded browser step array. Use steps instead for new calls.", deprecated: true)], risk: .high, confirmation: .always, method: .browserAgent)) { args, context in let result = try await managed.run(goal: try Self.required(args, "goal"), stepsJSON: try Self.stepsJSON(args)) { await context.reportProgress($0, nil) }; return Self.result(result) }
         try await registry.register(manifest: Self.manifest("browser.get_task", "Read a managed browser task by stable ID.", ["Check that browser task"], ["task_id": .init(.string, required: true)], method: .browserAgent)) { args, _ in guard let result = await managed.status(try Self.required(args, "task_id")) else { throw NexToolError.executionFailed(code: "browser_task_missing", message: "Browser task was not found.") }; return Self.result(result) }
         try await registry.register(manifest: Self.manifest("browser.cancel_task", "Cancel a running managed browser task.", ["Cancel the browser task"], ["task_id": .init(.string, required: true)], risk: .high, confirmation: .always, method: .browserAgent)) { args, _ in let id = try Self.required(args, "task_id"); try await managed.cancel(id); return Self.result(.init(taskID: id, status: "cancelled", text: "", tabs: [], downloads: [], screenshots: [], error: "")) }
         try await registry.register(manifest: Self.manifest("browser.import_chrome_profile", "One-time copy of bookmarks, history, and preferences from the default Chrome profile into Nexus's separate profile while Chrome is closed. Passwords, cookies, and Keychain secrets are never extracted. The source root is optional and defaults to ~/Library/Application Support/Google/Chrome.", ["Import my safe Chrome browser data into Nexus"], ["chrome_profile_root": .init(.string, required: false)], risk: .high, confirmation: .always, method: .nativeAPI)) { args, _ in
@@ -140,6 +170,16 @@ actor NexBrowserActionCatalog {
     private static let output = NexToolInputSchema(fields: ["display": .init(.string, required: true), "status": .init(.string, required: true), "task_id": .init(.string, required: true), "text": .init(.string, required: true), "tabs": .init(.stringArray, required: true), "downloads": .init(.stringArray, required: true), "screenshots": .init(.stringArray, required: true), "error": .init(.string, required: true)])
     private static let defaultChromeRoot = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support/Google/Chrome", isDirectory: true)
     private static func required(_ input: [String: NexJSONValue], _ key: String) throws -> String { guard let value = input[key]?.string, !value.isEmpty else { throw NexToolError.missingField(key) }; return value }
+    private static func stepsJSON(_ input: [String: NexJSONValue]) throws -> String {
+        if let steps = input["steps"]?.array {
+            let data = try JSONEncoder().encode(steps)
+            guard let json = String(data: data, encoding: .utf8) else {
+                throw NexToolError.executionFailed(code: "invalid_browser_steps", message: "Browser steps could not be encoded.")
+            }
+            return json
+        }
+        return try required(input, "steps_json")
+    }
     private static func validHTTPURL(_ text: String) throws -> URL {
         guard let url = URL(string: text), ["http", "https"].contains(url.scheme?.lowercased() ?? ""), url.host != nil else {
             throw NexToolError.executionFailed(code: "unsafe_url", message: "Nexus browser accepts only complete HTTP(S) URLs.")
