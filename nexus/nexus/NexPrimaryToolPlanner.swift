@@ -51,6 +51,88 @@ struct NexPrimaryToolPlan: Codable, Equatable, Sendable {
 /// primary model. The caller supplies only semantically discovered actions;
 /// parsing enforces that same per-request allowlist.
 enum NexPrimaryToolPlanner {
+    /// Native-function models already receive machine-readable names,
+    /// descriptions, and schemas. Giving them the much larger JSON fallback
+    /// manual as well adds latency and can make small local models ignore a
+    /// single remaining function after another tool has completed.
+    static func nativePlanningMessages(
+        context: [NexusChatMessage],
+        tools: [NexRegisteredTool],
+        date: Date = .now
+    ) -> [NexusChatMessage] {
+        let names = Set(tools.map(\.name))
+        var rules: [String] = []
+        if names.contains("memory_search") {
+            rules.append(
+                "- memory_search: call it when the answer depends on the user's saved personal history, preferences, projects, decisions, or past chats that are absent from this active conversation."
+            )
+        }
+        if names.contains("memory_get") {
+            rules.append("- memory_get: call it only with an exact source_id returned by memory_search.")
+        }
+        if names.contains("web_search") {
+            rules.append(
+                "- web_search: call it for current, changing, uncertain, niche, or externally verifiable public facts. Use a focused standalone query."
+            )
+        }
+        if names.contains("search_tools") {
+            rules.append(
+                "- search_tools: call it for a requested external action not represented by another supplied function. Discovery is not completion."
+            )
+        }
+        if names.contains("messages.triage") {
+            rules.append(
+                "- messages.triage: call it to retrieve the user's latest, recent, last, or " +
+                "“couple” of Messages. If the user says to open Messages and pull, show, or read " +
+                "message contents, call messages.triage, not messages.open; opening the app never returns contents."
+            )
+        }
+        if names.contains("messages.search") {
+            rules.append(
+                "- messages.search: for a request to find or read prior Messages from a named person or about a topic, call messages.search directly with the sender and/or query. messages.search_contacts is only for resolving an exact recipient before a draft."
+            )
+        }
+        if names.contains("nex_cli_task") {
+            rules.append(
+                "- nex_cli_task: call it for implementation, editing, running, testing, debugging, or another requested code/file artifact."
+            )
+        }
+        if names.contains("nex_cli_set_workspace") {
+            rules.append("- nex_cli_set_workspace: call it only for an explicit request to switch the coding workspace.")
+        }
+        if names.contains(where: { $0.hasPrefix("browser.") || $0.hasPrefix("chrome.") }) {
+            rules.append("- Browser functions perform navigation or interaction; web_search only retrieves public facts.")
+        }
+        if names.contains(where: { $0.hasPrefix("youtube_") }) {
+            rules.append("- YouTube playback requests require the matching supplied playback function; never claim playback without it.")
+        }
+        if names.contains("youtube_play") {
+            rules.append(
+                "- youtube_play requires the exact video_id returned by youtube_search in prior conversation context. If the user refers to a selected search result but no returned video_id is present, do not substitute youtube_play_current and do not invent an ID."
+            )
+        }
+        if names.contains(where: { $0.hasPrefix("finder.") }) {
+            rules.append(
+                "- Finder actions are for macOS files, folders, paths, selections, and Finder. A request that says file, folder, path, or Finder must never select an email or Notion archive action; ask for a missing path or destination instead of guessing."
+            )
+        }
+        if names.contains(where: { $0.hasPrefix("obsidian.") }) {
+            rules.append(
+                "- Obsidian actions own requests that name Obsidian, a vault, or an Obsidian note. Never substitute a Notion action for an explicit Obsidian request; use Notion only when the user names Notion."
+            )
+        }
+
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.dateFormat = "MMMM d, yyyy"
+        let system = """
+        NEXUS_NATIVE_TOOL_PLANNING_PASS
+        Select tools from the user's meaning and complete active conversation, never from a keyword checklist. The supplied native functions are the only functions available on this pass. Call every independently necessary supplied function directly, with complete arguments. If saved personal evidence and current public evidence are both required, call both memory_search and web_search. If a prior tool result is present, call only a still-missing function and never repeat a completed function. Use no function for stable explanations, writing, math, or facts already visible in the active conversation. Never answer, narrate, emit JSON, or expose reasoning during this pass. Today is \(formatter.string(from: date)).
+        \(rules.joined(separator: "\n"))
+        """
+        return [.init(role: "system", content: system)] + context
+    }
+
     static func planningMessages(
         context: [NexusChatMessage],
         tools: [NexRegisteredTool],
@@ -91,7 +173,7 @@ enum NexPrimaryToolPlanner {
 
         **Hard distinction: research versus browser action.** `web_search` is read-only public-fact retrieval. It returns sources for questions such as current news, releases, prices, weather, or documentation; it never opens a tab, navigates a URL, clicks, signs in, fills a form, uploads, downloads, or extracts a specified webpage. `browser.visit_url` is the normal action for an explicit request to use Nexus browser on one known complete URL; pass only its `url` and Nexus will navigate and read it. `browser.run_task` is a complex agentic workflow for multi-step sites, clicks, forms, uploads, downloads, and screenshots. `browser.open_profile` opens the persistent Nexus-only Chrome profile so the user can sign into a private service once. Never substitute `web_search` for an explicit Nexus-browser request. Conversely, never use browser tools merely to answer a current factual question when web sources are sufficient. Use both only if web search must discover a destination before a browser action.
 
-        Browser work defaults to Nexus's managed browser, not the user's live Chrome session. Prefer `browser.visit_url` whenever one URL is sufficient; it deliberately avoids requiring nested JSON. Use `browser.run_task` only when the requested work truly needs steps, with `goal` plus `steps_json`, a JSON-encoded array of explicit browser steps. Use only supported steps: `navigate` with `url`, `click` with `selector`, `type` with `selector` and `text`, `form` with `fields` and optional `submitSelector`, `extract` with optional `selector`, `download` with `selector`, `upload` with `selector` and `paths`, `screenshot` with optional `name`, `new_tab` with optional `url`, `activate_tab` with `index`, and `close_tab`. Never use Chrome live-tab tools unless the user explicitly says their existing Chrome tab, asks to switch or close a tab, or the request is media playback from an existing Chrome tab. Do not make up selectors or claim browser results before the task result arrives.
+        Browser work defaults to Nexus's managed browser, not the user's live Chrome session. Prefer `browser.visit_url` whenever one URL is sufficient; it deliberately avoids requiring nested JSON. Use `browser.run_task` only when the requested work truly needs steps, with `goal` plus `steps_json`, a JSON-encoded array of explicit browser steps. Use only supported steps: `navigate` with `url`, `click` with `selector`, `type` with `selector` and `text`, `form` with `fields` and optional `submitSelector`, `extract` with optional `selector`, `download` with `selector`, `upload` with `selector` and `paths`, `screenshot` with optional `name`, `new_tab` with optional `url`, `activate_tab` with `index`, and `close_tab`. A browser interaction needs either an explicit complete URL, a named service that can be located with web_search first, or selectors/steps supplied by the user. If none is present, return no browser action so Nex can ask where to work; never fabricate a URL such as example.com, selectors, form fields, or destination. Never use Chrome live-tab tools unless the user explicitly says their existing Chrome tab, asks to switch or close a tab, or the request is media playback from an existing Chrome tab. Do not make up selectors or claim browser results before the task result arrives.
 
         For Messages, resolve the intended contact with messages.search_contacts before drafting whenever the user gives a name or an ambiguous reference. If the wording depends on prior texts or a pronoun could change the intended recipient wording, use messages.search for that contact's relevant recent messages before drafting. Then use messages.draft with the exact resolved recipient and a natural final body; draft the message for the visible Messages card but never call messages.send_draft yourself. The user taps Send on that card, and Nexus asks for the final confirmation. Do not preserve an awkward quoted pronoun when its ordinary conversational meaning clearly changes in the recipient's voice; for example, “text Test he needs to get the milk” should draft “You need to get the milk.” when Test is the resolved recipient.
 
@@ -114,6 +196,43 @@ enum NexPrimaryToolPlanner {
         registeredTools: [NexRegisteredTool]
     ) -> NexPrimaryToolPlan {
         parseStrict(response, registeredTools: registeredTools) ?? .fallback
+    }
+
+    /// A model can produce schema-valid browser steps that still invent a
+    /// destination.  Prompt guidance is not a security boundary: strip those
+    /// actions before execution unless the user's own request supplied a
+    /// concrete HTTP(S) URL.  The normal answer pass can then ask which site
+    /// the user intends, rather than navigating to a fabricated one.
+    static func groundingBrowserActions(
+        in plan: NexPrimaryToolPlan,
+        userPrompt: String
+    ) -> NexPrimaryToolPlan {
+        let normalizedPrompt = userPrompt.lowercased()
+        var actions = plan.actions
+        // A calendar focus block is not macOS Focus mode. The latter has no
+        // stable public mutation API, so selecting a calendar tool here would
+        // silently perform a different external action than the user asked.
+        if normalizedPrompt.contains("focus mode") {
+            actions.removeAll { $0.tool.hasPrefix("calendar.") }
+        }
+        // An explicit Obsidian request must never be satisfied by the
+        // similarly-shaped Notion connector action.
+        if normalizedPrompt.contains("obsidian") {
+            actions.removeAll { $0.tool.hasPrefix("notion.") }
+        }
+        if !containsExplicitHTTPURL(userPrompt) {
+            actions.removeAll {
+                $0.tool == "browser.visit_url" || $0.tool == "browser.run_task"
+            }
+        }
+        guard actions.count != plan.actions.count else { return plan }
+        return .init(status: plan.status, actions: actions, memoryWrite: plan.memoryWrite)
+    }
+
+    private static func containsExplicitHTTPURL(_ text: String) -> Bool {
+        let range = NSRange(text.startIndex..., in: text)
+        return (try? NSRegularExpression(pattern: #"https?://[^\s<>\"]+"#, options: [.caseInsensitive]))?
+            .firstMatch(in: text, range: range) != nil
     }
 
     /// Returns nil when the model answered in prose instead of returning the
@@ -309,9 +428,17 @@ struct NexToolOrchestrationResult: Sendable {
 /// individual tool implementations.
 actor NexToolOrchestrator {
     private let registry: NexToolRegistry
+    private let computerRegistry: NexComputerRegistry?
+    private let computerRuntime: NexComputerRuntime?
 
-    init(registry: NexToolRegistry) {
+    init(
+        registry: NexToolRegistry,
+        computerRegistry: NexComputerRegistry? = nil,
+        computerRuntime: NexComputerRuntime? = nil
+    ) {
         self.registry = registry
+        self.computerRegistry = computerRegistry
+        self.computerRuntime = computerRuntime
     }
 
     func execute(_ actions: [NexPrimaryToolPlan.Action]) async -> NexToolOrchestrationResult {
@@ -320,15 +447,25 @@ actor NexToolOrchestrator {
         var ordered = Array<(String, Result<NexJSONValue, Error>)?>(repeating: nil, count: unique.count)
         await withTaskGroup(of: (Int, String, Result<NexJSONValue, Error>).self) { group in
             for (index, action) in unique.enumerated() {
-                group.addTask { [registry] in
+                group.addTask { [registry, computerRegistry, computerRuntime] in
                     do {
-                        let value = try await registry.execute(
-                            name: action.tool,
-                            arguments: action.arguments,
-                            invocation: action.tool == NexToolSearchService.actionName
-                                ? .modelDiscovery
-                                : .modelReadOnly
-                        )
+                        let value: NexJSONValue
+                        if let computerRegistry,
+                           let computerRuntime,
+                           await computerRegistry.contains(actionID: action.tool) {
+                            value = try await computerRuntime.executeForModel(
+                                actionID: action.tool,
+                                arguments: action.arguments
+                            )
+                        } else {
+                            value = try await registry.execute(
+                                name: action.tool,
+                                arguments: action.arguments,
+                                invocation: action.tool == NexToolSearchService.actionName
+                                    ? .modelDiscovery
+                                    : .modelReadOnly
+                            )
+                        }
                         return (index, action.tool, .success(value))
                     } catch {
                         return (index, action.tool, .failure(error))

@@ -127,8 +127,17 @@ struct NexToolSearchEngine: Sendable {
         Self.addTerms(from: narratives, weight: 3, into: &weightedTerms)
         Self.addTerms(from: fields, weight: 2, into: &weightedTerms)
 
-        let matched = queryTerms.filter { weightedTerms[$0] != nil }
-        if matched.isEmpty {
+        let exactMatched = queryTerms.filter { weightedTerms[$0] != nil }
+        let fuzzyMatches: [(String, Double)] = queryTerms
+            .subtracting(exactMatched)
+            .compactMap { queryTerm in
+                guard queryTerm.count >= 5,
+                      let match = weightedTerms
+                        .filter({ Self.editDistance(queryTerm, $0.key) <= 1 })
+                        .max(by: { $0.value < $1.value }) else { return nil }
+                return (queryTerm, match.value * 0.7)
+            }
+        if exactMatched.isEmpty, fuzzyMatches.isEmpty {
             // The action manifests are canonical, but users naturally ask for
             // capabilities rather than the exact app or tool wording. Only
             // use embedding similarity as a fallback, so exact registry
@@ -145,8 +154,9 @@ struct NexToolSearchEngine: Sendable {
             guard semanticScore >= Self.minimumSemanticCapabilityScore else { return 0 }
             return 4 + semanticScore * 8
         }
-        var score = matched.reduce(0) { $0 + (weightedTerms[$1] ?? 0) }
-        score += Double(matched.count) / Double(queryTerms.count) * 6
+        var score = exactMatched.reduce(0) { $0 + (weightedTerms[$1] ?? 0) }
+        score += fuzzyMatches.reduce(0) { $0 + $1.1 }
+        score += Double(exactMatched.count + fuzzyMatches.count) / Double(queryTerms.count) * 6
 
         if action == queryPhrase { score += 20 }
         if aliases.contains(queryPhrase) { score += 18 }
@@ -203,6 +213,24 @@ struct NexToolSearchEngine: Sendable {
         "look", "make", "need", "open", "please", "run", "search", "send", "show",
         "start", "stop", "tell", "try", "use", "want", "write"
     ]
+
+    private static func editDistance(_ lhs: String, _ rhs: String) -> Int {
+        let a = Array(lhs)
+        let b = Array(rhs)
+        guard abs(a.count - b.count) <= 1 else { return 2 }
+        var previous = Array(0...b.count)
+        for (i, left) in a.enumerated() {
+            var current = [i + 1] + Array(repeating: 0, count: b.count)
+            for (j, right) in b.enumerated() {
+                current[j + 1] = min(
+                    min(current[j] + 1, previous[j + 1] + 1),
+                    previous[j] + (left == right ? 0 : 1)
+                )
+            }
+            previous = current
+        }
+        return previous[b.count]
+    }
 
     private func deduplicated(_ documents: [Document]) -> [Document] {
         var retained: [String: Document] = [:]
@@ -358,7 +386,11 @@ actor NexToolSearchService {
     }
 
     private func searchJSON(query: String, maximumResults: Int) async -> NexJSONValue {
-        let result = await search(query: query, maximumResults: maximumResults)
+        let result = await search(
+            query: query,
+            maximumResults: maximumResults,
+            availabilityPolicy: .includeUnavailable
+        )
         return .object([
             "query": .string(result.query),
             "candidates": .array(result.candidates.map { candidate in

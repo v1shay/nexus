@@ -70,7 +70,16 @@ final class NexMessagesActionTests: XCTestCase {
         XCTAssertTrue(Set(["messages.open", "messages.search_contacts", "messages.search", "messages.triage", "messages.draft", "messages.send_draft", "messages.open_conversation"]).isSubset(of: names))
     }
 
-    private func makeFixture() async throws -> (core: NexToolRegistry, sender: SenderMock, draftURL: URL) {
+    func testRecentMessagesIntentDiscoversTriageBeforeOpenOrDraft() async throws {
+        let fixture = try await makeFixture()
+        let search = NexToolSearchService(registry: fixture.core, computerRegistry: fixture.computer)
+        try await search.registerIfNeeded()
+
+        let result = await search.search(query: "Open Messages and pull my last couple messages")
+        XCTAssertEqual(result.candidates.first?.tool, "messages.triage")
+    }
+
+    private func makeFixture() async throws -> (core: NexToolRegistry, computer: NexComputerRegistry, sender: SenderMock, draftURL: URL) {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("NexMessagesActionTests-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         addTeardownBlock { try? FileManager.default.removeItem(at: root) }
@@ -79,7 +88,7 @@ final class NexMessagesActionTests: XCTestCase {
         let core = NexToolRegistry()
         let computer = NexComputerRegistry(toolRegistry: core, confirmationGateway: NexComputerConfirmationGateway(store: NexComputerPendingActionStore(fileURL: root.appendingPathComponent("pending.json"))), permissionManager: NexComputerPermissionManager(backend: Permissions()))
         try await NexMessagesActionCatalog(contacts: ContactsMock(), history: HistoryMock(), sender: sender, drafts: NexMessageDraftStore(fileURL: draftURL)).register(on: computer)
-        return (core, sender, draftURL)
+        return (core, computer, sender, draftURL)
     }
 
     private func actionID(_ value: NexJSONValue) throws -> String {

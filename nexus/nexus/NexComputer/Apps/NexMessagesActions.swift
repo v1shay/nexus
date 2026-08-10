@@ -232,13 +232,37 @@ actor NexMessagesActionCatalog {
     private static let openManifest = manifest("messages.open", "Open or activate Messages.", ["Open Messages"], .init(fields: [:]), simpleOutput, .low, .never, [], .nativeAPI)
     private static let contactsManifest = manifest("messages.search_contacts", "Search Contacts by person name and return stable contact IDs plus all candidate handles for safe ambiguity resolution.", ["Find Sam in my contacts"], .init(fields: ["name": .init(.string, required: true), "limit": .init(.integer, minimum: 1, maximum: 25)]), listOutput, .low, .never, contactsPermissions, .nativeAPI)
     private static let searchManifest = manifest("messages.search", "Read-only search of local Messages history by text, sender, conversation, date range, and limit.", ["Find messages from Sam about robotics"], searchInput, listOutput, .low, .never, messagePermissions, .nativeAPI)
-    private static let triageManifest = manifest("messages.triage", "Return bounded Messages records with stable IDs, participants, timestamps, conversation, attachment metadata, read state, and text for triage.", ["Triage my recent unread project messages"], searchInput, listOutput, .low, .never, messagePermissions, .nativeAPI)
+    private static let triageManifest = manifest(
+        "messages.triage",
+        "Return bounded recent Messages records with stable IDs, participants, timestamps, conversation, attachment metadata, read state, and text for triage.",
+        ["Show my last couple messages", "Triage my recent unread project messages"],
+        searchInput,
+        listOutput,
+        .low,
+        .never,
+        messagePermissions,
+        .nativeAPI,
+        aliases: ["recent messages", "last messages", "latest messages", "message history", "read recent chats"],
+        tags: ["recent", "latest", "last", "history", "inbox", "triage"]
+    )
     private static let draftManifest = manifest("messages.draft", "Create and persist a message draft for one exact recipient handle without sending it.", ["Draft a message to this contact"], .init(fields: ["recipient": .init(.string, required: true), "body": .init(.string, required: true)]), draftOutput, .low, .never, [], .nativeAPI)
     private static let sendManifest = manifest("messages.send_draft", "Send one immutable persisted message draft. recipient and body must exactly match the stored draft, so the confirmation previews the real message.", ["Send the drafted message"], .init(fields: ["messageDraftId": .init(.string, required: true), "recipient": .init(.string, required: true), "body": .init(.string, required: true)]), draftOutput, .high, .always, automationPermissions, .appleScript)
     private static let conversationManifest = manifest("messages.open_conversation", "Open Messages to one exact resolved phone number or email address.", ["Open my conversation with Sam"], .init(fields: ["recipient": .init(.string, required: true)]), simpleOutput, .low, .never, [], .urlScheme)
-    private static func manifest(_ id: String, _ description: String, _ examples: [String], _ input: NexToolInputSchema, _ output: NexToolInputSchema, _ risk: NexComputerRiskClass, _ confirmation: NexComputerConfirmationPolicy, _ permissions: [NexComputerPermissionRequirement], _ method: NexComputerImplementationMethod) -> NexComputerActionManifest {
+    private static func manifest(
+        _ id: String,
+        _ description: String,
+        _ examples: [String],
+        _ input: NexToolInputSchema,
+        _ output: NexToolInputSchema,
+        _ risk: NexComputerRiskClass,
+        _ confirmation: NexComputerConfirmationPolicy,
+        _ permissions: [NexComputerPermissionRequirement],
+        _ method: NexComputerImplementationMethod,
+        aliases additionalAliases: [String] = [],
+        tags additionalTags: [String] = []
+    ) -> NexComputerActionManifest {
         .init(actionID: id, application: "Messages", provider: "Apple Messages", bundleIdentifier: method == .appleScript ? "com.apple.MobileSMS" : nil, description: description, examples: examples,
-              aliases: [id.replacingOccurrences(of: ".", with: " ")], tags: ["messages", "imessage", "sms", "contact", "chat"], inputSchema: input, outputSchema: output,
+              aliases: [id.replacingOccurrences(of: ".", with: " ")] + additionalAliases, tags: ["messages", "imessage", "sms", "contact", "chat"] + additionalTags, inputSchema: input, outputSchema: output,
               implementationMethod: method, requiredPermissions: permissions, registryPermission: method == .nativeAPI && risk == .low ? .files : .automation,
               riskClass: risk, confirmationPolicy: confirmation, availabilityCheck: method == .appleScript ? .application(bundleIdentifier: "com.apple.MobileSMS") : .always,
               timeoutSeconds: 30, supportsCancellation: id == "messages.search" || id == "messages.triage", dryRunBehavior: .supported("Would perform \(id) without sending a message."), previewRenderer: "messages.action", tests: ["NexMessagesActionTests"])

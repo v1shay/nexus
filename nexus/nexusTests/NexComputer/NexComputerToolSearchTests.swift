@@ -153,6 +153,20 @@ final class NexComputerToolSearchTests: XCTestCase {
         XCTAssertEqual(included.first?.unavailableReason, "Slack is not connected.")
     }
 
+    func testOneCharacterTypoStillDiscoversRegisteredCapability() {
+        let screenshot = tool(
+            name: "browser.screenshot",
+            description: "Capture a screenshot of the current browser page.",
+            application: "Chrome",
+            provider: "Managed Browser",
+            tags: ["screenshot", "capture", "image"]
+        )
+        XCTAssertEqual(
+            search("take a screenshit of the current page", [screenshot]).first?.tool,
+            "browser.screenshot"
+        )
+    }
+
     func testDuplicateSemanticActionsCollapseDeterministically() {
         let first = tool(
             name: "mail.compose",

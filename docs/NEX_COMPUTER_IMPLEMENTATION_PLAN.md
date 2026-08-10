@@ -31,8 +31,8 @@ Status: Phase 0 repository discovery complete on 2026-07-22. No executor or UI p
 - Deployment target: macOS 14.2. The app is an `LSUIElement` menu-bar/notch application with a separate full Nexus window.
 - Dependency manager: Swift Package Manager through Xcode. The current external package is FluidAudio 0.5.2.
 - Build command: `./scripts/build-nexus.sh`.
-- Baseline build: passed on 2026-07-22 using the persistent `system local code signing` identity.
-- Unit-test command: `xcodebuild -project nexus/nexus.xcodeproj -scheme nexus -configuration Debug -destination 'platform=macOS' -derivedDataPath .build CODE_SIGN_STYLE=Manual DEVELOPMENT_TEAM='' CODE_SIGN_IDENTITY='system local code signing' PROVISIONING_PROFILE_SPECIFIER='' test -only-testing:nexusTests`.
+- Baseline build: passed on 2026-07-22; current local builds use the repository's explicit `identifier "na.nexus"` designated requirement.
+- Unit-test command: `xcodebuild -project nexus/nexus.xcodeproj -scheme nexus -configuration Debug -destination 'platform=macOS,name=My Mac' -derivedDataPath .build test -only-testing:nexusTests`.
 - Baseline unit tests: the suite ran to completion. All tests passed except `testDefaultModelInstructionsDescribeDirectAndToolRoutedResponses` and `testSystemPromptUsesRegisteredRoutingToolNames`. Those failures predate Nex Computer and are caused by the existing uncommitted `OllamaManager.swift` prompt edit no longer matching its prompt-contract assertions. That file is user-owned and is not modified by Phase 0.
 - Baseline UI test: `nexusUITests.testExample()` passed in 15.105 seconds. The combined `test` action then hung while Xcode waited for a terminated runner to report completion, so it was interrupted after 91 seconds. This is recorded as an existing Xcode harness cleanup defect, not a passing full-suite result.
 - Working tree at discovery: `nexus/nexus/OllamaManager.swift` was already modified. It must not be overwritten, staged, or included in Nex Computer checkpoints unless the user explicitly asks.

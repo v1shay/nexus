@@ -36,7 +36,10 @@ struct NexCLIHostStatus: Codable, Equatable, Sendable {
 /// It never appears in the LaunchAgent plist or in the Nex UI.
 enum NexCLILoopbackCredential {
     private static let account = "managed-loopback-password.v1"
-    private static let store = NexusKeychainSecretStore(service: "na.nexus.nex-cli")
+    private static let store = NexusKeychainSecretStore(
+        service: "na.nexus.nex-cli",
+        allowsAuthenticationUI: false
+    )
     private static let leaseURL = FileManager.default.homeDirectoryForCurrentUser
         .appendingPathComponent("Library/Application Support/Nexus/NexCLI/loopback.lease")
 

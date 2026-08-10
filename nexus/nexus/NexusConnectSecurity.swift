@@ -34,22 +34,31 @@ enum NexusSecretStoreRuntime {
 final class NexusKeychainSecretStore: NexusSecretStore, @unchecked Sendable {
     private let service: String
     private let ephemeralStore: NexusMemorySecretStore?
+    private let allowsAuthenticationUI: Bool
     private let vault: NexusUnifiedKeychainVault
 
     init(
         service: String = "na.nexus.connect",
-        useEphemeralStore: Bool = NexusSecretStoreRuntime.usesEphemeralStore
+        useEphemeralStore: Bool = NexusSecretStoreRuntime.usesEphemeralStore,
+        allowsAuthenticationUI: Bool = true
     ) {
         self.service = service
         self.vault = .shared
         self.ephemeralStore = useEphemeralStore
             ? NexusMemorySecretStore()
             : nil
+        self.allowsAuthenticationUI = allowsAuthenticationUI
     }
 
     func data(for account: String) throws -> Data? {
         if let ephemeralStore { return try ephemeralStore.data(for: account) }
-        if let data = try vault.data(service: service, account: account) { return data }
+        if let data = try vault.data(
+            service: service,
+            account: account,
+            allowsAuthenticationUI: allowsAuthenticationUI
+        ) {
+            return data
+        }
         // Existing releases stored one Keychain item per service. Keep those
         // usable, then fold each one into the single Nexus vault the first
         // time it is accessed. New secrets never create another item.
@@ -81,6 +90,12 @@ final class NexusKeychainSecretStore: NexusSecretStore, @unchecked Sendable {
         var query = baseQuery(account: account)
         query[kSecReturnData as String] = true
         query[kSecMatchLimit as String] = kSecMatchLimitOne
+        if !allowsAuthenticationUI {
+            // A background daemon credential must never block the visible app
+            // behind a stale Keychain ACL or an unseen authentication sheet.
+            // Interactive user credentials retain the normal Keychain prompt.
+            query[kSecUseAuthenticationUI as String] = kSecUseAuthenticationUIFail
+        }
         var item: CFTypeRef?
         let status = SecItemCopyMatching(query as CFDictionary, &item)
         if status == errSecItemNotFound { return nil }
@@ -164,9 +179,14 @@ final class NexusUnifiedKeychainVault: @unchecked Sendable {
         }
     }
 
-    func data(service: String, account: String) throws -> Data? {
+    func data(
+        service: String,
+        account: String,
+        allowsAuthenticationUI: Bool = true
+    ) throws -> Data? {
         try lock.withLock {
-            guard let values = try read(), let encoded = values[key(service, account)] else { return nil }
+            guard let values = try read(allowsAuthenticationUI: allowsAuthenticationUI),
+                  let encoded = values[key(service, account)] else { return nil }
             guard let value = Data(base64Encoded: encoded) else {
                 throw NexusConnectError.unavailable("Nexus secure vault contains unreadable data")
             }
@@ -217,10 +237,15 @@ final class NexusUnifiedKeychainVault: @unchecked Sendable {
         }
     }
 
-    private func read() throws -> [String: String]? {
+    private func read(allowsAuthenticationUI: Bool = true) throws -> [String: String]? {
         var query = baseQuery
         query[kSecReturnData as String] = true
         query[kSecMatchLimit as String] = kSecMatchLimitOne
+        if !allowsAuthenticationUI {
+            // Daemons and launch-time restoration must report a stale ACL as
+            // unavailable instead of blocking behind an invisible Keychain sheet.
+            query[kSecUseAuthenticationUI as String] = kSecUseAuthenticationUIFail
+        }
         var item: CFTypeRef?
         let status = SecItemCopyMatching(query as CFDictionary, &item)
         if status == errSecItemNotFound { return nil }

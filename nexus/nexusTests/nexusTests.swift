@@ -139,7 +139,7 @@ final class NexusGeometryTests: XCTestCase {
     }
 
     func testSystemPromptDescribesYouTubeToolContract() {
-        let prompt = NexusResponseInstructions.completeSystemPrompt
+        let prompt = NexusResponseInstructions.conciseSystemPrompt
         XCTAssertTrue(prompt.contains("youtube_play_current"))
         XCTAssertTrue(prompt.contains("youtube_search"))
         XCTAssertTrue(prompt.contains("youtube_play"))
@@ -258,7 +258,7 @@ final class NexusGeometryTests: XCTestCase {
     }
 
     func testSystemPromptUsesRegisteredRoutingToolNames() {
-        let prompt = NexusResponseInstructions.completeSystemPrompt
+        let prompt = NexusResponseInstructions.conciseSystemPrompt
         for tool in [
             "search_tools",
             "memory_search",
@@ -280,6 +280,14 @@ final class NexusGeometryTests: XCTestCase {
         XCTAssertTrue(prompt.contains("memory_write"))
         XCTAssertTrue(prompt.contains("Capability Discovery Before Refusal"))
         XCTAssertTrue(prompt.contains("small semantic shortlist"))
+    }
+
+    func testAnswerPromptCannotTeachModelRawToolTransport() {
+        let prompt = NexusResponseInstructions.completeSystemPrompt
+        XCTAssertFalse(prompt.contains("youtube_play"))
+        XCTAssertFalse(prompt.contains("<tool_call>"))
+        XCTAssertFalse(prompt.contains(#""actions":["#))
+        XCTAssertTrue(prompt.contains("do not emit function calls"))
     }
 
     @MainActor
@@ -1561,6 +1569,85 @@ final class NexusGeometryTests: XCTestCase {
         )
         XCTAssertNil(gesture.update(commandIsDown: true, hasDisqualifyingInput: false, now: 40.50))
         XCTAssertNil(gesture.update(commandIsDown: false, hasDisqualifyingInput: false, now: 40.60))
+    }
+
+    func testToolTransportFirewallBlocksKnownFormatsWithoutBlockingNormalProse() {
+        XCTAssertTrue(NexusToolTransportFirewall.containsTransport("<tool_call>web_search</tool_call>"))
+        XCTAssertTrue(NexusToolTransportFirewall.containsTransport("<tool_\ncall>web_search</tool_call>"))
+        XCTAssertTrue(NexusToolTransportFirewall.containsTransport(#"{"actions":[{"tool":"web_search"}]}"#))
+        XCTAssertTrue(NexusToolTransportFirewall.containsTransport("<|channel|>commentary\tto=functions.web_search"))
+        XCTAssertTrue(NexusToolTransportFirewall.containsTransport("<|channel|>commentary to=functions.web_search"))
+        XCTAssertFalse(NexusToolTransportFirewall.containsTransport("I used the available evidence and found the answer."))
+        XCTAssertFalse(NexusToolTransportFirewall.containsTransport("This toolbox is useful."))
+        XCTAssertTrue(NexusToolTransportFirewall.endsWithPossibleTransportFragment("Checking that <tool_"))
+        XCTAssertTrue(NexusToolTransportFirewall.endsWithPossibleTransportFragment("Checking that <tool\n_"))
+        XCTAssertTrue(NexusToolTransportFirewall.endsWithPossibleTransportFragment("{\"acti"))
+        XCTAssertFalse(NexusToolTransportFirewall.endsWithPossibleTransportFragment("A normal final answer."))
+    }
+
+    func testIntrinsicClassifierOnlyFastPathsClearDirectQuestions() {
+        XCTAssertTrue(NexusIntrinsicPromptClassifier.isClearlyDirect("Explain recursion simply"))
+        XCTAssertTrue(NexusIntrinsicPromptClassifier.isClearlyDirect("What is a closure?"))
+        XCTAssertFalse(NexusIntrinsicPromptClassifier.isClearlyDirect("Open my calendar"))
+        XCTAssertFalse(NexusIntrinsicPromptClassifier.isClearlyDirect("Build me a website"))
+    }
+
+    func testRelaunchRetiresOnlyOlderUIAndPreservesBothHelpers() {
+        let helpers: Set<pid_t> = [41, 42]
+        XCTAssertFalse(NexusRelaunchProcessPolicy.shouldRetire(
+            processID: 50,
+            currentPID: 50,
+            helperPIDs: helpers
+        ))
+        XCTAssertFalse(NexusRelaunchProcessPolicy.shouldRetire(
+            processID: 41,
+            currentPID: 50,
+            helperPIDs: helpers
+        ))
+        XCTAssertFalse(NexusRelaunchProcessPolicy.shouldRetire(
+            processID: 42,
+            currentPID: 50,
+            helperPIDs: helpers
+        ))
+        XCTAssertTrue(NexusRelaunchProcessPolicy.shouldRetire(
+            processID: 40,
+            currentPID: 50,
+            helperPIDs: helpers
+        ))
+
+        XCTAssertTrue(NexusRelaunchProcessPolicy.shouldRetire(
+            processID: 40,
+            currentPID: 50,
+            helperPIDs: helpers,
+            launchDate: Date(timeIntervalSince1970: 1),
+            currentLaunchDate: Date(timeIntervalSince1970: 2)
+        ))
+        XCTAssertFalse(NexusRelaunchProcessPolicy.shouldRetire(
+            processID: 60,
+            currentPID: 50,
+            helperPIDs: helpers,
+            launchDate: Date(timeIntervalSince1970: 3),
+            currentLaunchDate: Date(timeIntervalSince1970: 2)
+        ))
+    }
+
+    func testHealthyLaunchAgentIsPreservedOnlyForTheCanonicalExecutablePath() {
+        let expected = Data("new build path".utf8)
+        XCTAssertTrue(NexusLaunchAgentMigrationPolicy.preservesHealthyProcess(
+            hasLiveStatus: true,
+            installedPropertyList: expected,
+            expectedPropertyList: expected
+        ))
+        XCTAssertFalse(NexusLaunchAgentMigrationPolicy.preservesHealthyProcess(
+            hasLiveStatus: true,
+            installedPropertyList: Data("old build path".utf8),
+            expectedPropertyList: expected
+        ))
+        XCTAssertFalse(NexusLaunchAgentMigrationPolicy.preservesHealthyProcess(
+            hasLiveStatus: false,
+            installedPropertyList: expected,
+            expectedPropertyList: expected
+        ))
     }
 
 }

@@ -133,6 +133,13 @@ struct NexComputerCLIEnvironment: Sendable {
         try await NexApplicationActionCatalog().register(on: registry)
         try await NexBrowserActionCatalog().register(on: registry)
         try await NexChromeTabActionCatalog().register(on: registry)
+        // The notch registers these media tools at startup. Include them in
+        // the CLI audit environment as well so semantic routing diagnostics
+        // exercise the same public capability surface as the running app.
+        let youtube = await MainActor.run {
+            NexYouTubeToolController(registry: tools) { _, _ in false }
+        }
+        try await youtube.registerIfNeeded()
         try await connectors.reloadStoredConnections(registry: registry)
         let search = NexToolSearchService(registry: tools, computerRegistry: registry)
         try await search.registerIfNeeded()
@@ -158,6 +165,20 @@ enum NexComputerCLI {
             case "search":
                 guard arguments.count >= 2 else { throw CLIError.missing("query") }
                 output = try Self.object(try JSONEncoder.cli.encode(await env.search.search(query: arguments.dropFirst().joined(separator: " "), availabilityPolicy: .includeUnavailable)))
+            case "plan":
+                let rawArguments = Array(arguments.dropFirst())
+                let prompt = rawArguments.prefix { $0 != "--model" }.joined(separator: " ")
+                guard !prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { throw CLIError.missing("query") }
+                let model = Self.value(after: "--model", in: rawArguments) ?? "gpt-oss:latest"
+                output = try await plan(prompt: prompt, model: model, environment: env)
+            case "audit-discovery":
+                output = try await discoveryAudit(environment: env)
+            case "audit-plan":
+                let auditArguments = Array(arguments.dropFirst())
+                let model = Self.value(after: "--model", in: auditArguments) ?? "gpt-oss:latest"
+                let offset = Self.integer(after: "--offset", in: auditArguments) ?? 0
+                let limit = Self.integer(after: "--limit", in: auditArguments)
+                output = try await modelPlanAudit(model: model, offset: offset, limit: limit, environment: env)
             case "describe":
                 guard let action = arguments.dropFirst().first else { throw CLIError.missing("action") }
                 output = Self.manifestJSON(try await env.registry.manifest(actionID: action))
@@ -206,6 +227,179 @@ enum NexComputerCLI {
         }
     }
 
+    /// Exercises the exact native-function planning path used by the notch,
+    /// while keeping the action itself unexecuted. This makes model-routing
+    /// regressions inspectable without touching Messages, browser state, or
+    /// any other user data.
+    private static func plan(
+        prompt: String,
+        model: String,
+        environment: NexComputerCLIEnvironment
+    ) async throws -> Any {
+        let discovery = await environment.search.search(query: prompt)
+        var definitions = await environment.search.definitions(for: discovery)
+        let allDefinitions = await environment.tools.definitions()
+        if let searchTool = allDefinitions.first(where: { $0.name == NexToolSearchService.actionName }) {
+            definitions.append(searchTool)
+        }
+        definitions.sort { $0.name < $1.name }
+        let messages = NexPrimaryToolPlanner.planningMessages(
+            context: [.init(role: "user", content: prompt)],
+            tools: definitions
+        )
+        let planned = try await OllamaManager().planTools(
+            model: model,
+            messages: messages,
+            registeredTools: definitions
+        )
+        let result = NexPrimaryToolPlanner.groundingBrowserActions(
+            in: planned,
+            userPrompt: prompt
+        )
+        return [
+            "model": model,
+            "query": prompt,
+            "discovery": try object(JSONEncoder.cli.encode(discovery)),
+            "plan": try object(JSONEncoder.cli.encode(result))
+        ]
+    }
+
+    /// Checks the complete registered surface against the natural-language
+    /// examples that ship with each tool. This is intentionally read-only:
+    /// it proves discovery and the model's available-action boundary without
+    /// reading Messages, changing files, or contacting a connector.
+    private static func discoveryAudit(environment: NexComputerCLIEnvironment) async throws -> Any {
+        // `search_tools` deliberately never returns itself: it is the
+        // discovery mechanism, not a candidate capability. Exclude that
+        // meta-tool from the self-discovery invariant.
+        let definitions = await environment.tools.definitions()
+            .filter { $0.name != NexToolSearchService.actionName }
+        var results: [[String: Any]] = []
+        for definition in definitions.sorted(by: { $0.name < $1.name }) {
+            guard let prompt = definition.examples.first,
+                  !prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                results.append([
+                    "tool": definition.name,
+                    "prompt": "",
+                    "discovered": false,
+                    "candidates": [],
+                    "reason": "No natural-language example is registered."
+                ])
+                continue
+            }
+            let discovery = await environment.search.search(
+                query: prompt,
+                availabilityPolicy: .includeUnavailable
+            )
+            let candidates = discovery.candidates.map(\.tool)
+            results.append([
+                "tool": definition.name,
+                "prompt": prompt,
+                "discovered": candidates.contains(definition.name),
+                "candidates": candidates
+            ])
+        }
+        let passed = results.filter { $0["discovered"] as? Bool == true }.count
+        return [
+            "tools": results.count,
+            "passed": passed,
+            "failed": results.count - passed,
+            "results": results
+        ]
+    }
+
+    /// Runs the same native-function planning pass used by Nexus for every
+    /// registered tool example, without executing any tool. The result
+    /// distinguishes a direct selection from a legitimate discovery-first or
+    /// missing-argument outcome, rather than treating an empty plan as a
+    /// silent success.
+    private static func modelPlanAudit(
+        model: String,
+        offset: Int,
+        limit: Int?,
+        environment: NexComputerCLIEnvironment
+    ) async throws -> Any {
+        let allDefinitions = await environment.tools.definitions()
+        let definitions = allDefinitions
+            .filter { $0.name != NexToolSearchService.actionName }
+            .sorted { $0.name < $1.name }
+        let safeOffset = max(0, offset)
+        let remaining = definitions.dropFirst(safeOffset)
+        let auditedDefinitions = limit.map { Array(remaining.prefix(max(0, $0))) } ?? Array(remaining)
+        var results: [[String: Any]] = []
+
+        for expected in auditedDefinitions {
+            guard let prompt = expected.examples.first,
+                  !prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                results.append([
+                    "tool": expected.name,
+                    "prompt": "",
+                    "outcome": "no_example",
+                    "selected": [],
+                    "latency_ms": 0
+                ])
+                continue
+            }
+            // This audit measures the full model-routing path—not only the
+            // Ollama request—so it includes semantic discovery and argument
+            // grounding as experienced by a real Nexus prompt.
+            let startedAt = Date()
+            let discovery = await environment.search.search(query: prompt)
+            var allowed = await environment.search.definitions(for: discovery)
+            if let searchTool = allDefinitions.first(where: { $0.name == NexToolSearchService.actionName }) {
+                allowed.append(searchTool)
+            }
+            allowed.sort { $0.name < $1.name }
+            do {
+                let planned = try await OllamaManager().planTools(
+                    model: model,
+                    messages: NexPrimaryToolPlanner.planningMessages(
+                        context: [.init(role: "user", content: prompt)],
+                        tools: allowed
+                    ),
+                    registeredTools: allowed
+                )
+                let selected = NexPrimaryToolPlanner.groundingBrowserActions(
+                    in: planned,
+                    userPrompt: prompt
+                ).actions.map(\.tool)
+                let outcome: String
+                if selected.contains(expected.name) { outcome = "selected" }
+                else if selected.contains(NexToolSearchService.actionName) { outcome = "needs_second_pass" }
+                else if selected.isEmpty { outcome = "no_action" }
+                else { outcome = "other_action" }
+                results.append([
+                    "tool": expected.name,
+                    "prompt": prompt,
+                    "outcome": outcome,
+                    "selected": selected,
+                    "discovered": discovery.candidates.map(\.tool),
+                    "latency_ms": Int(Date().timeIntervalSince(startedAt) * 1_000)
+                ])
+            } catch {
+                results.append([
+                    "tool": expected.name,
+                    "prompt": prompt,
+                    "outcome": "planning_error",
+                    "selected": [],
+                    "error": error.localizedDescription,
+                    "latency_ms": Int(Date().timeIntervalSince(startedAt) * 1_000)
+                ])
+            }
+        }
+
+        let counts = Dictionary(grouping: results, by: { $0["outcome"] as? String ?? "unknown" })
+            .mapValues(\.count)
+        return [
+            "model": model,
+            "total_tools": definitions.count,
+            "offset": safeOffset,
+            "tools": results.count,
+            "outcomes": counts,
+            "results": results
+        ]
+    }
+
     private static func doctor(_ env: NexComputerCLIEnvironment) async -> [String: Any] {
         let manifests = await env.registry.manifests(), availability = await env.registry.availabilitySnapshot()
         let permissions = Set(manifests.flatMap { $0.requiredPermissions.map(\.id) })
@@ -221,12 +415,30 @@ enum NexComputerCLI {
     }
 
     private static func manifestJSON(_ manifest: NexComputerActionManifest, availability: NexComputerAvailability? = nil) -> [String: Any] {
-        var value: [String: Any] = ["action": manifest.actionID, "application": manifest.application, "provider": manifest.provider, "description": manifest.description, "risk": manifest.riskClass.rawValue, "confirmation": manifest.confirmationPolicy.rawValue, "implementation": manifest.implementationMethod.rawValue, "preview": manifest.previewRenderer]
+        var value: [String: Any] = [
+            "action": manifest.actionID,
+            "application": manifest.application,
+            "provider": manifest.provider,
+            "description": manifest.description,
+            "examples": manifest.examples,
+            "input_schema": (try? object(JSONEncoder.cli.encode(manifest.inputSchema))) ?? [:],
+            "required_permissions": manifest.requiredPermissions.map {
+                ["id": $0.id, "permission": $0.permission.rawValue, "recovery": $0.recovery ?? ""]
+            },
+            "risk": manifest.riskClass.rawValue,
+            "confirmation": manifest.confirmationPolicy.rawValue,
+            "implementation": manifest.implementationMethod.rawValue,
+            "preview": manifest.previewRenderer
+        ]
         if let availability { value["available"] = availability.isAvailable; value["unavailable_reason"] = availability.reason ?? "" }
         return value
     }
     private static func connectorJSON(_ status: NexConnectorPublicStatus) -> [String: Any] { ["provider": status.id.rawValue, "connected": status.connected, "healthy": status.healthy, "account": status.account ?? "", "scopes": status.scopes, "detail": status.detail] }
     private static func value(after option: String, in arguments: [String]) -> String? { guard let index = arguments.firstIndex(of: option), arguments.indices.contains(index + 1) else { return nil }; return arguments[index + 1] }
+    private static func integer(after option: String, in arguments: [String]) -> Int? {
+        guard let value = value(after: option, in: arguments) else { return nil }
+        return Int(value)
+    }
     private static func object(_ data: Data) throws -> Any { try JSONSerialization.jsonObject(with: data) }
     private static func foundationJSON(_ value: NexJSONValue) -> Any { (try? object(JSONEncoder.cli.encode(value))) ?? NSNull() }
     private static func nexJSON(_ value: Any) throws -> NexJSONValue {
@@ -250,6 +462,6 @@ enum NexComputerCLI {
 
 private enum CLIError: LocalizedError {
     case usage, missing(String), invalidJSON, unknown(String)
-    var errorDescription: String? { switch self { case .usage: "Usage: nex-computer <discover|apps|tools|search|describe|execute|dry-run|permissions|doctor|connectors>"; case .missing(let value): "Missing \(value)."; case .invalidJSON: "--json must contain one JSON object."; case .unknown(let value): "Unknown command: \(value)." } }
+    var errorDescription: String? { switch self { case .usage: "Usage: nex-computer <discover|apps|tools|search|plan|audit-discovery|audit-plan|describe|execute|dry-run|permissions|doctor|connectors>"; case .missing(let value): "Missing \(value)."; case .invalidJSON: "--json must contain one JSON object."; case .unknown(let value): "Unknown command: \(value)." } }
 }
 private extension JSONEncoder { static var cli: JSONEncoder { let encoder = JSONEncoder(); encoder.dateEncodingStrategy = .iso8601; encoder.outputFormatting = [.sortedKeys]; return encoder } }

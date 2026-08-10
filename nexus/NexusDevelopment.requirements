@@ -1,0 +1,3 @@
+// Local Xcode builds use an explicit designated requirement so macOS can
+// recognize rebuilt copies of Nexus as the same app.
+designated => identifier "na.nexus"

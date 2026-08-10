@@ -28,15 +28,15 @@ With Xcode, open `nexus/nexus.xcodeproj`, select the `nexus` scheme and the curr
 
 ### Stable local signing and Keychain access
 
-Nexus's macOS Debug and Release builds use the persistent `system local code signing` identity. This keeps the designated requirement stable across rebuilds so the Keychain does not treat every new executable hash as a new application. The build script refuses to produce an ad-hoc build.
+Nexus's macOS Debug and Release builds embed the explicit designated
+requirement `identifier "na.nexus"`. This keeps the permission identity stable
+when the executable CDHash changes and requires no local certificate or
+Keychain trust operation. `./scripts/build-nexus.sh` verifies the complete
+signature and exact requirement before it can run the app.
 
-Verify the identity on a Mac before its first build:
-
-```bash
-security find-identity -v -p codesigning
-```
-
-The output must include `system local code signing`. A Mac with a different persistent certificate can set `NEXUS_CODE_SIGN_IDENTITY` when using the build script and should configure that same identity in Xcode. After switching an existing installation from ad-hoc to stable signing, macOS may ask for the login Keychain password once; choose **Always Allow**. Later rebuilds retain the same designated requirement and should not ask again. Do not delete `na.nexus.connect` Keychain items because they contain the saved device identity and pairing records.
+Each Mac still requires its own one-time macOS privacy grants. Do not delete
+`na.nexus.connect` Keychain items because they contain the saved device
+identity and pairing records.
 
 ## Pair the Mac Studio once
 

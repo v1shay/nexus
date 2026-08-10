@@ -187,7 +187,7 @@ actor NexSpotifyActionCatalog {
     private static let types = ["track", "album", "artist", "playlist", "auto"]
     private static let openManifest = manifest("spotify.open", "Open or activate the Spotify desktop app.", ["Open Spotify"], .init(fields: [:]))
     private static let searchManifest = manifest("spotify.search", "Open a precise search in Spotify and report that the result is unresolved until Spotify supplies an exact URI.", ["Search Spotify for Summer by Calvin Harris"], .init(fields: ["query": .init(.string, required: true)]))
-    private static let playManifest = manifest("spotify.play", "Play an exact Spotify URL or URI, or open a name-and-artist search without falsely claiming which result played.", ["Play this Spotify link", "Find Summer by Calvin Harris"], .init(fields: [
+    private static let playManifest = manifest("spotify.play", "Play an exact Spotify URL or URI, or open a name-and-artist search without falsely claiming which result played.", ["Play my focus playlist", "Find Summer by Calvin Harris"], .init(fields: [
         "query": .init(.string, required: true), "artist": .init(.string), "type": .init(.string, allowedValues: types), "shuffle": .init(.boolean)
     ]))
     private static let controlManifest = manifest("spotify.control", "Pause, resume, toggle, skip, go to the previous track, or adjust Spotify volume by ten percent.", ["Pause Spotify", "Skip this song"], .init(fields: ["command": .init(.string, required: true, allowedValues: controls)]))
