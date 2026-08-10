@@ -809,6 +809,14 @@ actor NexusHostServiceExecutor {
     }
 
     private func fileList(_ payload: NexusFileListPayload, emitter: NexusWorkloadEmitter) async throws {
+        let entries = try Self.listFiles(payload, policy: policy)
+        await emitter.emit(kind: .result, payload: NexusFileListResultPayload(entries: entries))
+    }
+
+    private nonisolated static func listFiles(
+        _ payload: NexusFileListPayload,
+        policy: NexusExecutionPolicy
+    ) throws -> [NexusFileListEntry] {
         guard (1...10_000).contains(payload.maximumEntries) else {
             throw NexusConnectError.policyDenied("invalid file listing limit")
         }
@@ -831,7 +839,7 @@ actor NexusHostServiceExecutor {
             _ = try policy.resolve(reference)
             entries.append(.init(file: reference, isDirectory: values.isDirectory ?? false, size: Int64(values.fileSize ?? 0)))
         }
-        await emitter.emit(kind: .result, payload: NexusFileListResultPayload(entries: entries))
+        return entries
     }
 
     private func download(_ payload: NexusDownloadPayload, emitter: NexusWorkloadEmitter) async throws {
