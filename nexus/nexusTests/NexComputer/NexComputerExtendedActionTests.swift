@@ -284,6 +284,15 @@ final class NexComputerExtendedActionTests: XCTestCase {
         XCTAssertEqual(result.candidates.first?.tool, "browser.run_task")
     }
 
+    func testBrowserWaitRequestDiscoversAgenticBrowserAction() async throws {
+        let tools = NexToolRegistry()
+        let computer = NexComputerRegistry(toolRegistry: tools, permissionManager: NexComputerPermissionManager(backend: AuthorizedPermissions()))
+        try await NexBrowserActionCatalog().register(on: computer)
+        let search = NexToolSearchService(registry: tools)
+        let result = await search.search(query: "On https://www.wikipedia.org, wait up to 30 seconds for an element to appear before continuing.")
+        XCTAssertEqual(result.candidates.first?.tool, "browser.run_task")
+    }
+
     func testManagedBrowserReadsPublicPageAndPersistsItsResult() async throws {
         let chrome = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
         let node = "/opt/homebrew/bin/node"
@@ -305,6 +314,29 @@ final class NexComputerExtendedActionTests: XCTestCase {
         XCTAssertEqual(persisted?.taskID, result.taskID)
         XCTAssertEqual(persisted?.status, "completed")
         XCTAssertEqual(persisted?.text, result.text)
+    }
+
+    func testManagedBrowserStartsAndCancelsByStableTaskID() async throws {
+        let chrome = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
+        let node = "/opt/homebrew/bin/node"
+        guard FileManager.default.isExecutableFile(atPath: chrome),
+              FileManager.default.isExecutableFile(atPath: node) else {
+            throw XCTSkip("Managed-browser runtime is not installed on this host.")
+        }
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("NexBrowserCancel-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let provider = NexManagedBrowserProvider(root: root)
+        let started = try await provider.start(
+            goal: "Wait for a nonexistent generated marker so this task can be cancelled.",
+            stepsJSON: "[{\"action\":\"wait_for_element\",\"selector\":\"#nexus-cancel-proof\",\"timeout\":30000}]"
+        ) { _ in }
+        XCTAssertEqual(started.status, "running")
+        let running = await provider.status(started.taskID)
+        XCTAssertEqual(running?.status, "running")
+        try await provider.cancel(started.taskID)
+        try await Task.sleep(for: .milliseconds(500))
+        let cancelled = await provider.status(started.taskID)
+        XCTAssertEqual(cancelled?.status, "cancelled")
     }
     func testBrowserProfileImportCopiesOnlySafeState() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
