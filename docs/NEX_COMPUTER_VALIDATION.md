@@ -244,6 +244,47 @@ The Codex UI launch actions are process-verified only. Computer Use cannot
 inspect this locked macOS desktop session, so this ledger makes no visual
 claim about the opened window or session content.
 
+## 2026-08-10 managed browser running-task lifecycle (GPT-OSS-20B)
+
+This validation used the separate Nexus-managed browser profile and the public
+Wikipedia portal only. It did not import Chrome data, sign in, access the
+user's Chrome profile, download anything, upload anything, or reset a
+profile. The local planner was `gpt-oss:latest` (GPT-OSS 20B).
+
+| Prompt / operation | Expected / selected action | Result | Latency | Status |
+|---|---|---|---:|---|
+| `On https://www.wikipedia.org, wait up to 30 seconds for an element named nexus-cancel-proof to appear, then tell me if it appeared.` | `browser.run_task` | Initial semantic retrieval incorrectly omitted the agentic action. After adding action-owned wait/element workflow metadata, GPT-OSS selected `browser.run_task` with `navigate` and a 30-second `wait_for_element` step. Immutable confirmation returned the stable browser task ID `c2f4ec64-f9c2-4130-823b-2c731f44bdac` while it was running. | 6.3 s repaired search + planning; 4 ms preview; 6 ms confirmed start | PASS after retrieval and lifecycle fixes |
+| Direct task read for `c2f4ec64-f9c2-4130-823b-2c731f44bdac` | `browser.get_task` | Returned `running` with no page text, downloads, or screenshots while the managed process was active. | 0 ms | PASS |
+| `Stop the running browser task c2f4ec64-f9c2-4130-823b-2c731f44bdac now.` | `browser.cancel_task` | GPT-OSS selected the cancellation action with the stable task ID. The confirmation stopped the active managed process; a subsequent task read returned `cancelled` with empty text, downloads, and screenshots. | about 2.7 s planning; 3 ms preview; 9 ms confirmed cancellation; 0 ms status read | PASS after lifecycle fix |
+
+### Defects fixed in this increment
+
+1. `browser.run_task` waited for the entire Playwright process before
+   returning its task ID. That made the separately advertised
+   `browser.cancel_task` unreachable for real in-flight work. It now returns
+   its generated stable ID immediately, while Nexus retains a collector for
+   progress, final result persistence, and cancellation state.
+2. A natural request to wait for a page element could retrieve unrelated
+   actions ahead of the managed-browser workflow. `browser.run_task` now
+   declares wait/element/selector semantics as its own workflow metadata,
+   and a regression test verifies that the generic retrieval engine ranks it
+   first. This does not add any tool-name or application-name routing rule.
+
+Focused verification:
+
+```text
+xcodebuild test -quiet -project nexus/nexus.xcodeproj -scheme nexus \
+  -destination 'platform=macOS,arch=arm64,id=00006002-001869AC3489801E' \
+  -only-testing:nexusTests/NexComputerExtendedActionTests/testBrowserWaitRequestDiscoversAgenticBrowserAction \
+  -only-testing:nexusTests/NexComputerExtendedActionTests/testBrowserScreenshotRequestDiscoversAgenticBrowserAction \
+  -only-testing:nexusTests/NexComputerExtendedActionTests/testManagedBrowserStartsAndCancelsByStableTaskID \
+  -only-testing:nexusTests/NexComputerExtendedActionTests/testManagedBrowserReadsPublicPageAndPersistsItsResult
+  ** TEST SUCCEEDED **
+
+./scripts/build-nexus.sh --run
+  ** BUILD SUCCEEDED **
+```
+
 ## 2026-08-10 isolated Obsidian lifecycle and relative-path retrieval repair (GPT-OSS-20B)
 
 The planner model was local `gpt-oss:latest` (GPT-OSS 20B). Every operation
