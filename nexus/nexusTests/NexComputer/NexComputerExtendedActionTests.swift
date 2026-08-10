@@ -399,16 +399,56 @@ final class NexComputerExtendedActionTests: XCTestCase {
         let tools = NexToolRegistry(), computer = NexComputerRegistry(toolRegistry: tools, permissionManager: NexComputerPermissionManager(backend: AuthorizedPermissions())), manager = NexConnectorManager(executor: MockConnectorExecutor())
         let doc = NexConnectorCapabilityDocument(provider: "google", account: "test@example.com", connected: true, grantedScopes: ["openid", "gmail.readonly"], capabilities: [.init(action: "google.account_info", available: true, missingScope: nil, providerLimitation: nil), .init(action: "gmail.search", available: true, missingScope: nil, providerLimitation: nil), .init(action: "gmail.send_draft", available: false, missingScope: "gmail.send", providerLimitation: nil)])
         try await manager.apply(doc, to: computer); let names = Set(await tools.definitions().map(\.name)); XCTAssertTrue(names.contains("google.account_info")); XCTAssertTrue(names.contains("gmail.search")); XCTAssertTrue(names.contains("gmail.send_draft")); let unavailable = await manager.unavailableCapabilities(provider: "google"); XCTAssertEqual(unavailable.first?.missingScope, "gmail.send")
-        let unavailableResult = try await tools.execute(name: "gmail.read_thread", arguments: ["id": .string("thread-1")])
+        let unavailableResult = try await tools.execute(name: "gmail.read_thread", arguments: ["thread_id": .string("thread-1")])
         guard case .object(let object) = unavailableResult else { return XCTFail("Expected connection request") }
         XCTAssertEqual(object["status"], .string("connection_required"))
         let envelope = await NexComputerRuntime(registry: computer).execute(
             actionID: "gmail.read_thread",
-            arguments: ["id": .string("thread-1")]
+            arguments: ["thread_id": .string("thread-1")]
         )
         XCTAssertTrue(envelope.ok)
         XCTAssertEqual(envelope.data.object?["status"], .string("connection_required"))
         XCTAssertNotNil(envelope.data.object?["connectionId"]?.string)
+    }
+
+    func testConnectorManifestsDeclareNaturalCapabilityMetadataForDisconnectedDiscovery() async throws {
+        let tools = NexToolRegistry()
+        let computer = NexComputerRegistry(
+            toolRegistry: tools,
+            permissionManager: NexComputerPermissionManager(backend: AuthorizedPermissions())
+        )
+        let manager = NexConnectorManager(executor: MockConnectorExecutor())
+        try await manager.apply(.disconnected(.google), to: computer)
+
+        let definitions = await tools.definitions()
+        let gmail = try XCTUnwrap(definitions.first { $0.name == "gmail.read_thread" })
+        XCTAssertEqual(gmail.application, "Gmail")
+        XCTAssertTrue(gmail.description.contains("email"))
+        XCTAssertTrue(gmail.description.contains("thread"))
+        let gmailSearch = try XCTUnwrap(definitions.first { $0.name == "gmail.search" })
+        XCTAssertTrue(gmailSearch.aliases.contains { $0.contains("find") && $0.contains("email") })
+        XCTAssertTrue(gmailSearch.schema.fields["query"]?.description?.contains("search criteria") == true)
+
+        let search = NexToolSearchService(registry: tools, computerRegistry: computer)
+        let email = await search.search(
+            query: "Find the email thread about the project launch.",
+            availabilityPolicy: .includeUnavailable
+        ).candidates
+        XCTAssertEqual(email.first?.tool, "gmail.search")
+        XCTAssertEqual(email.first?.isAvailable, false)
+
+        let compressedEmail = await search.search(
+            query: "email thread project launch",
+            availabilityPolicy: .includeUnavailable
+        ).candidates
+        XCTAssertEqual(compressedEmail.first?.tool, "gmail.search")
+
+        let calendar = await search.search(
+            query: "design reviews calendar",
+            availabilityPolicy: .includeUnavailable
+        ).candidates
+        XCTAssertEqual(calendar.first?.tool, "calendar.search_events")
+        XCTAssertEqual(calendar.first?.application, "Google Calendar")
     }
 
     func testDisconnectedConnectorIsOmittedFromPlanningButStillReturnsConnectionRecovery() async throws {
@@ -452,6 +492,39 @@ final class NexComputerExtendedActionTests: XCTestCase {
         XCTAssertEqual(request.value(forHTTPHeaderField: "Authorization"), "Bearer notion-secret")
         XCTAssertEqual(value.object?["status"], .string("completed"))
         XCTAssertFalse(String(describing: value).contains("notion-secret"))
+    }
+
+    func testCalendarInvitationResponsePatchesOnlyTheConnectedAttendee() async throws {
+        let memory = NexusMemorySecretStore(), store = NexKeychainConnectorCredentialStore(secrets: memory)
+        try store.save(.init(provider: .google, account: "test@example.com", accessToken: "calendar-secret", refreshToken: nil, tokenType: "Bearer", scopes: ["calendar.events"], expiresAt: .distantFuture, connectedAt: .now, lastSuccessfulUse: nil))
+        let session = NexAuthenticatedConnectorSession(store: store, transport: MockOAuthTransport()) { provider in
+            NexOAuthConfiguration(provider: provider, clientID: "fixture", authorizationURL: URL(string: "https://example.com/auth")!, tokenURL: URL(string: "https://example.com/token")!, verificationURL: URL(string: "https://example.com/me")!, callbackScheme: "na.nexus.oauth", scopeSeparator: " ", extraAuthorizationItems: [], extraTokenFields: [:])
+        }
+        let event = #"{"id":"event-1","attendees":[{"email":"test@example.com","responseStatus":"needsAction"},{"email":"other@example.com","responseStatus":"accepted"}]}"#.data(using: .utf8)!
+        let updated = #"{"id":"event-1"}"#.data(using: .utf8)!
+        let transport = MockConnectorAPITransport(responseBodies: [event, updated])
+        let executor = NexOfficialConnectorExecutor(session: session, transport: transport)
+
+        let value = try await executor.execute(
+            provider: "google",
+            account: "test@example.com",
+            action: "calendar.respond_to_invitation",
+            arguments: ["id": .string("event-1"), "response": .string("declined")]
+        )
+
+        let requests = await transport.requests()
+        XCTAssertEqual(requests.count, 2)
+        XCTAssertEqual(requests[0].httpMethod, "GET")
+        XCTAssertEqual(requests[0].url?.absoluteString, "https://www.googleapis.com/calendar/v3/calendars/primary/events/event-1")
+        XCTAssertEqual(requests[1].httpMethod, "PATCH")
+        let body = try XCTUnwrap(requests[1].httpBody)
+        let patch = try JSONDecoder().decode(NexJSONValue.self, from: body)
+        let attendees = try XCTUnwrap(patch.object?["attendees"]?.array)
+        XCTAssertEqual(attendees[0].object?["email"], .string("test@example.com"))
+        XCTAssertEqual(attendees[0].object?["responseStatus"], .string("declined"))
+        XCTAssertEqual(attendees[1].object?["email"], .string("other@example.com"))
+        XCTAssertEqual(attendees[1].object?["responseStatus"], .string("accepted"))
+        XCTAssertEqual(value.object?["status"], .string("completed"))
     }
 
     func testStoredProviderScopesResolveToExactConnectorCapabilities() {
@@ -755,13 +828,17 @@ private actor MockCodexProvider: NexCodexProviding {
 }
 private struct MockConnectorExecutor: NexConnectorExecuting { func execute(provider: String, account: String, action: String, arguments: [String: NexJSONValue]) async throws -> NexJSONValue { .object(["display": .string("Executed \(action)"), "status": .string("completed"), "provider": .string(provider), "action": .string(action), "id": .string("fixture"), "items": .array([]), "error": .string("")]) } }
 private actor MockConnectorAPITransport: NexConnectorAPITransporting {
-    private var request: URLRequest?
+    private let defaultResponse = #"{"results":[{"id":"page-1","object":"page"}]}"#.data(using: .utf8)!
+    private var responseBodies: [Data]
+    private var capturedRequests: [URLRequest] = []
+    init(responseBodies: [Data] = []) { self.responseBodies = responseBodies }
     func send(_ request: URLRequest) async throws -> (Data, HTTPURLResponse) {
-        self.request = request
-        let data = #"{"results":[{"id":"page-1","object":"page"}]}"#.data(using: .utf8)!
+        capturedRequests.append(request)
+        let data = responseBodies.isEmpty ? defaultResponse : responseBodies.removeFirst()
         return (data, HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!)
     }
-    func lastRequest() -> URLRequest? { request }
+    func lastRequest() -> URLRequest? { capturedRequests.last }
+    func requests() -> [URLRequest] { capturedRequests }
 }
 private struct MockOAuthTransport: NexOAuthTransporting {
     func exchange(configuration: NexOAuthConfiguration, code: String, verifier: String, callbackURL: URL, scopes: [String]) async throws -> NexConnectorCredential { .init(provider: configuration.provider, account: "test@example.com", accessToken: "access", refreshToken: "refresh", tokenType: "Bearer", scopes: scopes, expiresAt: .distantFuture, connectedAt: .now, lastSuccessfulUse: nil) }
