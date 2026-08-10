@@ -182,6 +182,25 @@ xcodebuild -quiet -project nexus/nexus.xcodeproj -scheme nexus \
   ** BUILD SUCCEEDED **
 ```
 
+## 2026-08-09 macOS permission-pane routing (GPT-OSS-20B + Computer Use)
+
+This safe UI flow did not toggle, add, or remove any privacy control. It used local `gpt-oss:latest` / GPT-OSS 20B to select the tool, then Computer Use to verify the actual macOS System Settings destination.
+
+| Prompt / operation | Expected / selected action | Result | Latency | Status |
+|---|---|---|---:|---|
+| `Open Privacy settings.` before schema repair | `system.open_setting` | Semantic discovery returned the correct action, but GPT-OSS emitted no native call because the function contract did not explain its supported setting domains. | about 1.8–2.2 s planning | FAIL / fixed |
+| Same prompt after schema repair | `system.open_setting` with `pane: privacy` | GPT-OSS selected the action and exact allowed pane on repeat. The manifest describes its supported domains and semantic input; this is function-schema grounding, not a keyword route. | 1,519 ms planning | PASS after fix |
+| `Open Network settings.` and `Open Focus settings.` after schema repair | `system.open_setting` with `pane: network` and `pane: focus` | GPT-OSS selected the same general action with the two different model-inferred enum values, confirming the repair generalizes across setting domains. | 3,334 ms combined planning | PASS |
+| Headless execute with the model-selected arguments | `system.open_setting` | Returned `Opened privacy settings.` with no confirmation or setting mutation. | 29 ms execution | PASS |
+| Computer Use visual check | macOS Privacy & Security / Full Disk Access | System Settings visibly showed the Privacy & Security selection and the Full Disk Access subpanel, proving the action opened the real operating-system destination rather than merely reporting success. No toggle was clicked. | visual inspection | PASS |
+| Live `nexusctl permissions` | permission health probe | Microphone and Speech Recognition are authorized; Input Monitoring, Accessibility, Screen Recording, and Messages Full Disk Access remain ungranted for this ad-hoc build. | under 1 s | EXPECTED LIMITATION |
+
+### Defect fixed in this increment
+
+`system.open_setting` already had a strict enum, but its model-facing function description omitted what the enum represented and which setting domains Nexus can safely open. GPT-OSS therefore discovered the action but declined to emit a native call. The manifest now states the supported system-pane domains and the `pane` field explains its semantic purpose. The action remains restricted to the same validated enum and opens no control directly.
+
+The durable permission-host requirement remains intentionally enforced: `security find-identity -p codesigning -v` reports no valid Apple Development identity, so the build script refuses to install an ad-hoc app as the TCC host. That prevents a misleading “granted” claim which would disappear on the next rebuilt copy. A stable Apple Development certificate is required before the remaining manual TCC grants can persist across rebuilds.
+
 ## 2026-08-09 compound system-read discovery (GPT-OSS-20B)
 
 This safe read-only check used local `gpt-oss:latest` (GPT-OSS 20B). The request was intentionally natural and asked for three independent facts; it did not direct the model to specific tools. No system setting, account, file, message, or network configuration changed. Network-address details returned by the tool are deliberately omitted here.
