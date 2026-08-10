@@ -905,3 +905,34 @@ xcodebuild -quiet -project nexus/nexus.xcodeproj -scheme nexus \
 ./scripts/build-nexus.sh
   ** BUILD SUCCEEDED **
 ```
+
+## 2026-08-10 regression follow-up
+
+The 2026-08-10 full macOS suite ran 338 tests: 325 passed, 9 skipped, and
+four failed. The UI-test runner failed to enable automation on the locked
+desktop. Three ordinary test failures exposed two local reliability gaps:
+
+1. Provider artwork was read only from a developer-specific Downloads path,
+   leaving Groq and OpenRouter rows empty when those optional files were not
+   present. `ModelBrandArtwork` now preserves supplied artwork when available
+   and otherwise displays the existing system fallback symbol.
+2. The NX2 restart test asserted immediately after controller construction,
+   although the controller intentionally restores Keychain-backed trust in a
+   background task to avoid blocking launch. The test now waits for that
+   documented restore to complete.
+
+The two AppKit tests are explicitly main-actor tests, matching the UI code
+they exercise. The changed Debug configuration compiled successfully:
+
+```text
+xcodebuild build -quiet -project nexus/nexus.xcodeproj -scheme nexus \
+  -destination 'platform=macOS,arch=arm64,id=00006002-001869AC3489801E'
+  ** BUILD SUCCEEDED **
+```
+
+The Xcode runner then hung before beginning a targeted non-UI test run; the
+process was stopped without altering files or user data. A direct `xctest`
+attempt could not load the app-hosted test bundle because the standalone test
+loader lacks Nexus application symbols. Therefore the post-fix targeted test
+execution remains unverified in this locked-host session; this is not recorded
+as a pass.
