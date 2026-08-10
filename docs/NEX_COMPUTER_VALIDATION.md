@@ -182,6 +182,61 @@ xcodebuild -quiet -project nexus/nexus.xcodeproj -scheme nexus \
   ** BUILD SUCCEEDED **
 ```
 
+## 2026-08-10 full disposable local-Git lifecycle (GPT-OSS-20B)
+
+This completed the local Git surface in a generated-only environment under
+`.build/validation-fixtures`. The fixture repository, bare backup remote, and
+second clone contain only the generated `README.md` and `PULL_PROOF.md` files.
+No workspace repository, GitHub repository, account credential, or user file
+was targeted. The planner model was local `gpt-oss:latest` (GPT-OSS 20B).
+
+| Prompt / operation | Expected / selected action | Result | Latency | Status |
+|---|---|---|---:|---|
+| `Initialize a new local Git repository in the disposable folder at …/Git Lifecycle Proof.` | `git.init` | The previously recorded initialization test selected `git.init`, confirmation initialized `main`, and status returned the initial branch state. | 4,800 ms plan; 3 ms preview; 60 ms run; 19 ms status | PASS |
+| `Put the generated README in the disposable Git repository at … into the next local commit.` | `git.stage` | GPT-OSS selected the new explicit-path staging action with only `README.md`. Confirmation staged it; `git.diff` with `staged: true` returned the three-line real new-file diff. | about 3.1 s plan; 3 ms preview; 24 ms run; 21 ms diff | PASS |
+| `Save the prepared validation note as a local checkpoint in the disposable repository at …` before metadata repair | incorrectly retrieved `git.create_branch` | `git.commit` was absent from the three-action allowlist, so no commit was made. | about 5.3 s plan | FAIL / fixed |
+| Same local-checkpoint prompt after repair | `git.commit` with model-generated `Add validation note` | GPT-OSS selected the correct action and exact repository. Immutable confirmation created root commit `1a58829`; status reported `main`. | about 4.9 s plan; 2 ms preview; 39 ms run; 21 ms status | PASS after fix |
+| `In the disposable Git repository at …, start a harmless local line of work called lifecycle-proof.` before metadata repair | incorrectly retrieved `git.init` | The request was not executed because initialization would have been the wrong action. | 3,100 ms plan | FAIL / fixed |
+| Same separate-work prompt after repair | `git.create_branch` with `lifecycle-proof` | Confirmation created and checked out the branch; status returned `branch.head lifecycle-proof`. | about 4.7 s plan; 2 ms preview; 36 ms run; 20 ms status | PASS after fix |
+| `Return the disposable repository at … to its main line.` before metadata repair | incorrectly retrieved `git.push` | No push was executed; the request did not have a valid upstream target at that point. | 2,000 ms plan | FAIL / fixed |
+| Same return prompt after repair | `git.checkout` with `main` | Confirmation switched back to `main`; direct branch and structured status checks agreed. | about 4.5 s plan; 2 ms preview; 28 ms run; 20 ms status | PASS after fix |
+| `Connect the disposable repository at … to its generated backup remote at …, named nexus-origin.` | `git.configure_remote` | GPT-OSS selected the new confirmation-bound remote action. It added only `nexus-origin` pointing at the generated bare repository and transferred no data. | 5,100 ms plan; 2 ms preview; 24 ms run | PASS |
+| `Back up the main line of the disposable repository at … to its nexus-origin remote.` | `git.push` with `remote: nexus-origin`, `branch: main` | Confirmation performed the first real transfer and established `nexus-origin/main`. The bare remote ref matched the local commit. | 2,300 ms plan; 4 ms preview; 88 ms run | PASS |
+| `Bring the latest generated change from the backup remote into the disposable repository at …` before metadata repair | no action | `git.pull` was absent from the allowlist, so the staged remote change was not applied. | 3,200 ms plan | FAIL / fixed |
+| Same receive-from-remote prompt after repair | `git.pull` | Confirmation fast-forwarded `1a58829..fcfd60c`, created generated `PULL_PROOF.md`, and status confirmed the synchronized `nexus-origin/main` upstream. | about 4.8 s plan; 2 ms preview; 105 ms run | PASS after fix |
+
+`terminal.run_command` prepared the isolated bare remote and clone through
+separate argv execution with confirmation for each generated target. Its
+actual runs completed in 47 ms (`git init --bare`), 20 ms (add the temporary
+remote), 78 ms (clone), 31 ms (generated commit), and 88 ms (seed push). Those
+are test-fixture setup operations, not a workaround for any Git action: the
+Nexus `git.configure_remote`, `git.push`, and `git.pull` actions each then
+performed their own verified lifecycle step.
+
+### Defects fixed in this increment
+
+1. The catalog had no safe way to stage explicit files after `git.init`, nor
+   to inspect a staged diff. `git.stage` now accepts only non-empty, explicit,
+   existing file paths strictly inside the selected repository, rejects
+   directories, wildcards, and escapes, and is always confirmation-gated.
+   `git.diff` gained a read-only `staged` flag.
+2. A new repository could not be made usable for `git.push` through Nexus
+   alone. `git.configure_remote` adds one validated named remote without a
+   transfer; `git.push` can now establish an upstream only when explicit
+   `remote` and `branch` are both supplied. The legacy configured-upstream
+   behavior remains the default when neither is supplied.
+3. Three natural requests—saving staged work, starting a separate line of
+   work, and receiving remote changes—were missing their intended action from
+   the small model allowlist. The corresponding action manifests now contain
+   ordinary capability aliases and examples. The generic semantic retrieval
+   engine remains unchanged: no prompt string is specially routed, and
+   regression tests prove each capability wins against the plausible but
+   incorrect Git alternative.
+
+Focused `NexComputerExtendedActionTests` and
+`NexComputerToolSearchTests`, plus the restarted Debug build, passed after the
+final repair.
+
 ## 2026-08-09 artifact-name and spaced-path retrieval repair (GPT-OSS-20B)
 
 This regression came from a safe disposable Git-fixture setup prompt; no

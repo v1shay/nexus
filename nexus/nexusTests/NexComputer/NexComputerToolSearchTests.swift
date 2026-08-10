@@ -234,6 +234,109 @@ final class NexComputerToolSearchTests: XCTestCase {
         )
     }
 
+    func testSaveStagedWorkSemanticMetadataDiscoversCommitInsteadOfBranch() {
+        let commit = tool(
+            name: "git.commit",
+            description: "Record the current staged Git changes as a local commit with an exact message.",
+            application: "Git",
+            provider: "Git CLI",
+            examples: ["Save the staged work as a local checkpoint"],
+            aliases: ["save staged work", "record local checkpoint", "save the prepared change"],
+            tags: ["git", "repository", "commit", "staged"]
+        )
+        let branch = tool(
+            name: "git.create_branch",
+            description: "Create and check out a new local Git branch.",
+            application: "Git",
+            provider: "Git CLI",
+            tags: ["git", "repository", "branch"]
+        )
+        let initialize = tool(
+            name: "git.init",
+            description: "Initialize an existing directory as a local Git repository.",
+            application: "Git",
+            provider: "Git CLI",
+            tags: ["git", "repository", "initialize"]
+        )
+
+        XCTAssertEqual(
+            search(
+                "Save the prepared validation note as a local checkpoint in the disposable repository.",
+                [commit, branch, initialize]
+            ).first?.tool,
+            "git.commit"
+        )
+    }
+
+    func testSeparateLineOfWorkSemanticMetadataDiscoversBranchInsteadOfInitialization() {
+        let branch = tool(
+            name: "git.create_branch",
+            description: "Create and check out a new local Git branch.",
+            application: "Git",
+            provider: "Git CLI",
+            aliases: ["start a separate local line of work", "begin isolated work", "work on a local branch"],
+            tags: ["git", "repository", "branch"]
+        )
+        let initialize = tool(
+            name: "git.init",
+            description: "Initialize an existing directory as a local Git repository.",
+            application: "Git",
+            provider: "Git CLI",
+            tags: ["git", "repository", "initialize"]
+        )
+
+        XCTAssertEqual(
+            search("Start a harmless local line of work in the disposable repository.", [branch, initialize]).first?.tool,
+            "git.create_branch"
+        )
+    }
+
+    func testReturnToMainSemanticMetadataDiscoversCheckoutInsteadOfPush() {
+        let checkout = tool(
+            name: "git.checkout",
+            description: "Switch to an existing local Git branch.",
+            application: "Git",
+            provider: "Git CLI",
+            aliases: ["return to the main line", "switch back to an existing branch", "go back to a branch"],
+            tags: ["git", "repository", "branch"]
+        )
+        let push = tool(
+            name: "git.push",
+            description: "Push the current branch to its configured upstream.",
+            application: "Git",
+            provider: "Git CLI",
+            tags: ["git", "repository", "push", "remote"]
+        )
+
+        XCTAssertEqual(
+            search("Return the disposable repository to its main line.", [checkout, push]).first?.tool,
+            "git.checkout"
+        )
+    }
+
+    func testBringLatestRemoteChangeSemanticMetadataDiscoversPullInsteadOfPush() {
+        let pull = tool(
+            name: "git.pull",
+            description: "Pull the configured upstream using fast-forward-only semantics.",
+            application: "Git",
+            provider: "Git CLI",
+            aliases: ["bring the latest changes from a remote", "update a local branch from its remote", "receive backup remote changes"],
+            tags: ["git", "repository", "pull", "remote"]
+        )
+        let push = tool(
+            name: "git.push",
+            description: "Push a local Git branch to its configured upstream.",
+            application: "Git",
+            provider: "Git CLI",
+            tags: ["git", "repository", "push", "remote"]
+        )
+
+        XCTAssertEqual(
+            search("Bring the latest generated change from the backup remote into the disposable repository.", [pull, push]).first?.tool,
+            "git.pull"
+        )
+    }
+
     func testUnavailableActionsAreOmittedOrClearlyMarked() {
         let unavailable = NexToolSearchEngine.Document(
             tool: tool(

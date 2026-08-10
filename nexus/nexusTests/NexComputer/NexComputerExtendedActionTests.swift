@@ -111,6 +111,35 @@ final class NexComputerExtendedActionTests: XCTestCase {
         XCTAssertTrue(definition?.schema.fields["repository"]?.required == true)
     }
 
+    func testGitCatalogStagesOnlyExplicitFilesAndCanReadTheIndexDiff() async throws {
+        let tools = NexToolRegistry()
+        let computer = NexComputerRegistry(toolRegistry: tools, permissionManager: NexComputerPermissionManager(backend: AuthorizedPermissions()))
+        try await NexGitHubActionCatalog().register(on: computer)
+        let definitions = await tools.definitions()
+        let stage = definitions.first(where: { $0.name == "git.stage" })
+        XCTAssertEqual(stage?.permission, .codeExecution)
+        XCTAssertEqual(stage?.schema.fields["paths"]?.type, .stringArray)
+        XCTAssertTrue(stage?.schema.fields["paths"]?.required == true)
+        let diff = definitions.first(where: { $0.name == "git.diff" })
+        XCTAssertEqual(diff?.schema.fields["staged"]?.type, .boolean)
+        XCTAssertFalse(diff?.schema.fields["staged"]?.required ?? true)
+    }
+
+    func testGitCatalogCanConfigureAnExplicitRemoteAndEstablishFirstPushUpstream() async throws {
+        let tools = NexToolRegistry()
+        let computer = NexComputerRegistry(toolRegistry: tools, permissionManager: NexComputerPermissionManager(backend: AuthorizedPermissions()))
+        try await NexGitHubActionCatalog().register(on: computer)
+        let definitions = await tools.definitions()
+        let remote = definitions.first(where: { $0.name == "git.configure_remote" })
+        XCTAssertEqual(remote?.permission, .codeExecution)
+        XCTAssertTrue(remote?.schema.fields["name"]?.required == true)
+        XCTAssertTrue(remote?.schema.fields["url"]?.required == true)
+        let push = definitions.first(where: { $0.name == "git.push" })
+        XCTAssertEqual(push?.permission, .codeExecution)
+        XCTAssertFalse(push?.schema.fields["remote"]?.required ?? true)
+        XCTAssertFalse(push?.schema.fields["branch"]?.required ?? true)
+    }
+
     func testFinderAcceptsNaturalOverwriteAliasForAFileCollision() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
