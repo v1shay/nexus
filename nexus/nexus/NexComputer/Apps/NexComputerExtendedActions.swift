@@ -787,17 +787,30 @@ actor NexGitHubActionCatalog {
     func register(on registry: NexComputerRegistry) async throws {
         guard !registered else { return }; let cli = cli
         try await registry.register(manifest: Self.manifest("github.open", "Open GitHub in the default browser.", ["Open GitHub"], [:], method: .urlScheme)) { _, _ in guard NSWorkspace.shared.open(URL(string: "https://github.com")!) else { throw NexToolError.executionFailed(code: "open_failed", message: "Could not open GitHub.") }; return Self.result("Opened GitHub.") }
-        for (id, args) in [("git.status", ["status", "--porcelain=v2", "--branch"]), ("git.diff", ["diff", "--no-ext-diff", "--"])] {
-            let isStatus = id == "git.status"
-            try await registry.register(manifest: Self.manifest(
-                id,
-                isStatus ? "Read structured Git repository branch and working-tree state." : "Read the current repository diff without external diff drivers.",
-                [isStatus ? "Show git status" : "Show the current diff"],
-                ["repository": .init(.string, required: true)],
-                aliases: isStatus
-                    ? ["what changed in this repository", "working tree changes", "uncommitted changes"]
-                    : ["what changed in this repository", "show code changes", "review my changes"]
-            )) { input, _ in guard let path = input["repository"]?.string else { throw NexToolError.missingField("repository") }; let result = try await cli.git(args, repository: URL(fileURLWithPath: path)); return Self.result(result.stdout.isEmpty ? "No changes." : result.stdout, output: result.stdout) }
+        try await registry.register(manifest: Self.manifest(
+            "git.status",
+            "Read structured Git repository branch and working-tree state.",
+            ["Show git status"],
+            ["repository": .init(.string, required: true)],
+            aliases: ["what changed in this repository", "working tree changes", "uncommitted changes"]
+        )) { input, _ in
+            let path = try required(input, "repository")
+            let result = try await cli.git(["status", "--porcelain=v2", "--branch"], repository: URL(fileURLWithPath: path))
+            return Self.result(result.stdout.isEmpty ? "No changes." : result.stdout, output: result.stdout)
+        }
+        try await registry.register(manifest: Self.manifest(
+            "git.diff",
+            "Read the current working-tree or explicitly requested staged Git diff without external diff drivers.",
+            ["Show the current diff", "Show the staged changes"],
+            ["repository": .init(.string, required: true), "staged": .init(.boolean, description: "Read the staged index diff instead of unstaged working-tree changes.")],
+            aliases: ["what changed in this repository", "show code changes", "review my changes"]
+        )) { input, _ in
+            let path = try required(input, "repository")
+            let arguments = input["staged"]?.bool == true
+                ? ["diff", "--cached", "--no-ext-diff", "--"]
+                : ["diff", "--no-ext-diff", "--"]
+            let result = try await cli.git(arguments, repository: URL(fileURLWithPath: path))
+            return Self.result(result.stdout.isEmpty ? "No changes." : result.stdout, output: result.stdout)
         }
         try await registry.register(manifest: Self.manifest(
             "git.init",
@@ -819,15 +832,91 @@ actor NexGitHubActionCatalog {
             guard result.exitCode == 0 else { throw NexToolError.executionFailed(code: "git_failed", message: result.stderr) }
             return Self.result(result.stdout.isEmpty ? "Initialized Git repository." : result.stdout, output: result.stdout)
         }
+        try await registry.register(manifest: Self.manifest(
+            "git.stage",
+            "Stage explicitly supplied existing files inside one local Git repository; never stages all changes implicitly.",
+            ["Stage this generated file for the local commit"],
+            ["repository": .init(.string, required: true), "paths": .init(.stringArray, required: true, description: "One or more explicit existing file paths within the repository. Directories, wildcards, and paths outside the repository are rejected.")],
+            risk: .medium,
+            confirmation: .always,
+            aliases: ["stage these files", "add file to git"]
+        )) { input, _ in
+            let root = URL(fileURLWithPath: try required(input, "repository"), isDirectory: true).standardizedFileURL
+            let paths = try Self.stageablePaths(input, repository: root)
+            let result = try await cli.git(["add", "--"] + paths, repository: root)
+            return Self.result(result.stdout.isEmpty ? "Staged the selected Git files." : result.stdout, output: result.stdout)
+        }
+        try await registry.register(manifest: Self.manifest(
+            "git.configure_remote",
+            "Add one explicitly named Git remote to the supplied local repository without transferring data.",
+            ["Connect this disposable repository to its generated backup remote"],
+            ["repository": .init(.string, required: true), "name": .init(.string, required: true, description: "A new Git remote name using letters, digits, dots, underscores, or hyphens."), "url": .init(.string, required: true, description: "An explicit local, HTTPS, SSH, or Git remote URL.")],
+            risk: .medium,
+            confirmation: .always,
+            aliases: ["connect a repository to a remote", "add a Git remote", "set up a backup remote"]
+        )) { input, _ in
+            let path = try required(input, "repository")
+            let name = try Self.remoteName(input)
+            let url = try required(input, "url")
+            guard !url.contains("\u{0000}") else { throw NexToolError.executionFailed(code: "invalid_remote_url", message: "Git remote URLs cannot contain null characters.") }
+            let result = try await cli.git(["remote", "add", name, url], repository: URL(fileURLWithPath: path))
+            return Self.result(result.stdout.isEmpty ? "Configured the selected Git remote." : result.stdout, output: result.stdout)
+        }
         let gitMutations: [(String, String, [String: NexToolFieldSchema], @Sendable ([String: NexJSONValue]) throws -> [String])] = [
             ("git.create_branch", "Create and check out a new local Git branch.", ["repository": .init(.string, required: true), "branch": .init(.string, required: true)], { ["switch", "-c", try required($0, "branch")] }),
             ("git.checkout", "Switch to an existing local Git branch.", ["repository": .init(.string, required: true), "branch": .init(.string, required: true)], { ["switch", try required($0, "branch")] }),
-            ("git.commit", "Commit the currently staged Git changes with an exact message; never stages implicitly.", ["repository": .init(.string, required: true), "message": .init(.string, required: true)], { ["commit", "-m", try required($0, "message")] }),
-            ("git.pull", "Pull the configured upstream using fast-forward-only semantics.", ["repository": .init(.string, required: true)], { _ in ["pull", "--ff-only"] }),
-            ("git.push", "Push the current branch to its configured upstream.", ["repository": .init(.string, required: true)], { _ in ["push"] })
+            ("git.pull", "Pull the configured upstream using fast-forward-only semantics.", ["repository": .init(.string, required: true)], { _ in ["pull", "--ff-only"] })
         ]
         for (id, description, fields, builder) in gitMutations {
-            try await registry.register(manifest: Self.manifest(id, description, [description], fields, risk: id == "git.push" ? .high : .medium, confirmation: .always)) { input, _ in guard let path = input["repository"]?.string else { throw NexToolError.missingField("repository") }; let result = try await cli.git(try builder(input), repository: URL(fileURLWithPath: path)); return Self.result(result.stdout.isEmpty ? "Git action completed." : result.stdout, output: result.stdout) }
+            let aliases: [String]
+            switch id {
+            case "git.create_branch":
+                aliases = ["start a separate local line of work", "begin isolated work", "work on a local branch"]
+            case "git.checkout":
+                aliases = ["return to the main line", "switch back to an existing branch", "go back to a branch"]
+            case "git.pull":
+                aliases = ["bring the latest changes from a remote", "update a local branch from its remote", "receive backup remote changes"]
+            default:
+                aliases = []
+            }
+            try await registry.register(manifest: Self.manifest(id, description, [description], fields, risk: id == "git.push" ? .high : .medium, confirmation: .always, aliases: aliases)) { input, _ in guard let path = input["repository"]?.string else { throw NexToolError.missingField("repository") }; let result = try await cli.git(try builder(input), repository: URL(fileURLWithPath: path)); return Self.result(result.stdout.isEmpty ? "Git action completed." : result.stdout, output: result.stdout) }
+        }
+        try await registry.register(manifest: Self.manifest(
+            "git.commit",
+            "Record the current staged Git changes as a local commit with an exact message; never stages implicitly.",
+            ["Save the staged work as a local checkpoint"],
+            ["repository": .init(.string, required: true), "message": .init(.string, required: true)],
+            risk: .medium,
+            confirmation: .always,
+            aliases: ["save staged work", "record local checkpoint", "save the prepared change"]
+        )) { input, _ in
+            let path = try required(input, "repository")
+            let result = try await cli.git(["commit", "-m", try required(input, "message")], repository: URL(fileURLWithPath: path))
+            return Self.result(result.stdout.isEmpty ? "Git action completed." : result.stdout, output: result.stdout)
+        }
+        try await registry.register(manifest: Self.manifest(
+            "git.push",
+            "Push a local Git branch to its configured upstream, or explicitly establish an upstream on a named remote for the first push.",
+            ["Back up this disposable branch to its remote"],
+            ["repository": .init(.string, required: true), "remote": .init(.string, description: "Optional explicit remote for a first push; provide branch too."), "branch": .init(.string, description: "Optional explicit branch for a first push; provide remote too.")],
+            risk: .high,
+            confirmation: .always,
+            aliases: ["back up a branch to its remote", "publish a local branch", "send a branch to a backup remote"]
+        )) { input, _ in
+            let path = try required(input, "repository")
+            let remote = input["remote"]?.string
+            let branch = input["branch"]?.string
+            let arguments: [String]
+            switch (remote, branch) {
+            case let (.some(remote), .some(branch)) where !remote.isEmpty && !branch.isEmpty:
+                arguments = ["push", "--set-upstream", remote, branch]
+            case (nil, nil):
+                arguments = ["push"]
+            default:
+                throw NexToolError.executionFailed(code: "push_target_incomplete", message: "Provide both remote and branch to establish an upstream, or neither to use the configured upstream.")
+            }
+            let result = try await cli.git(arguments, repository: URL(fileURLWithPath: path))
+            return Self.result(result.stdout.isEmpty ? "Git push completed." : result.stdout, output: result.stdout)
         }
         try await registry.register(manifest: Self.manifest("github.search", "Search GitHub repositories, issues, or pull requests through authenticated gh.", ["Search GitHub for Nexus issues"], ["query": .init(.string, required: true), "type": .init(.string, allowedValues: ["repositories", "issues", "pull_requests"]), "limit": .init(.integer, minimum: 1, maximum: 100)], method: .cli)) { input, _ in
             let query = try required(input, "query"), type = input["type"]?.string ?? "repositories", command = type == "repositories" ? "repos" : "issues"; var args = ["search", command, query, "--limit", String(input["limit"]?.integer ?? 20), "--json", command == "repos" ? "nameWithOwner,url,description" : "title,url,repository,state"]
@@ -844,6 +933,32 @@ actor NexGitHubActionCatalog {
         registered = true
     }
     private static func validatedString(_ input: [String: NexJSONValue], _ key: String) throws -> String { guard let value = input[key]?.string, !value.isEmpty else { throw NexToolError.missingField(key) }; return value }
+    private static func stageablePaths(_ input: [String: NexJSONValue], repository: URL) throws -> [String] {
+        guard let supplied = input["paths"]?.strings, !supplied.isEmpty else { throw NexToolError.missingField("paths") }
+        let root = repository.standardizedFileURL
+        let rootPrefix = root.path.hasSuffix("/") ? root.path : root.path + "/"
+        return try supplied.map { raw in
+            guard !raw.isEmpty, !raw.contains("*") && !raw.contains("?") else {
+                throw NexToolError.executionFailed(code: "invalid_stage_path", message: "Git staging requires explicit file paths without wildcards.")
+            }
+            let candidate = (raw.hasPrefix("/") ? URL(fileURLWithPath: raw) : root.appendingPathComponent(raw)).standardizedFileURL
+            guard candidate.path.hasPrefix(rootPrefix) else {
+                throw NexToolError.executionFailed(code: "stage_path_outside_repository", message: "Git staging paths must stay inside the supplied repository.")
+            }
+            var isDirectory: ObjCBool = false
+            guard FileManager.default.fileExists(atPath: candidate.path, isDirectory: &isDirectory), !isDirectory.boolValue else {
+                throw NexToolError.executionFailed(code: "stage_file_missing", message: "Git staging requires an existing file, not a directory.")
+            }
+            return String(candidate.path.dropFirst(rootPrefix.count))
+        }
+    }
+    private static func remoteName(_ input: [String: NexJSONValue]) throws -> String {
+        let name = try required(input, "name")
+        guard name.range(of: #"^[A-Za-z0-9][A-Za-z0-9._-]*$"#, options: .regularExpression) != nil else {
+            throw NexToolError.executionFailed(code: "invalid_remote_name", message: "Git remote names must begin with a letter or digit and contain only letters, digits, dots, underscores, or hyphens.")
+        }
+        return name
+    }
     private static let output = NexToolInputSchema(fields: ["display": .init(.string, required: true), "status": .init(.string, required: true), "output": .init(.string, required: true)])
     private static func result(_ display: String, output: String = "") -> NexJSONValue { .object(["display": .string(display), "status": .string("completed"), "output": .string(output)]) }
     private static func manifest(_ id: String, _ description: String, _ examples: [String], _ fields: [String: NexToolFieldSchema], method: NexComputerImplementationMethod = .cli, risk: NexComputerRiskClass = .low, confirmation: NexComputerConfirmationPolicy = .never, aliases additionalAliases: [String] = []) -> NexComputerActionManifest { .init(actionID: id, application: id.hasPrefix("git.") ? "Git" : "GitHub", provider: id.hasPrefix("git.") ? "Git CLI" : "GitHub CLI", description: description, examples: examples, aliases: [id.replacingOccurrences(of: ".", with: " ")] + additionalAliases, tags: ["git", "github", "repository", "code", "pull request", "issue"], inputSchema: .init(fields: fields), outputSchema: output, implementationMethod: method, registryPermission: risk == .low ? .files : .codeExecution, riskClass: risk, confirmationPolicy: confirmation, availabilityCheck: method == .urlScheme ? .always : .executable(paths: id.hasPrefix("git.") ? ["/usr/bin/git"] : ["/opt/homebrew/bin/gh", "/usr/local/bin/gh"]), timeoutSeconds: 120, supportsCancellation: true, dryRunBehavior: .supported("Would perform \(id) through validated argv."), previewRenderer: id.hasPrefix("git.") ? "git.action" : "github.action", tests: ["NexGitHubActionTests"]) }
