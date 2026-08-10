@@ -203,6 +203,37 @@ final class NexComputerToolSearchTests: XCTestCase {
         )
     }
 
+    func testExplicitArtifactLabelDoesNotRouteToAnApplicationWithTheSameName() {
+        let finder = tool(
+            name: "finder.create_folder",
+            description: "Create one folder under an existing parent.",
+            application: "Finder",
+            provider: "Nexus Native Files",
+            tags: ["file", "folder", "filesystem"]
+        )
+        let git = tool(
+            name: "git.create_branch",
+            description: "Create and check out a local Git branch in a repository.",
+            application: "Git",
+            provider: "Git CLI",
+            tags: ["git", "repository", "branch"]
+        )
+
+        XCTAssertEqual(
+            search(
+                "Make a folder called Git Lifecycle Proof in the disposable validation workspace at /Users/example/Documents/nexus 2/.build/validation-fixtures.",
+                [finder, git, tool(
+                    name: "xcode.build",
+                    description: "Run an Xcode build for a project or workspace.",
+                    application: "Xcode",
+                    provider: "xcodebuild",
+                    tags: ["build", "workspace", "project"]
+                )]
+            ).first?.tool,
+            "finder.create_folder"
+        )
+    }
+
     func testUnavailableActionsAreOmittedOrClearlyMarked() {
         let unavailable = NexToolSearchEngine.Document(
             tool: tool(

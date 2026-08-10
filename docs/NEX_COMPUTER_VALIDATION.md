@@ -182,6 +182,29 @@ xcodebuild -quiet -project nexus/nexus.xcodeproj -scheme nexus \
   ** BUILD SUCCEEDED **
 ```
 
+## 2026-08-09 artifact-name and spaced-path retrieval repair (GPT-OSS-20B)
+
+This regression came from a safe disposable Git-fixture setup prompt; no
+repository was initialized and the generated folder was subsequently moved to
+Trash. The local planner model was `gpt-oss:latest` (GPT-OSS 20B).
+
+| Prompt / operation | Expected / selected action | Result | Latency | Status |
+|---|---|---|---:|---|
+| `Make a folder called Git Lifecycle Proof in the disposable validation workspace at …/nexus 2/.build/validation-fixtures.` before repair | `finder.create_folder` | The artifact name `Git` and the `build` component left behind by a space-containing path crowded the narrow candidate set with Git and Xcode actions. GPT-OSS therefore emitted no action. The generated test folder was moved to Trash. | about 2–3 s planning | FAIL / fixed |
+| Same natural prompt after repair | `finder.create_folder` | Discovery ranks the Finder create action first. GPT-OSS selected it with the exact parent path, folder name, and collision policy. | 2,000 ms planning | PASS after fix |
+
+### Defect fixed in this increment
+
+Semantic retrieval now removes only explicit artifact labels introduced by
+`called` or `named` and complete absolute filesystem spans from its local
+ranking text. The original prompt remains untouched for native argument
+generation. The path span supports spaces and dots in components and stops at
+natural-language action boundaries such as `to Trash`, rather than treating
+those target strings as application capabilities. This is generic grounding;
+it does not name any application, force a tool, or add model arguments.
+
+Focused `NexComputerToolSearchTests` and `./scripts/build-nexus.sh` passed.
+
 ## 2026-08-09 recoverable Finder lifecycle (GPT-OSS-20B)
 
 The local planner model was `gpt-oss:latest` (GPT-OSS 20B). This intentionally

@@ -319,10 +319,21 @@ struct NexToolSearchEngine: Sendable {
         // confirmation-control tools outrank Finder search. Keep the original
         // query for argument generation; remove only absolute-path spans from
         // the local semantic index.
-        let intentText = text.replacingOccurrences(
-            of: #"(?:^|\s)/[^\s,;]+"#,
+        let withoutPaths = text.replacingOccurrences(
+            of: #"(?:^|\s)/.*?(?=\s+(?:to|into|from|and|then|also)\b|[,;]|\.(?=\s|$)|$)"#,
             with: " ",
             options: .regularExpression
+        )
+        // A label supplied for a new artifact is an argument, not the action
+        // capability. For example, “make a folder called Git Notes” should
+        // discover folder creation even though the requested folder name
+        // happens to match another application's name. Keep the original
+        // prompt unchanged for native argument generation; remove only the
+        // bounded label span from semantic retrieval.
+        let intentText = withoutPaths.replacingOccurrences(
+            of: #"\b(?:called|named)\s+.+?(?=\s+(?:at|in|inside|under|within|for|to|from|and|then|also)\b|[,;.]|$)"#,
+            with: " ",
+            options: [.regularExpression, .caseInsensitive]
         )
         return intentText
             .lowercased()
