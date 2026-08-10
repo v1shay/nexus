@@ -173,6 +173,7 @@ struct NexToolSearchEngine: Sendable {
 
         let action = Self.normalizedPhrase(tool.name)
         let aliases = tool.aliases.map(Self.normalizedPhrase)
+        let examples = tool.examples.map(Self.normalizedPhrase)
         let tags = tool.tags.map(Self.normalizedPhrase)
         let appProvider = [tool.application, tool.provider].map(Self.normalizedPhrase)
         let narratives = [tool.description] + tool.examples + tool.supportedWorkflows
@@ -221,6 +222,12 @@ struct NexToolSearchEngine: Sendable {
 
         if action == queryPhrase { score += 20 }
         if aliases.contains(queryPhrase) { score += 18 }
+        // Registered examples are the clearest action-owned statement of a
+        // supported user workflow. Reward an exact natural-language example
+        // just as strongly as an exact alias, otherwise a broad connector
+        // domain (for example a generic workspace search) can crowd out the
+        // local action that supplied the prompt in the first place.
+        if examples.contains(queryPhrase) { score += 18 }
         if tags.contains(queryPhrase) { score += 12 }
         if appProvider.contains(where: { queryPhrase.contains($0) || $0.contains(queryPhrase) }) {
             score += 8
@@ -325,22 +332,18 @@ struct NexToolSearchEngine: Sendable {
         var retained: [String: Document] = [:]
         for document in documents.sorted(by: { $0.tool.name < $1.tool.name }) {
             let tool = document.tool
-            // Descriptions often intentionally share a domain vocabulary
-            // (for example email, inbox, and thread across Gmail actions).
-            // Collapse only tools whose full declared semantic contract is
-            // identical; otherwise distinct operations such as read-message
-            // and read-thread disappear before the model can choose between
-            // them.
-            let semanticTerms = Set(([
-                tool.description
-            ] + tool.examples + tool.aliases + tool.tags + tool.supportedWorkflows).flatMap(Self.tokens))
-            let signature = [
-                Self.normalizedPhrase(tool.application),
-                Self.normalizedPhrase(tool.provider),
-                tool.schema.fields.keys.sorted().joined(separator: ","),
-                semanticTerms.sorted().joined(separator: " ")
-            ].joined(separator: "|")
-            if retained[signature] == nil { retained[signature] = document }
+            // A registry action ID is its execution contract. Several
+            // actions in one provider can intentionally share the same
+            // nouns, schema, and even examples (for example GitHub issue vs.
+            // pull-request operations). Deduplicating on visible vocabulary
+            // silently removes valid actions before the model sees them.
+            // The registry rejects duplicate IDs, but retain an explicit
+            // name-based guard here for callers that supply a custom document
+            // list; prefer an available duplicate if one is present.
+            if let current = retained[tool.name], current.isAvailable || !document.isAvailable {
+                continue
+            }
+            retained[tool.name] = document
         }
         return retained.values.sorted { $0.tool.name < $1.tool.name }
     }

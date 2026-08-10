@@ -1,11 +1,13 @@
 # Nexus Tool Authorization Matrix
 
-Snapshot: 2026-08-10. The local catalog has 202 actions. This matrix lists
-every action that cannot currently receive a meaningful real-functionality
+Snapshot: 2026-08-10. The headless registry exposes 202 definitions: 201
+operational tools plus the non-executing `search_tools` discovery meta-tool.
+This matrix lists every operational action that cannot currently receive a meaningful real-functionality
 test without one of: a durable macOS grant, an account connection, an
 explicitly authorized target, or a platform host. The source snapshot is
 `./scripts/nex-computer doctor` plus the full machine-readable
-`./scripts/nex-computer tools --json` output.
+`./scripts/nex-computer tools` output. The GPT-OSS planning and discovery
+audits exclude `search_tools`, so their 201-tool total is expected.
 
 Nexus now excludes disconnected connector actions from the model's runnable
 allowlist. Directly invoking one returns a bounded `connection_required`

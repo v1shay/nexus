@@ -1,0 +1,3047 @@
+{
+  "audit": {
+    "date": "2026-08-10",
+    "runner": "./scripts/nex-computer audit-plan",
+    "model": "gpt-oss:latest",
+    "model_identity": "GPT-OSS 20.9B (Ollama gptoss, MXFP4)",
+    "mode": "semantic discovery plus model planning only; no selected tool was executed"
+  },
+  "summary": {
+    "operational_tools": 201,
+    "direct_selection": 57,
+    "discovery_first": 22,
+    "safe_no_action": 122,
+    "wrong_action": 0,
+    "latency_ms": {
+      "min": 919,
+      "max": 4854,
+      "mean": 1793,
+      "p50": 1631,
+      "p95": 2881
+    }
+  },
+  "results": [
+    {
+      "discovered": [
+        "applications.list",
+        "obsidian.create_note",
+        "spotify.open"
+      ],
+      "latency_ms": 1233,
+      "outcome": "selected",
+      "prompt": "List installed apps",
+      "selected": [
+        "applications.list"
+      ],
+      "tool": "applications.list",
+      "execution": {
+        "status": "not_executed",
+        "reason": "Read-only audit: the route was evaluated without invoking the selected capability."
+      }
+    },
+    {
+      "discovered": [
+        "applications.open",
+        "browser.open_profile",
+        "chrome.open"
+      ],
+      "latency_ms": 1634,
+      "outcome": "selected",
+      "prompt": "Open Discord",
+      "selected": [
+        "applications.open"
+      ],
+      "tool": "applications.open",
+      "execution": {
+        "status": "not_executed",
+        "reason": "Read-only audit: the route was evaluated without invoking the selected capability."
+      }
+    },
+    {
+      "discovered": [
+        "browser.cancel_task",
+        "browser.get_task",
+        "browser.run_task"
+      ],
+      "latency_ms": 1828,
+      "outcome": "no_action",
+      "prompt": "Cancel the browser task",
+      "selected": [],
+      "tool": "browser.cancel_task",
+      "execution": {
+        "status": "not_executed",
+        "reason": "Read-only audit: the route was evaluated without invoking the selected capability."
+      }
+    },
+    {
+      "discovered": [
+        "browser.get_task",
+        "browser.cancel_task",
+        "browser.run_task"
+      ],
+      "latency_ms": 2155,
+      "outcome": "no_action",
+      "prompt": "Check that browser task",
+      "selected": [],
+      "tool": "browser.get_task",
+      "execution": {
+        "status": "not_executed",
+        "reason": "Read-only audit: the route was evaluated without invoking the selected capability."
+      }
+    },
+    {
+      "discovered": [
+        "browser.import_chrome_profile",
+        "browser.open_profile",
+        "browser.reset_profile"
+      ],
+      "latency_ms": 3790,
+      "outcome": "selected",
+      "prompt": "Import my safe Chrome browser data into Nexus",
+      "selected": [
+        "browser.import_chrome_profile"
+      ],
+      "tool": "browser.import_chrome_profile",
+      "execution": {
+        "status": "not_executed",
+        "reason": "Read-only audit: the route was evaluated without invoking the selected capability."
+      }
+    },
+    {
+      "discovered": [
+        "browser.open_profile",
+        "browser.visit_url",
+        "chrome.open"
+      ],
+      "latency_ms": 1273,
+      "outcome": "selected",
+      "prompt": "Open the Nexus browser so I can sign in to Notion",
+      "selected": [
+        "browser.open_profile"
+      ],
+      "tool": "browser.open_profile",
+      "execution": {
+        "status": "not_executed",
+        "reason": "Read-only audit: the route was evaluated without invoking the selected capability."
+      }
+    },
+    {
+      "discovered": [
+        "browser.reset_profile",
+        "browser.import_chrome_profile",
+        "browser.open_profile"
+      ],
+      "latency_ms": 1445,
+      "outcome": "selected",
+      "prompt": "Reset Nexus browser",
+      "selected": [
+        "browser.reset_profile"
+      ],
+      "tool": "browser.reset_profile",
+      "execution": {
+        "status": "not_executed",
+        "reason": "Read-only audit: the route was evaluated without invoking the selected capability."
+      }
+    },
+    {
+      "discovered": [
+        "browser.run_task",
+        "browser.open_profile",
+        "browser.visit_url"
+      ],
+      "latency_ms": 1934,
+      "outcome": "no_action",
+      "prompt": "Take a full-page screenshot of this website",
+      "selected": [],
+      "tool": "browser.run_task",
+      "execution": {
+        "status": "not_executed",
+        "reason": "Read-only audit: the route was evaluated without invoking the selected capability."
+      }
+    },
+    {
+      "discovered": [
+        "browser.visit_url",
+        "browser.run_task",
+        "cancel_action"
+      ],
+      "latency_ms": 1253,
+      "outcome": "selected",
+      "prompt": "Use Nexus browser to inspect https://example.com",
+      "selected": [
+        "browser.visit_url"
+      ],
+      "tool": "browser.visit_url",
+      "execution": {
+        "status": "not_executed",
+        "reason": "Read-only audit: the route was evaluated without invoking the selected capability."
+      }
+    },
+    {
+      "discovered": [],
+      "latency_ms": 1822,
+      "outcome": "no_action",
+      "prompt": "Cancel Event in Google Calendar.",
+      "selected": [],
+      "tool": "calendar.cancel_event",
+      "execution": {
+        "status": "not_executed",
+        "reason": "Read-only audit: the route was evaluated without invoking the selected capability."
+      }
+    },
+    {
+      "discovered": [],
+      "latency_ms": 1570,
+      "outcome": "no_action",
+      "prompt": "Create Event in Google Calendar.",
+      "selected": [],
+      "tool": "calendar.create_event",
+      "execution": {
+        "status": "not_executed",
+        "reason": "Read-only audit: the route was evaluated without invoking the selected capability."
+      }
+    },
+    {
+      "discovered": [],
+      "latency_ms": 1422,
+      "outcome": "no_action",
+      "prompt": "Create Focus Block in Google Calendar.",
+      "selected": [],
+      "tool": "calendar.create_focus_block",
+      "execution": {
+        "status": "not_executed",
+        "reason": "Read-only audit: the route was evaluated without invoking the selected capability."
+      }
+    },
+    {
+      "discovered": [],
+      "latency_ms": 1655,
+      "outcome": "no_action",
+      "prompt": "Create Recurring Event in Google Calendar.",
+      "selected": [],
+      "tool": "calendar.create_recurring_event",
+      "execution": {
+        "status": "not_executed",
+        "reason": "Read-only audit: the route was evaluated without invoking the selected capability."
+      }
+    },
+    {
+      "discovered": [],
+      "latency_ms": 2881,
+      "outcome": "no_action",
+      "prompt": "Delete Event in Google Calendar.",
+      "selected": [],
+      "tool": "calendar.delete_event",
+      "execution": {
+        "status": "not_executed",
+        "reason": "Read-only audit: the route was evaluated without invoking the selected capability."
+      }
+    },
+    {
+      "discovered": [],
+      "latency_ms": 1390,
+      "outcome": "no_action",
+      "prompt": "Draft Event in Google Calendar.",
+      "selected": [],
+      "tool": "calendar.draft_event",
+      "execution": {
+        "status": "not_executed",
+        "reason": "Read-only audit: the route was evaluated without invoking the selected capability."
+      }
+    },
+    {
+      "discovered": [],
+      "latency_ms": 1988,
+      "outcome": "needs_second_pass",
+      "prompt": "Find Availability in Google Calendar.",
+      "selected": [
+        "search_tools"
+      ],
+      "tool": "calendar.find_availability",
+      "execution": {
+        "status": "not_executed",
+        "reason": "Read-only audit: the route was evaluated without invoking the selected capability."
+      }
+    },
+    {
+      "discovered": [],
+      "latency_ms": 1584,
+      "outcome": "no_action",
+      "prompt": "Get Event in Google Calendar.",
+      "selected": [],
+      "tool": "calendar.get_event",
+      "execution": {
+        "status": "not_executed",
+        "reason": "Read-only audit: the route was evaluated without invoking the selected capability."
+      }
+    },
+    {
+      "discovered": [],
+      "latency_ms": 1850,
+      "outcome": "no_action",
+      "prompt": "List Calendars in Google Calendar.",
+      "selected": [],
+      "tool": "calendar.list_calendars",
+      "execution": {
+        "status": "not_executed",
+        "reason": "Read-only audit: the route was evaluated without invoking the selected capability."
+      }
+    },
+    {
+      "discovered": [],
+      "latency_ms": 2162,
+      "outcome": "no_action",
+      "prompt": "List Events in Google Calendar.",
+      "selected": [],
+      "tool": "calendar.list_events",
+      "execution": {
+        "status": "not_executed",
+        "reason": "Read-only audit: the route was evaluated without invoking the selected capability."
+      }
+    },
+    {
+      "discovered": [],
+      "latency_ms": 2288,
+      "outcome": "no_action",
+      "prompt": "Open Event in Google Calendar.",
+      "selected": [],
+      "tool": "calendar.open_event",
+      "execution": {
+        "status": "not_executed",
+        "reason": "Read-only audit: the route was evaluated without invoking the selected capability."
+      }
+    },
+    {
+      "discovered": [],
+      "latency_ms": 3809,
+      "outcome": "no_action",
+      "prompt": "Respond To Invitation in Google Calendar.",
+      "selected": [],
+      "tool": "calendar.respond_to_invitation",
+      "execution": {
+        "status": "not_executed",
+        "reason": "Read-only audit: the route was evaluated without invoking the selected capability."
+      }
+    },
+    {
+      "discovered": [],
+      "latency_ms": 2075,
+      "outcome": "no_action",
+      "prompt": "Search Events in Google Calendar.",
+      "selected": [],
+      "tool": "calendar.search_events",
+      "execution": {
+        "status": "not_executed",
+        "reason": "Read-only audit: the route was evaluated without invoking the selected capability."
+      }
+    },
+    {
+      "discovered": [],
+      "latency_ms": 1610,
+      "outcome": "no_action",
+      "prompt": "Update Event in Google Calendar.",
+      "selected": [],
+      "tool": "calendar.update_event",
+      "execution": {
+        "status": "not_executed",
+        "reason": "Read-only audit: the route was evaluated without invoking the selected capability."
+      }
+    },
+    {
+      "discovered": [],
+      "latency_ms": 1695,
+      "outcome": "no_action",
+      "prompt": "View Upcoming in Google Calendar.",
+      "selected": [],
+      "tool": "calendar.view_upcoming",
+      "execution": {
+        "status": "not_executed",
+        "reason": "Read-only audit: the route was evaluated without invoking the selected capability."
+      }
+    },
+    {
+      "discovered": [
+        "cancel_action",
+        "confirm_action",
+        "browser.cancel_task"
+      ],
+      "latency_ms": 1655,
+      "outcome": "no_action",
+      "prompt": "Cancel the pending action",
+      "selected": [],
+      "tool": "cancel_action",
+      "execution": {
+        "status": "not_executed",
+        "reason": "Read-only audit: the route was evaluated without invoking the selected capability."
+      }
+    },
+    {
+      "discovered": [
+        "chrome.activate_tab",
+        "youtube_play_current",
+        "git.checkout"
+      ],
+      "latency_ms": 2232,
+      "outcome": "no_action",
+      "prompt": "Switch back to that YouTube tab",
+      "selected": [],
+      "tool": "chrome.activate_tab",
+      "execution": {
+        "status": "not_executed",
+        "reason": "Read-only audit: the route was evaluated without invoking the selected capability."
+      }
+    },
+    {
+      "discovered": [
+        "chrome.close_tab",
+        "browser.run_task",
+        "browser.import_chrome_profile"
+      ],
+      "latency_ms": 1912,
+      "outcome": "no_action",
+      "prompt": "Close that Chrome tab",
+      "selected": [],
+      "tool": "chrome.close_tab",
+      "execution": {
+        "status": "not_executed",
+        "reason": "Read-only audit: the route was evaluated without invoking the selected capability."
+      }
+    },
+    {
+      "discovered": [
+        "chrome.get_active_tab",
+        "youtube_play_current",
+        "chrome.activate_tab"
+      ],
+      "latency_ms": 1034,
+      "outcome": "selected",
+      "prompt": "What Chrome tab is active?",
+      "selected": [
+        "chrome.get_active_tab"
+      ],
+      "tool": "chrome.get_active_tab",
+      "execution": {
+        "status": "not_executed",
+        "reason": "Read-only audit: the route was evaluated without invoking the selected capability."
+      }
+    },
+    {
+      "discovered": [
+        "chrome.list_tabs",
+        "browser.import_chrome_profile",
+        "chrome.activate_tab"
+      ],
+      "latency_ms": 1399,
+      "outcome": "selected",
+      "prompt": "List my Chrome tabs",
+      "selected": [
+        "chrome.list_tabs"
+      ],
+      "tool": "chrome.list_tabs",
+      "execution": {
+        "status": "not_executed",
+        "reason": "Read-only audit: the route was evaluated without invoking the selected capability."
+      }
+    },
+    {
+      "discovered": [
+        "chrome.open",
+        "browser.open_profile",
+        "chrome.open_url"
+      ],
+      "latency_ms": 987,
+      "outcome": "selected",
+      "prompt": "Open Chrome",
+      "selected": [
+        "chrome.open"
+      ],
+      "tool": "chrome.open",
+      "execution": {
+        "status": "not_executed",
+        "reason": "Read-only audit: the route was evaluated without invoking the selected capability."
+      }
+    },
+    {
+      "discovered": [
+        "chrome.open_url",
+        "browser.visit_url",
+        "chrome.open"
+      ],
+      "latency_ms": 1515,
+      "outcome": "no_action",
+      "prompt": "Open this URL in Chrome",
+      "selected": [],
+      "tool": "chrome.open_url",
+      "execution": {
+        "status": "not_executed",
+        "reason": "Read-only audit: the route was evaluated without invoking the selected capability."
+      }
+    },
+    {
+      "discovered": [
+        "codex.cancel_task",
+        "codex.continue_task",
+        "codex.start_task"
+      ],
+      "latency_ms": 2215,
+      "outcome": "no_action",
+      "prompt": "Cancel that Codex task",
+      "selected": [],
+      "tool": "codex.cancel_task",
+      "execution": {
+        "status": "not_executed",
+        "reason": "Read-only audit: the route was evaluated without invoking the selected capability."
+      }
+    },
+    {
+      "discovered": [
+        "codex.continue_task",
+        "codex.open_session",
+        "codex.cancel_task"
+      ],
+      "latency_ms": 2493,
+      "outcome": "no_action",
+      "prompt": "Continue this Codex session",
+      "selected": [],
+      "tool": "codex.continue_task",
+      "execution": {
+        "status": "not_executed",
+        "reason": "Read-only audit: the route was evaluated without invoking the selected capability."
+      }
+    },
+    {
+      "discovered": [
+        "codex.get_status",
+        "codex.cancel_task",
+        "codex.continue_task"
+      ],
+      "latency_ms": 1864,
+      "outcome": "no_action",
+      "prompt": "Check this Codex task",
+      "selected": [],
+      "tool": "codex.get_status",
+      "execution": {
+        "status": "not_executed",
+        "reason": "Read-only audit: the route was evaluated without invoking the selected capability."
+      }
+    },
+    {
+      "discovered": [
+        "codex.open",
+        "codex.open_session",
+        "codex.cancel_task"
+      ],
+      "latency_ms": 1125,
+      "outcome": "selected",
+      "prompt": "Open Codex",
+      "selected": [
+        "codex.open"
+      ],
+      "tool": "codex.open",
+      "execution": {
+        "status": "not_executed",
+        "reason": "Read-only audit: the route was evaluated without invoking the selected capability."
+      }
+    },
+    {
+      "discovered": [
+        "codex.open_session",
+        "codex.open",
+        "codex.cancel_task"
+      ],
+      "latency_ms": 1289,
+      "outcome": "no_action",
+      "prompt": "Open this Codex session",
+      "selected": [],
+      "tool": "codex.open_session",
+      "execution": {
+        "status": "not_executed",
+        "reason": "Read-only audit: the route was evaluated without invoking the selected capability."
+      }
+    },
+    {
+      "discovered": [
+        "codex.start_task",
+        "codex.cancel_task",
+        "codex.continue_task"
+      ],
+      "latency_ms": 3437,
+      "outcome": "no_action",
+      "prompt": "Have Codex implement this task",
+      "selected": [],
+      "tool": "codex.start_task",
+      "execution": {
+        "status": "not_executed",
+        "reason": "Read-only audit: the route was evaluated without invoking the selected capability."
+      }
+    },
+    {
+      "discovered": [
+        "confirm_action",
+        "cancel_action",
+        "obsidian.append_note"
+      ],
+      "latency_ms": 1644,
+      "outcome": "no_action",
+      "prompt": "Confirm the pending action",
+      "selected": [],
+      "tool": "confirm_action",
+      "execution": {
+        "status": "not_executed",
+        "reason": "Read-only audit: the route was evaluated without invoking the selected capability."
+      }
+    },
+    {
+      "discovered": [],
+      "latency_ms": 2252,
+      "outcome": "needs_second_pass",
+      "prompt": "Get in Google Contacts.",
+      "selected": [
+        "search_tools"
+      ],
+      "tool": "contacts.get",
+      "execution": {
+        "status": "not_executed",
+        "reason": "Read-only audit: the route was evaluated without invoking the selected capability."
+      }
+    },
+    {
+      "discovered": [],
+      "latency_ms": 1900,
+      "outcome": "no_action",
+      "prompt": "Get Email in Google Contacts.",
+      "selected": [],
+      "tool": "contacts.get_email",
+      "execution": {
+        "status": "not_executed",
+        "reason": "Read-only audit: the route was evaluated without invoking the selected capability."
+      }
+    },
+    {
+      "discovered": [],
+      "latency_ms": 1643,
+      "outcome": "no_action",
+      "prompt": "Get Phone in Google Contacts.",
+      "selected": [],
+      "tool": "contacts.get_phone",
+      "execution": {
+        "status": "not_executed",
+        "reason": "Read-only audit: the route was evaluated without invoking the selected capability."
+      }
+    },
+    {
+      "discovered": [],
+      "latency_ms": 2142,
+      "outcome": "no_action",
+      "prompt": "List in Google Contacts.",
+      "selected": [],
+      "tool": "contacts.list",
+      "execution": {
+        "status": "not_executed",
+        "reason": "Read-only audit: the route was evaluated without invoking the selected capability."
+      }
+    },
+    {
+      "discovered": [],
+      "latency_ms": 2304,
+      "outcome": "needs_second_pass",
+      "prompt": "Resolve Person in Google Contacts.",
+      "selected": [
+        "search_tools"
+      ],
+      "tool": "contacts.resolve_person",
+      "execution": {
+        "status": "not_executed",
+        "reason": "Read-only audit: the route was evaluated without invoking the selected capability."
+      }
+    },
+    {
+      "discovered": [],
+      "latency_ms": 1921,
+      "outcome": "no_action",
+      "prompt": "Search in Google Contacts.",
+      "selected": [],
+      "tool": "contacts.search",
+      "execution": {
+        "status": "not_executed",
+        "reason": "Read-only audit: the route was evaluated without invoking the selected capability."
+      }
+    },
+    {
+      "discovered": [
+        "finder.activate",
+        "finder.open",
+        "finder.copy"
+      ],
+      "latency_ms": 1456,
+      "outcome": "selected",
+      "prompt": "Open Finder",
+      "selected": [
+        "finder.activate"
+      ],
+      "tool": "finder.activate",
+      "execution": {
+        "status": "not_executed",
+        "reason": "Read-only audit: the route was evaluated without invoking the selected capability."
+      }
+    },
+    {
+      "discovered": [
+        "finder.copy",
+        "photos.copy_results",
+        "finder.create_folder"
+      ],
+      "latency_ms": 1206,
+      "outcome": "no_action",
+      "prompt": "Copy this file into Results",
+      "selected": [],
+      "tool": "finder.copy",
+      "execution": {
+        "status": "not_executed",
+        "reason": "Read-only audit: the route was evaluated without invoking the selected capability."
+      }
+    },
+    {
+      "discovered": [
+        "finder.create_folder",
+        "finder.copy",
+        "photos.create_album"
+      ],
+      "latency_ms": 1752,
+      "outcome": "no_action",
+      "prompt": "Create a Results folder",
+      "selected": [],
+      "tool": "finder.create_folder",
+      "execution": {
+        "status": "not_executed",
+        "reason": "Read-only audit: the route was evaluated without invoking the selected capability."
+      }
+    },
+    {
+      "discovered": [
+        "finder.get_selection",
+        "finder.search",
+        "finder.activate"
+      ],
+      "latency_ms": 1494,
+      "outcome": "selected",
+      "prompt": "What files are selected in Finder?",
+      "selected": [
+        "finder.get_selection"
+      ],
+      "tool": "finder.get_selection",
+      "execution": {
+        "status": "not_executed",
+        "reason": "Read-only audit: the route was evaluated without invoking the selected capability."
+      }
+    },
+    {
+      "discovered": [
+        "finder.move",
+        "finder.copy",
+        "finder.trash"
+      ],
+      "latency_ms": 1939,
+      "outcome": "no_action",
+      "prompt": "Move this file into the Archive folder",
+      "selected": [],
+      "tool": "finder.move",
+      "execution": {
+        "status": "not_executed",
+        "reason": "Read-only audit: the route was evaluated without invoking the selected capability."
+      }
+    },
+    {
+      "discovered": [
+        "finder.open",
+        "vscode.open_file",
+        "xcode.open_file"
+      ],
+      "latency_ms": 1363,
+      "outcome": "no_action",
+      "prompt": "Open this file",
+      "selected": [],
+      "tool": "finder.open",
+      "execution": {
+        "status": "not_executed",
+        "reason": "Read-only audit: the route was evaluated without invoking the selected capability."
+      }
+    },
+    {
+      "discovered": [
+        "finder.rename",
+        "vscode.edit_file",
+        "vscode.open_file"
+      ],
+      "latency_ms": 1631,
+      "outcome": "no_action",
+      "prompt": "Rename this file",
+      "selected": [],
+      "tool": "finder.rename",
+      "execution": {
+        "status": "not_executed",
+        "reason": "Read-only audit: the route was evaluated without invoking the selected capability."
+      }
+    },
+    {
+      "discovered": [
+        "finder.reveal",
+        "finder.search",
+        "finder.activate"
+      ],
+      "latency_ms": 2535,
+      "outcome": "no_action",
+      "prompt": "Show this file in Finder",
+      "selected": [],
+      "tool": "finder.reveal",
+      "execution": {
+        "status": "not_executed",
+        "reason": "Read-only audit: the route was evaluated without invoking the selected capability."
+      }
+    },
+    {
+      "discovered": [
+        "finder.search",
+        "preview.combine_pdfs",
+        "github.search"
+      ],
+      "latency_ms": 2916,
+      "outcome": "selected",
+      "prompt": "Find PDFs named application",
+      "selected": [
+        "finder.search"
+      ],
+      "tool": "finder.search",
+      "execution": {
+        "status": "not_executed",
+        "reason": "Read-only audit: the route was evaluated without invoking the selected capability."
+      }
+    },
+    {
+      "discovered": [
+        "finder.trash",
+        "finder.move",
+        "vscode.edit_file"
+      ],
+      "latency_ms": 1224,
+      "outcome": "no_action",
+      "prompt": "Move this file to Trash",
+      "selected": [],
+      "tool": "finder.trash",
+      "execution": {
+        "status": "not_executed",
+        "reason": "Read-only audit: the route was evaluated without invoking the selected capability."
+      }
+    },
+    {
+      "discovered": [
+        "git.checkout",
+        "git.create_branch",
+        "git.pull"
+      ],
+      "latency_ms": 2158,
+      "outcome": "no_action",
+      "prompt": "Switch to an existing local Git branch.",
+      "selected": [],
+      "tool": "git.checkout",
+      "execution": {
+        "status": "not_executed",
+        "reason": "Read-only audit: the route was evaluated without invoking the selected capability."
+      }
+    },
+    {
+      "discovered": [
+        "git.commit",
+        "git.create_branch",
+        "terminal.run_command"
+      ],
+      "latency_ms": 1652,
+      "outcome": "selected",
+      "prompt": "Save the staged work as a local checkpoint",
+      "selected": [
+        "git.commit"
+      ],
+      "tool": "git.commit",
+      "execution": {
+        "status": "not_executed",
+        "reason": "Read-only audit: the route was evaluated without invoking the selected capability."
+      }
+    },
+    {
+      "discovered": [
+        "git.configure_remote",
+        "git.push",
+        "git.pull"
+      ],
+      "latency_ms": 2625,
+      "outcome": "no_action",
+      "prompt": "Connect this disposable repository to its generated backup remote",
+      "selected": [],
+      "tool": "git.configure_remote",
+      "execution": {
+        "status": "not_executed",
+        "reason": "Read-only audit: the route was evaluated without invoking the selected capability."
+      }
+    },
+    {
+      "discovered": [
+        "git.create_branch",
+        "finder.create_folder",
+        "git.pull"
+      ],
+      "latency_ms": 1540,
+      "outcome": "no_action",
+      "prompt": "Create and check out a new local Git branch.",
+      "selected": [],
+      "tool": "git.create_branch",
+      "execution": {
+        "status": "not_executed",
+        "reason": "Read-only audit: the route was evaluated without invoking the selected capability."
+      }
+    },
+    {
+      "discovered": [
+        "git.diff",
+        "youtube_play_current",
+        "finder.reveal"
+      ],
+      "latency_ms": 1181,
+      "outcome": "selected",
+      "prompt": "Show the current diff",
+      "selected": [
+        "git.diff"
+      ],
+      "tool": "git.diff",
+      "execution": {
+        "status": "not_executed",
+        "reason": "Read-only audit: the route was evaluated without invoking the selected capability."
+      }
+    },
+    {
+      "discovered": [
+        "git.init",
+        "git.create_branch",
+        "git.commit"
+      ],
+      "latency_ms": 1341,
+      "outcome": "selected",
+      "prompt": "Initialize a new local Git repository here",
+      "selected": [
+        "git.init"
+      ],
+      "tool": "git.init",
+      "execution": {
+        "status": "not_executed",
+        "reason": "Read-only audit: the route was evaluated without invoking the selected capability."
+      }
+    },
+    {
+      "discovered": [
+        "git.pull",
+        "git.configure_remote",
+        "git.push"
+      ],
+      "latency_ms": 2504,
+      "outcome": "no_action",
+      "prompt": "Pull the configured upstream using fast-forward-only semantics.",
+      "selected": [],
+      "tool": "git.pull",
+      "execution": {
+        "status": "not_executed",
+        "reason": "Read-only audit: the route was evaluated without invoking the selected capability."
+      }
+    },
+    {
+      "discovered": [
+        "git.push",
+        "git.configure_remote",
+        "git.pull"
+      ],
+      "latency_ms": 1775,
+      "outcome": "selected",
+      "prompt": "Back up this disposable branch to its remote",
+      "selected": [
+        "git.push"
+      ],
+      "tool": "git.push",
+      "execution": {
+        "status": "not_executed",
+        "reason": "Read-only audit: the route was evaluated without invoking the selected capability."
+      }
+    },
+    {
+      "discovered": [
+        "git.stage",
+        "git.commit",
+        "finder.search"
+      ],
+      "latency_ms": 2834,
+      "outcome": "no_action",
+      "prompt": "Stage this generated file for the local commit",
+      "selected": [],
+      "tool": "git.stage",
+      "execution": {
+        "status": "not_executed",
+        "reason": "Read-only audit: the route was evaluated without invoking the selected capability."
+      }
+    },
+    {
+      "discovered": [
+        "git.status",
+        "git.diff",
+        "git.checkout"
+      ],
+      "latency_ms": 1377,
+      "outcome": "selected",
+      "prompt": "Show git status",
+      "selected": [
+        "git.status"
+      ],
+      "tool": "git.status",
+      "execution": {
+        "status": "not_executed",
+        "reason": "Read-only audit: the route was evaluated without invoking the selected capability."
+      }
+    },
+    {
+      "discovered": [],
+      "latency_ms": 1523,
+      "outcome": "needs_second_pass",
+      "prompt": "Cancel Workflow in GitHub.",
+      "selected": [
+        "search_tools"
+      ],
+      "tool": "github.cancel_workflow",
+      "execution": {
+        "status": "not_executed",
+        "reason": "Read-only audit: the route was evaluated without invoking the selected capability."
+      }
+    },
+    {
+      "discovered": [],
+      "latency_ms": 2001,
+      "outcome": "no_action",
+      "prompt": "Comment Issue in GitHub.",
+      "selected": [],
+      "tool": "github.comment_issue",
+      "execution": {
+        "status": "not_executed",
+        "reason": "Read-only audit: the route was evaluated without invoking the selected capability."
+      }
+    },
+    {
+      "discovered": [],
+      "latency_ms": 2347,
+      "outcome": "no_action",
+      "prompt": "Comment Pull Request in GitHub.",
+      "selected": [],
+      "tool": "github.comment_pull_request",
+      "execution": {
+        "status": "not_executed",
+        "reason": "Read-only audit: the route was evaluated without invoking the selected capability."
+      }
+    },
+    {
+      "discovered": [
+        "github.create_issue",
+        "github.create_pull_request",
+        "github.open_repository"
+      ],
+      "latency_ms": 1461,
+      "outcome": "selected",
+      "prompt": "File a short issue in v1shay/nexus",
+      "selected": [
+        "github.create_issue"
+      ],
+      "tool": "github.create_issue",
+      "execution": {
+        "status": "not_executed",
+        "reason": "Read-only audit: the route was evaluated without invoking the selected capability."
+      }
+    },
+    {
+      "discovered": [
+        "github.create_pull_request",
+        "git.checkout",
+        "github.open_pull_request"
+      ],
+      "latency_ms": 1729,
+      "outcome": "no_action",
+      "prompt": "Open a pull request from my branch to main",
+      "selected": [],
+      "tool": "github.create_pull_request",
+      "execution": {
+        "status": "not_executed",
+        "reason": "Read-only audit: the route was evaluated without invoking the selected capability."
+      }
+    },
+    {
+      "discovered": [
+        "github.get_checks",
+        "git.diff",
+        "youtube_play_current"
+      ],
+      "latency_ms": 3313,
+      "outcome": "no_action",
+      "prompt": "Show PR checks",
+      "selected": [],
+      "tool": "github.get_checks",
+      "execution": {
+        "status": "not_executed",
+        "reason": "Read-only audit: the route was evaluated without invoking the selected capability."
+      }
+    },
+    {
+      "discovered": [],
+      "latency_ms": 2421,
+      "outcome": "no_action",
+      "prompt": "Get Issue in GitHub.",
+      "selected": [],
+      "tool": "github.get_issue",
+      "execution": {
+        "status": "not_executed",
+        "reason": "Read-only audit: the route was evaluated without invoking the selected capability."
+      }
+    },
+    {
+      "discovered": [],
+      "latency_ms": 1956,
+      "outcome": "needs_second_pass",
+      "prompt": "Get Pull Request in GitHub.",
+      "selected": [
+        "search_tools"
+      ],
+      "tool": "github.get_pull_request",
+      "execution": {
+        "status": "not_executed",
+        "reason": "Read-only audit: the route was evaluated without invoking the selected capability."
+      }
+    },
+    {
+      "discovered": [],
+      "latency_ms": 1475,
+      "outcome": "no_action",
+      "prompt": "Get Repository in GitHub.",
+      "selected": [],
+      "tool": "github.get_repository",
+      "execution": {
+        "status": "not_executed",
+        "reason": "Read-only audit: the route was evaluated without invoking the selected capability."
+      }
+    },
+    {
+      "discovered": [],
+      "latency_ms": 1911,
+      "outcome": "needs_second_pass",
+      "prompt": "Get Workflow Run in GitHub.",
+      "selected": [
+        "search_tools"
+      ],
+      "tool": "github.get_workflow_run",
+      "execution": {
+        "status": "not_executed",
+        "reason": "Read-only audit: the route was evaluated without invoking the selected capability."
+      }
+    },
+    {
+      "discovered": [],
+      "latency_ms": 1690,
+      "outcome": "no_action",
+      "prompt": "List Issues in GitHub.",
+      "selected": [],
+      "tool": "github.list_issues",
+      "execution": {
+        "status": "not_executed",
+        "reason": "Read-only audit: the route was evaluated without invoking the selected capability."
+      }
+    },
+    {
+      "discovered": [],
+      "latency_ms": 1746,
+      "outcome": "no_action",
+      "prompt": "List Notifications in GitHub.",
+      "selected": [],
+      "tool": "github.list_notifications",
+      "execution": {
+        "status": "not_executed",
+        "reason": "Read-only audit: the route was evaluated without invoking the selected capability."
+      }
+    },
+    {
+      "discovered": [],
+      "latency_ms": 2286,
+      "outcome": "needs_second_pass",
+      "prompt": "List Pull Requests in GitHub.",
+      "selected": [
+        "search_tools"
+      ],
+      "tool": "github.list_pull_requests",
+      "execution": {
+        "status": "not_executed",
+        "reason": "Read-only audit: the route was evaluated without invoking the selected capability."
+      }
+    },
+    {
+      "discovered": [],
+      "latency_ms": 2447,
+      "outcome": "needs_second_pass",
+      "prompt": "List Workflows in GitHub.",
+      "selected": [
+        "search_tools"
+      ],
+      "tool": "github.list_workflows",
+      "execution": {
+        "status": "not_executed",
+        "reason": "Read-only audit: the route was evaluated without invoking the selected capability."
+      }
+    },
+    {
+      "discovered": [],
+      "latency_ms": 1218,
+      "outcome": "no_action",
+      "prompt": "Mark Notification Read in GitHub.",
+      "selected": [],
+      "tool": "github.mark_notification_read",
+      "execution": {
+        "status": "not_executed",
+        "reason": "Read-only audit: the route was evaluated without invoking the selected capability."
+      }
+    },
+    {
+      "discovered": [],
+      "latency_ms": 1466,
+      "outcome": "no_action",
+      "prompt": "Merge Pull Request in GitHub.",
+      "selected": [],
+      "tool": "github.merge_pull_request",
+      "execution": {
+        "status": "not_executed",
+        "reason": "Read-only audit: the route was evaluated without invoking the selected capability."
+      }
+    },
+    {
+      "discovered": [
+        "github.open",
+        "github.create_pull_request",
+        "github.open_pull_request"
+      ],
+      "latency_ms": 1042,
+      "outcome": "selected",
+      "prompt": "Open GitHub",
+      "selected": [
+        "github.open"
+      ],
+      "tool": "github.open",
+      "execution": {
+        "status": "not_executed",
+        "reason": "Read-only audit: the route was evaluated without invoking the selected capability."
+      }
+    },
+    {
+      "discovered": [
+        "github.open_pull_request",
+        "applications.open",
+        "browser.open_profile"
+      ],
+      "latency_ms": 2624,
+      "outcome": "no_action",
+      "prompt": "Open PR 42",
+      "selected": [],
+      "tool": "github.open_pull_request",
+      "execution": {
+        "status": "not_executed",
+        "reason": "Read-only audit: the route was evaluated without invoking the selected capability."
+      }
+    },
+    {
+      "discovered": [
+        "github.open_repository",
+        "github.create_pull_request",
+        "applications.open"
+      ],
+      "latency_ms": 1254,
+      "outcome": "selected",
+      "prompt": "Open v1shay/nexusV2",
+      "selected": [
+        "github.open_repository"
+      ],
+      "tool": "github.open_repository",
+      "execution": {
+        "status": "not_executed",
+        "reason": "Read-only audit: the route was evaluated without invoking the selected capability."
+      }
+    },
+    {
+      "discovered": [],
+      "latency_ms": 1548,
+      "outcome": "needs_second_pass",
+      "prompt": "Rerun Workflow in GitHub.",
+      "selected": [
+        "search_tools"
+      ],
+      "tool": "github.rerun_workflow",
+      "execution": {
+        "status": "not_executed",
+        "reason": "Read-only audit: the route was evaluated without invoking the selected capability."
+      }
+    },
+    {
+      "discovered": [
+        "github.search",
+        "github.create_issue",
+        "github.create_pull_request"
+      ],
+      "latency_ms": 2249,
+      "outcome": "selected",
+      "prompt": "Search GitHub for Nexus issues",
+      "selected": [
+        "github.search"
+      ],
+      "tool": "github.search",
+      "execution": {
+        "status": "not_executed",
+        "reason": "Read-only audit: the route was evaluated without invoking the selected capability."
+      }
+    },
+    {
+      "discovered": [],
+      "latency_ms": 1551,
+      "outcome": "needs_second_pass",
+      "prompt": "Search Repositories in GitHub.",
+      "selected": [
+        "search_tools"
+      ],
+      "tool": "github.search_repositories",
+      "execution": {
+        "status": "not_executed",
+        "reason": "Read-only audit: the route was evaluated without invoking the selected capability."
+      }
+    },
+    {
+      "discovered": [],
+      "latency_ms": 1638,
+      "outcome": "no_action",
+      "prompt": "Update Issue in GitHub.",
+      "selected": [],
+      "tool": "github.update_issue",
+      "execution": {
+        "status": "not_executed",
+        "reason": "Read-only audit: the route was evaluated without invoking the selected capability."
+      }
+    },
+    {
+      "discovered": [],
+      "latency_ms": 4854,
+      "outcome": "no_action",
+      "prompt": "Apply Label in Gmail.",
+      "selected": [],
+      "tool": "gmail.apply_label",
+      "execution": {
+        "status": "not_executed",
+        "reason": "Read-only audit: the route was evaluated without invoking the selected capability."
+      }
+    },
+    {
+      "discovered": [],
+      "latency_ms": 1390,
+      "outcome": "no_action",
+      "prompt": "Archive in Gmail.",
+      "selected": [],
+      "tool": "gmail.archive",
+      "execution": {
+        "status": "not_executed",
+        "reason": "Read-only audit: the route was evaluated without invoking the selected capability."
+      }
+    },
+    {
+      "discovered": [],
+      "latency_ms": 1382,
+      "outcome": "no_action",
+      "prompt": "Download Attachment in Gmail.",
+      "selected": [],
+      "tool": "gmail.download_attachment",
+      "execution": {
+        "status": "not_executed",
+        "reason": "Read-only audit: the route was evaluated without invoking the selected capability."
+      }
+    },
+    {
+      "discovered": [],
+      "latency_ms": 2020,
+      "outcome": "no_action",
+      "prompt": "Draft in Gmail.",
+      "selected": [],
+      "tool": "gmail.draft",
+      "execution": {
+        "status": "not_executed",
+        "reason": "Read-only audit: the route was evaluated without invoking the selected capability."
+      }
+    },
+    {
+      "discovered": [],
+      "latency_ms": 2252,
+      "outcome": "no_action",
+      "prompt": "Forward in Gmail.",
+      "selected": [],
+      "tool": "gmail.forward",
+      "execution": {
+        "status": "not_executed",
+        "reason": "Read-only audit: the route was evaluated without invoking the selected capability."
+      }
+    },
+    {
+      "discovered": [],
+      "latency_ms": 1654,
+      "outcome": "no_action",
+      "prompt": "List Labels in Gmail.",
+      "selected": [],
+      "tool": "gmail.list_labels",
+      "execution": {
+        "status": "not_executed",
+        "reason": "Read-only audit: the route was evaluated without invoking the selected capability."
+      }
+    },
+    {
+      "discovered": [],
+      "latency_ms": 1284,
+      "outcome": "no_action",
+      "prompt": "Mark Read in Gmail.",
+      "selected": [],
+      "tool": "gmail.mark_read",
+      "execution": {
+        "status": "not_executed",
+        "reason": "Read-only audit: the route was evaluated without invoking the selected capability."
+      }
+    },
+    {
+      "discovered": [],
+      "latency_ms": 1662,
+      "outcome": "no_action",
+      "prompt": "Mark Unread in Gmail.",
+      "selected": [],
+      "tool": "gmail.mark_unread",
+      "execution": {
+        "status": "not_executed",
+        "reason": "Read-only audit: the route was evaluated without invoking the selected capability."
+      }
+    },
+    {
+      "discovered": [],
+      "latency_ms": 1728,
+      "outcome": "no_action",
+      "prompt": "Read in Gmail.",
+      "selected": [],
+      "tool": "gmail.read",
+      "execution": {
+        "status": "not_executed",
+        "reason": "Read-only audit: the route was evaluated without invoking the selected capability."
+      }
+    },
+    {
+      "discovered": [],
+      "latency_ms": 1548,
+      "outcome": "needs_second_pass",
+      "prompt": "Read Thread in Gmail.",
+      "selected": [
+        "search_tools"
+      ],
+      "tool": "gmail.read_thread",
+      "execution": {
+        "status": "not_executed",
+        "reason": "Read-only audit: the route was evaluated without invoking the selected capability."
+      }
+    },
+    {
+      "discovered": [],
+      "latency_ms": 1552,
+      "outcome": "needs_second_pass",
+      "prompt": "Remove Label in Gmail.",
+      "selected": [
+        "search_tools"
+      ],
+      "tool": "gmail.remove_label",
+      "execution": {
+        "status": "not_executed",
+        "reason": "Read-only audit: the route was evaluated without invoking the selected capability."
+      }
+    },
+    {
+      "discovered": [],
+      "latency_ms": 2948,
+      "outcome": "no_action",
+      "prompt": "Reply Draft in Gmail.",
+      "selected": [],
+      "tool": "gmail.reply_draft",
+      "execution": {
+        "status": "not_executed",
+        "reason": "Read-only audit: the route was evaluated without invoking the selected capability."
+      }
+    },
+    {
+      "discovered": [],
+      "latency_ms": 1420,
+      "outcome": "no_action",
+      "prompt": "Search in Gmail.",
+      "selected": [],
+      "tool": "gmail.search",
+      "execution": {
+        "status": "not_executed",
+        "reason": "Read-only audit: the route was evaluated without invoking the selected capability."
+      }
+    },
+    {
+      "discovered": [],
+      "latency_ms": 1996,
+      "outcome": "no_action",
+      "prompt": "Send Draft in Gmail.",
+      "selected": [],
+      "tool": "gmail.send_draft",
+      "execution": {
+        "status": "not_executed",
+        "reason": "Read-only audit: the route was evaluated without invoking the selected capability."
+      }
+    },
+    {
+      "discovered": [],
+      "latency_ms": 1588,
+      "outcome": "no_action",
+      "prompt": "Star in Gmail.",
+      "selected": [],
+      "tool": "gmail.star",
+      "execution": {
+        "status": "not_executed",
+        "reason": "Read-only audit: the route was evaluated without invoking the selected capability."
+      }
+    },
+    {
+      "discovered": [],
+      "latency_ms": 1769,
+      "outcome": "needs_second_pass",
+      "prompt": "Trash in Gmail.",
+      "selected": [
+        "search_tools"
+      ],
+      "tool": "gmail.trash",
+      "execution": {
+        "status": "not_executed",
+        "reason": "Read-only audit: the route was evaluated without invoking the selected capability."
+      }
+    },
+    {
+      "discovered": [],
+      "latency_ms": 1450,
+      "outcome": "needs_second_pass",
+      "prompt": "Triage in Gmail.",
+      "selected": [
+        "search_tools"
+      ],
+      "tool": "gmail.triage",
+      "execution": {
+        "status": "not_executed",
+        "reason": "Read-only audit: the route was evaluated without invoking the selected capability."
+      }
+    },
+    {
+      "discovered": [],
+      "latency_ms": 1488,
+      "outcome": "needs_second_pass",
+      "prompt": "Unarchive in Gmail.",
+      "selected": [
+        "search_tools"
+      ],
+      "tool": "gmail.unarchive",
+      "execution": {
+        "status": "not_executed",
+        "reason": "Read-only audit: the route was evaluated without invoking the selected capability."
+      }
+    },
+    {
+      "discovered": [],
+      "latency_ms": 1317,
+      "outcome": "no_action",
+      "prompt": "Unstar in Gmail.",
+      "selected": [],
+      "tool": "gmail.unstar",
+      "execution": {
+        "status": "not_executed",
+        "reason": "Read-only audit: the route was evaluated without invoking the selected capability."
+      }
+    },
+    {
+      "discovered": [],
+      "latency_ms": 1355,
+      "outcome": "no_action",
+      "prompt": "Update Draft in Gmail.",
+      "selected": [],
+      "tool": "gmail.update_draft",
+      "execution": {
+        "status": "not_executed",
+        "reason": "Read-only audit: the route was evaluated without invoking the selected capability."
+      }
+    },
+    {
+      "discovered": [],
+      "latency_ms": 1363,
+      "outcome": "needs_second_pass",
+      "prompt": "Account Info in Google Account.",
+      "selected": [
+        "search_tools"
+      ],
+      "tool": "google.account_info",
+      "execution": {
+        "status": "not_executed",
+        "reason": "Read-only audit: the route was evaluated without invoking the selected capability."
+      }
+    },
+    {
+      "discovered": [],
+      "latency_ms": 1468,
+      "outcome": "needs_second_pass",
+      "prompt": "Connection Status in Google Account.",
+      "selected": [
+        "search_tools"
+      ],
+      "tool": "google.connection_status",
+      "execution": {
+        "status": "not_executed",
+        "reason": "Read-only audit: the route was evaluated without invoking the selected capability."
+      }
+    },
+    {
+      "discovered": [],
+      "latency_ms": 2389,
+      "outcome": "no_action",
+      "prompt": "Disconnect in Google Account.",
+      "selected": [],
+      "tool": "google.disconnect",
+      "execution": {
+        "status": "not_executed",
+        "reason": "Read-only audit: the route was evaluated without invoking the selected capability."
+      }
+    },
+    {
+      "discovered": [],
+      "latency_ms": 1439,
+      "outcome": "no_action",
+      "prompt": "List Capabilities in Google Account.",
+      "selected": [],
+      "tool": "google.list_capabilities",
+      "execution": {
+        "status": "not_executed",
+        "reason": "Read-only audit: the route was evaluated without invoking the selected capability."
+      }
+    },
+    {
+      "discovered": [
+        "messages.draft",
+        "messages.send_draft",
+        "messages.search_contacts"
+      ],
+      "latency_ms": 1994,
+      "outcome": "no_action",
+      "prompt": "Draft a message to this contact",
+      "selected": [],
+      "tool": "messages.draft",
+      "execution": {
+        "status": "not_executed",
+        "reason": "Read-only audit: the route was evaluated without invoking the selected capability."
+      }
+    },
+    {
+      "discovered": [
+        "messages.open",
+        "messages.open_conversation",
+        "messages.draft"
+      ],
+      "latency_ms": 919,
+      "outcome": "selected",
+      "prompt": "Open Messages",
+      "selected": [
+        "messages.open"
+      ],
+      "tool": "messages.open",
+      "execution": {
+        "status": "not_executed",
+        "reason": "Read-only audit: the route was evaluated without invoking the selected capability."
+      }
+    },
+    {
+      "discovered": [
+        "messages.open_conversation",
+        "applications.open",
+        "browser.open_profile"
+      ],
+      "latency_ms": 1501,
+      "outcome": "selected",
+      "prompt": "Open my conversation with Sam",
+      "selected": [
+        "messages.open_conversation"
+      ],
+      "tool": "messages.open_conversation",
+      "execution": {
+        "status": "not_executed",
+        "reason": "Read-only audit: the route was evaluated without invoking the selected capability."
+      }
+    },
+    {
+      "discovered": [
+        "messages.search",
+        "messages.search_contacts",
+        "messages.open_conversation"
+      ],
+      "latency_ms": 2009,
+      "outcome": "selected",
+      "prompt": "Find messages from Sam about robotics",
+      "selected": [
+        "messages.search"
+      ],
+      "tool": "messages.search",
+      "execution": {
+        "status": "not_executed",
+        "reason": "Read-only audit: the route was evaluated without invoking the selected capability."
+      }
+    },
+    {
+      "discovered": [
+        "messages.search_contacts",
+        "messages.search",
+        "messages.open_conversation"
+      ],
+      "latency_ms": 1621,
+      "outcome": "selected",
+      "prompt": "Find Sam in my contacts",
+      "selected": [
+        "messages.search_contacts"
+      ],
+      "tool": "messages.search_contacts",
+      "execution": {
+        "status": "not_executed",
+        "reason": "Read-only audit: the route was evaluated without invoking the selected capability."
+      }
+    },
+    {
+      "discovered": [
+        "messages.send_draft",
+        "messages.draft",
+        "messages.triage"
+      ],
+      "latency_ms": 2188,
+      "outcome": "no_action",
+      "prompt": "Send the drafted message",
+      "selected": [],
+      "tool": "messages.send_draft",
+      "execution": {
+        "status": "not_executed",
+        "reason": "Read-only audit: the route was evaluated without invoking the selected capability."
+      }
+    },
+    {
+      "discovered": [
+        "messages.triage",
+        "messages.draft",
+        "messages.open"
+      ],
+      "latency_ms": 1419,
+      "outcome": "selected",
+      "prompt": "Show my last couple messages",
+      "selected": [
+        "messages.triage"
+      ],
+      "tool": "messages.triage",
+      "execution": {
+        "status": "not_executed",
+        "reason": "Read-only audit: the route was evaluated without invoking the selected capability."
+      }
+    },
+    {
+      "discovered": [],
+      "latency_ms": 1426,
+      "outcome": "no_action",
+      "prompt": "Append Content in Notion.",
+      "selected": [],
+      "tool": "notion.append_content",
+      "execution": {
+        "status": "not_executed",
+        "reason": "Read-only audit: the route was evaluated without invoking the selected capability."
+      }
+    },
+    {
+      "discovered": [],
+      "latency_ms": 2042,
+      "outcome": "no_action",
+      "prompt": "Archive Page in Notion.",
+      "selected": [],
+      "tool": "notion.archive_page",
+      "execution": {
+        "status": "not_executed",
+        "reason": "Read-only audit: the route was evaluated without invoking the selected capability."
+      }
+    },
+    {
+      "discovered": [],
+      "latency_ms": 1727,
+      "outcome": "needs_second_pass",
+      "prompt": "Create Database Item in Notion.",
+      "selected": [
+        "search_tools"
+      ],
+      "tool": "notion.create_database_item",
+      "execution": {
+        "status": "not_executed",
+        "reason": "Read-only audit: the route was evaluated without invoking the selected capability."
+      }
+    },
+    {
+      "discovered": [],
+      "latency_ms": 2596,
+      "outcome": "no_action",
+      "prompt": "Create Page in Notion.",
+      "selected": [],
+      "tool": "notion.create_page",
+      "execution": {
+        "status": "not_executed",
+        "reason": "Read-only audit: the route was evaluated without invoking the selected capability."
+      }
+    },
+    {
+      "discovered": [],
+      "latency_ms": 1242,
+      "outcome": "no_action",
+      "prompt": "Open Page in Notion.",
+      "selected": [],
+      "tool": "notion.open_page",
+      "execution": {
+        "status": "not_executed",
+        "reason": "Read-only audit: the route was evaluated without invoking the selected capability."
+      }
+    },
+    {
+      "discovered": [],
+      "latency_ms": 2034,
+      "outcome": "no_action",
+      "prompt": "Query Database in Notion.",
+      "selected": [],
+      "tool": "notion.query_database",
+      "execution": {
+        "status": "not_executed",
+        "reason": "Read-only audit: the route was evaluated without invoking the selected capability."
+      }
+    },
+    {
+      "discovered": [],
+      "latency_ms": 1456,
+      "outcome": "no_action",
+      "prompt": "Read Database in Notion.",
+      "selected": [],
+      "tool": "notion.read_database",
+      "execution": {
+        "status": "not_executed",
+        "reason": "Read-only audit: the route was evaluated without invoking the selected capability."
+      }
+    },
+    {
+      "discovered": [],
+      "latency_ms": 1487,
+      "outcome": "no_action",
+      "prompt": "Read Page in Notion.",
+      "selected": [],
+      "tool": "notion.read_page",
+      "execution": {
+        "status": "not_executed",
+        "reason": "Read-only audit: the route was evaluated without invoking the selected capability."
+      }
+    },
+    {
+      "discovered": [],
+      "latency_ms": 1501,
+      "outcome": "no_action",
+      "prompt": "Search in Notion.",
+      "selected": [],
+      "tool": "notion.search",
+      "execution": {
+        "status": "not_executed",
+        "reason": "Read-only audit: the route was evaluated without invoking the selected capability."
+      }
+    },
+    {
+      "discovered": [],
+      "latency_ms": 1696,
+      "outcome": "needs_second_pass",
+      "prompt": "Search Databases in Notion.",
+      "selected": [
+        "search_tools"
+      ],
+      "tool": "notion.search_databases",
+      "execution": {
+        "status": "not_executed",
+        "reason": "Read-only audit: the route was evaluated without invoking the selected capability."
+      }
+    },
+    {
+      "discovered": [],
+      "latency_ms": 2203,
+      "outcome": "no_action",
+      "prompt": "Update Database Item in Notion.",
+      "selected": [],
+      "tool": "notion.update_database_item",
+      "execution": {
+        "status": "not_executed",
+        "reason": "Read-only audit: the route was evaluated without invoking the selected capability."
+      }
+    },
+    {
+      "discovered": [],
+      "latency_ms": 1604,
+      "outcome": "no_action",
+      "prompt": "Update Page in Notion.",
+      "selected": [],
+      "tool": "notion.update_page",
+      "execution": {
+        "status": "not_executed",
+        "reason": "Read-only audit: the route was evaluated without invoking the selected capability."
+      }
+    },
+    {
+      "discovered": [
+        "obsidian.append_note",
+        "obsidian.create_note",
+        "obsidian.open_note"
+      ],
+      "latency_ms": 2022,
+      "outcome": "no_action",
+      "prompt": "Append this decision to the note",
+      "selected": [],
+      "tool": "obsidian.append_note",
+      "execution": {
+        "status": "not_executed",
+        "reason": "Read-only audit: the route was evaluated without invoking the selected capability."
+      }
+    },
+    {
+      "discovered": [
+        "obsidian.create_note",
+        "obsidian.search",
+        "finder.create_folder"
+      ],
+      "latency_ms": 2288,
+      "outcome": "selected",
+      "prompt": "Create a note in Projects",
+      "selected": [
+        "obsidian.create_note"
+      ],
+      "tool": "obsidian.create_note",
+      "execution": {
+        "status": "not_executed",
+        "reason": "Read-only audit: the route was evaluated without invoking the selected capability."
+      }
+    },
+    {
+      "discovered": [
+        "obsidian.open",
+        "obsidian.open_note",
+        "obsidian.append_note"
+      ],
+      "latency_ms": 961,
+      "outcome": "selected",
+      "prompt": "Open Obsidian",
+      "selected": [
+        "obsidian.open"
+      ],
+      "tool": "obsidian.open",
+      "execution": {
+        "status": "not_executed",
+        "reason": "Read-only audit: the route was evaluated without invoking the selected capability."
+      }
+    },
+    {
+      "discovered": [
+        "obsidian.open_note",
+        "obsidian.open",
+        "obsidian.append_note"
+      ],
+      "latency_ms": 2421,
+      "outcome": "no_action",
+      "prompt": "Open this note in Obsidian",
+      "selected": [],
+      "tool": "obsidian.open_note",
+      "execution": {
+        "status": "not_executed",
+        "reason": "Read-only audit: the route was evaluated without invoking the selected capability."
+      }
+    },
+    {
+      "discovered": [
+        "obsidian.read_note",
+        "obsidian.append_note",
+        "obsidian.create_note"
+      ],
+      "latency_ms": 1348,
+      "outcome": "no_action",
+      "prompt": "Read this Obsidian note",
+      "selected": [],
+      "tool": "obsidian.read_note",
+      "execution": {
+        "status": "not_executed",
+        "reason": "Read-only audit: the route was evaluated without invoking the selected capability."
+      }
+    },
+    {
+      "discovered": [
+        "obsidian.search",
+        "finder.search",
+        "cancel_action"
+      ],
+      "latency_ms": 2085,
+      "outcome": "selected",
+      "prompt": "Find my Nexus architecture notes",
+      "selected": [
+        "obsidian.search"
+      ],
+      "tool": "obsidian.search",
+      "execution": {
+        "status": "not_executed",
+        "reason": "Read-only audit: the route was evaluated without invoking the selected capability."
+      }
+    },
+    {
+      "discovered": [
+        "obsidian.update_note",
+        "obsidian.append_note",
+        "obsidian.create_note"
+      ],
+      "latency_ms": 1471,
+      "outcome": "no_action",
+      "prompt": "Update this Obsidian note",
+      "selected": [],
+      "tool": "obsidian.update_note",
+      "execution": {
+        "status": "not_executed",
+        "reason": "Read-only audit: the route was evaluated without invoking the selected capability."
+      }
+    },
+    {
+      "discovered": [
+        "photos.add_to_album",
+        "photos.copy_results",
+        "photos.export"
+      ],
+      "latency_ms": 1639,
+      "outcome": "no_action",
+      "prompt": "Add these photos to that album",
+      "selected": [],
+      "tool": "photos.add_to_album",
+      "execution": {
+        "status": "not_executed",
+        "reason": "Read-only audit: the route was evaluated without invoking the selected capability."
+      }
+    },
+    {
+      "discovered": [
+        "photos.copy_results",
+        "finder.copy",
+        "github.search"
+      ],
+      "latency_ms": 2163,
+      "outcome": "no_action",
+      "prompt": "Copy these results to my project",
+      "selected": [],
+      "tool": "photos.copy_results",
+      "execution": {
+        "status": "not_executed",
+        "reason": "Read-only audit: the route was evaluated without invoking the selected capability."
+      }
+    },
+    {
+      "discovered": [
+        "photos.create_album",
+        "photos.add_to_album",
+        "photos.copy_results"
+      ],
+      "latency_ms": 1213,
+      "outcome": "selected",
+      "prompt": "Create a Photos album named Robotics",
+      "selected": [
+        "photos.create_album"
+      ],
+      "tool": "photos.create_album",
+      "execution": {
+        "status": "not_executed",
+        "reason": "Read-only audit: the route was evaluated without invoking the selected capability."
+      }
+    },
+    {
+      "discovered": [
+        "photos.export",
+        "photos.add_to_album",
+        "photos.copy_results"
+      ],
+      "latency_ms": 1593,
+      "outcome": "no_action",
+      "prompt": "Export these photos to Downloads",
+      "selected": [],
+      "tool": "photos.export",
+      "execution": {
+        "status": "not_executed",
+        "reason": "Read-only audit: the route was evaluated without invoking the selected capability."
+      }
+    },
+    {
+      "discovered": [
+        "photos.open",
+        "photos.open_result",
+        "photos.add_to_album"
+      ],
+      "latency_ms": 1010,
+      "outcome": "selected",
+      "prompt": "Open Photos",
+      "selected": [
+        "photos.open"
+      ],
+      "tool": "photos.open",
+      "execution": {
+        "status": "not_executed",
+        "reason": "Read-only audit: the route was evaluated without invoking the selected capability."
+      }
+    },
+    {
+      "discovered": [
+        "photos.open_result",
+        "photos.copy_results",
+        "photos.open"
+      ],
+      "latency_ms": 2373,
+      "outcome": "no_action",
+      "prompt": "Open this photo result",
+      "selected": [],
+      "tool": "photos.open_result",
+      "execution": {
+        "status": "not_executed",
+        "reason": "Read-only audit: the route was evaluated without invoking the selected capability."
+      }
+    },
+    {
+      "discovered": [
+        "photos.search",
+        "youtube_search",
+        "finder.search"
+      ],
+      "latency_ms": 2829,
+      "outcome": "no_action",
+      "prompt": "Find favorite videos from last month",
+      "selected": [],
+      "tool": "photos.search",
+      "execution": {
+        "status": "not_executed",
+        "reason": "Read-only audit: the route was evaluated without invoking the selected capability."
+      }
+    },
+    {
+      "discovered": [
+        "preview.combine_pdfs",
+        "finder.search",
+        "git.stage"
+      ],
+      "latency_ms": 2655,
+      "outcome": "no_action",
+      "prompt": "Combine these PDFs in order",
+      "selected": [],
+      "tool": "preview.combine_pdfs",
+      "execution": {
+        "status": "not_executed",
+        "reason": "Read-only audit: the route was evaluated without invoking the selected capability."
+      }
+    },
+    {
+      "discovered": [
+        "preview.export",
+        "photos.export",
+        "preview.combine_pdfs"
+      ],
+      "latency_ms": 2239,
+      "outcome": "no_action",
+      "prompt": "Export this image as PNG",
+      "selected": [],
+      "tool": "preview.export",
+      "execution": {
+        "status": "not_executed",
+        "reason": "Read-only audit: the route was evaluated without invoking the selected capability."
+      }
+    },
+    {
+      "discovered": [
+        "preview.open",
+        "preview.open_at_page",
+        "applications.open"
+      ],
+      "latency_ms": 2706,
+      "outcome": "no_action",
+      "prompt": "Open this document",
+      "selected": [],
+      "tool": "preview.open",
+      "execution": {
+        "status": "not_executed",
+        "reason": "Read-only audit: the route was evaluated without invoking the selected capability."
+      }
+    },
+    {
+      "discovered": [
+        "preview.open_at_page",
+        "preview.open",
+        "preview.combine_pdfs"
+      ],
+      "latency_ms": 1691,
+      "outcome": "no_action",
+      "prompt": "Open this PDF at page 4",
+      "selected": [],
+      "tool": "preview.open_at_page",
+      "execution": {
+        "status": "not_executed",
+        "reason": "Read-only audit: the route was evaluated without invoking the selected capability."
+      }
+    },
+    {
+      "discovered": [],
+      "latency_ms": 1485,
+      "outcome": "no_action",
+      "prompt": "Add Reaction in Slack.",
+      "selected": [],
+      "tool": "slack.add_reaction",
+      "execution": {
+        "status": "not_executed",
+        "reason": "Read-only audit: the route was evaluated without invoking the selected capability."
+      }
+    },
+    {
+      "discovered": [],
+      "latency_ms": 1844,
+      "outcome": "no_action",
+      "prompt": "Draft Message in Slack.",
+      "selected": [],
+      "tool": "slack.draft_message",
+      "execution": {
+        "status": "not_executed",
+        "reason": "Read-only audit: the route was evaluated without invoking the selected capability."
+      }
+    },
+    {
+      "discovered": [],
+      "latency_ms": 1508,
+      "outcome": "needs_second_pass",
+      "prompt": "Get Channel in Slack.",
+      "selected": [
+        "search_tools"
+      ],
+      "tool": "slack.get_channel",
+      "execution": {
+        "status": "not_executed",
+        "reason": "Read-only audit: the route was evaluated without invoking the selected capability."
+      }
+    },
+    {
+      "discovered": [],
+      "latency_ms": 1451,
+      "outcome": "no_action",
+      "prompt": "Get User in Slack.",
+      "selected": [],
+      "tool": "slack.get_user",
+      "execution": {
+        "status": "not_executed",
+        "reason": "Read-only audit: the route was evaluated without invoking the selected capability."
+      }
+    },
+    {
+      "discovered": [],
+      "latency_ms": 2300,
+      "outcome": "needs_second_pass",
+      "prompt": "List Channels in Slack.",
+      "selected": [
+        "search_tools"
+      ],
+      "tool": "slack.list_channels",
+      "execution": {
+        "status": "not_executed",
+        "reason": "Read-only audit: the route was evaluated without invoking the selected capability."
+      }
+    },
+    {
+      "discovered": [],
+      "latency_ms": 1440,
+      "outcome": "no_action",
+      "prompt": "List Recent Messages in Slack.",
+      "selected": [],
+      "tool": "slack.list_recent_messages",
+      "execution": {
+        "status": "not_executed",
+        "reason": "Read-only audit: the route was evaluated without invoking the selected capability."
+      }
+    },
+    {
+      "discovered": [],
+      "latency_ms": 1312,
+      "outcome": "no_action",
+      "prompt": "Open Channel in Slack.",
+      "selected": [],
+      "tool": "slack.open_channel",
+      "execution": {
+        "status": "not_executed",
+        "reason": "Read-only audit: the route was evaluated without invoking the selected capability."
+      }
+    },
+    {
+      "discovered": [],
+      "latency_ms": 1307,
+      "outcome": "no_action",
+      "prompt": "Read Channel in Slack.",
+      "selected": [],
+      "tool": "slack.read_channel",
+      "execution": {
+        "status": "not_executed",
+        "reason": "Read-only audit: the route was evaluated without invoking the selected capability."
+      }
+    },
+    {
+      "discovered": [],
+      "latency_ms": 1650,
+      "outcome": "needs_second_pass",
+      "prompt": "Read Thread in Slack.",
+      "selected": [
+        "search_tools"
+      ],
+      "tool": "slack.read_thread",
+      "execution": {
+        "status": "not_executed",
+        "reason": "Read-only audit: the route was evaluated without invoking the selected capability."
+      }
+    },
+    {
+      "discovered": [],
+      "latency_ms": 2181,
+      "outcome": "no_action",
+      "prompt": "Remove Reaction in Slack.",
+      "selected": [],
+      "tool": "slack.remove_reaction",
+      "execution": {
+        "status": "not_executed",
+        "reason": "Read-only audit: the route was evaluated without invoking the selected capability."
+      }
+    },
+    {
+      "discovered": [],
+      "latency_ms": 1605,
+      "outcome": "no_action",
+      "prompt": "Reply To Thread in Slack.",
+      "selected": [],
+      "tool": "slack.reply_to_thread",
+      "execution": {
+        "status": "not_executed",
+        "reason": "Read-only audit: the route was evaluated without invoking the selected capability."
+      }
+    },
+    {
+      "discovered": [],
+      "latency_ms": 1483,
+      "outcome": "no_action",
+      "prompt": "Search in Slack.",
+      "selected": [],
+      "tool": "slack.search",
+      "execution": {
+        "status": "not_executed",
+        "reason": "Read-only audit: the route was evaluated without invoking the selected capability."
+      }
+    },
+    {
+      "discovered": [],
+      "latency_ms": 1268,
+      "outcome": "no_action",
+      "prompt": "Send Draft in Slack.",
+      "selected": [],
+      "tool": "slack.send_draft",
+      "execution": {
+        "status": "not_executed",
+        "reason": "Read-only audit: the route was evaluated without invoking the selected capability."
+      }
+    },
+    {
+      "discovered": [],
+      "latency_ms": 1602,
+      "outcome": "no_action",
+      "prompt": "Upload File in Slack.",
+      "selected": [],
+      "tool": "slack.upload_file",
+      "execution": {
+        "status": "not_executed",
+        "reason": "Read-only audit: the route was evaluated without invoking the selected capability."
+      }
+    },
+    {
+      "discovered": [
+        "spotify.control",
+        "spotify.get_current_track",
+        "spotify.open"
+      ],
+      "latency_ms": 1455,
+      "outcome": "selected",
+      "prompt": "Pause Spotify",
+      "selected": [
+        "spotify.control"
+      ],
+      "tool": "spotify.control",
+      "execution": {
+        "status": "not_executed",
+        "reason": "Read-only audit: the route was evaluated without invoking the selected capability."
+      }
+    },
+    {
+      "discovered": [
+        "spotify.get_current_track",
+        "spotify.play",
+        "spotify.control"
+      ],
+      "latency_ms": 1318,
+      "outcome": "selected",
+      "prompt": "What is playing on Spotify?",
+      "selected": [
+        "spotify.get_current_track"
+      ],
+      "tool": "spotify.get_current_track",
+      "execution": {
+        "status": "not_executed",
+        "reason": "Read-only audit: the route was evaluated without invoking the selected capability."
+      }
+    },
+    {
+      "discovered": [
+        "spotify.open",
+        "spotify.play",
+        "spotify.search"
+      ],
+      "latency_ms": 1048,
+      "outcome": "selected",
+      "prompt": "Open Spotify",
+      "selected": [
+        "spotify.open"
+      ],
+      "tool": "spotify.open",
+      "execution": {
+        "status": "not_executed",
+        "reason": "Read-only audit: the route was evaluated without invoking the selected capability."
+      }
+    },
+    {
+      "discovered": [
+        "spotify.play",
+        "spotify.get_current_track",
+        "terminal.write_to_session"
+      ],
+      "latency_ms": 1815,
+      "outcome": "selected",
+      "prompt": "Play my focus playlist",
+      "selected": [
+        "spotify.play"
+      ],
+      "tool": "spotify.play",
+      "execution": {
+        "status": "not_executed",
+        "reason": "Read-only audit: the route was evaluated without invoking the selected capability."
+      }
+    },
+    {
+      "discovered": [
+        "spotify.search",
+        "spotify.play",
+        "spotify.control"
+      ],
+      "latency_ms": 1501,
+      "outcome": "selected",
+      "prompt": "Search Spotify for Summer by Calvin Harris",
+      "selected": [
+        "spotify.search"
+      ],
+      "tool": "spotify.search",
+      "execution": {
+        "status": "not_executed",
+        "reason": "Read-only audit: the route was evaluated without invoking the selected capability."
+      }
+    },
+    {
+      "discovered": [
+        "spotify.set_volume",
+        "spotify.control",
+        "system.set_volume"
+      ],
+      "latency_ms": 1499,
+      "outcome": "selected",
+      "prompt": "Set Spotify volume to 35 percent",
+      "selected": [
+        "spotify.set_volume"
+      ],
+      "tool": "spotify.set_volume",
+      "execution": {
+        "status": "not_executed",
+        "reason": "Read-only audit: the route was evaluated without invoking the selected capability."
+      }
+    },
+    {
+      "discovered": [
+        "system.get_battery",
+        "browser.visit_url",
+        "chrome.get_active_tab"
+      ],
+      "latency_ms": 1398,
+      "outcome": "selected",
+      "prompt": "How much battery is left?",
+      "selected": [
+        "system.get_battery"
+      ],
+      "tool": "system.get_battery",
+      "execution": {
+        "status": "not_executed",
+        "reason": "Read-only audit: the route was evaluated without invoking the selected capability."
+      }
+    },
+    {
+      "discovered": [
+        "system.get_display_state",
+        "git.diff",
+        "youtube_play_current"
+      ],
+      "latency_ms": 1368,
+      "outcome": "selected",
+      "prompt": "Show my displays",
+      "selected": [
+        "system.get_display_state"
+      ],
+      "tool": "system.get_display_state",
+      "execution": {
+        "status": "not_executed",
+        "reason": "Read-only audit: the route was evaluated without invoking the selected capability."
+      }
+    },
+    {
+      "discovered": [
+        "system.get_network_state",
+        "browser.open_profile",
+        "browser.run_task"
+      ],
+      "latency_ms": 1472,
+      "outcome": "selected",
+      "prompt": "Is my Mac online?",
+      "selected": [
+        "system.get_network_state"
+      ],
+      "tool": "system.get_network_state",
+      "execution": {
+        "status": "not_executed",
+        "reason": "Read-only audit: the route was evaluated without invoking the selected capability."
+      }
+    },
+    {
+      "discovered": [
+        "system.get_volume",
+        "spotify.get_current_track",
+        "spotify.set_volume"
+      ],
+      "latency_ms": 1386,
+      "outcome": "selected",
+      "prompt": "What is the volume?",
+      "selected": [
+        "system.get_volume"
+      ],
+      "tool": "system.get_volume",
+      "execution": {
+        "status": "not_executed",
+        "reason": "Read-only audit: the route was evaluated without invoking the selected capability."
+      }
+    },
+    {
+      "discovered": [
+        "system.open_setting",
+        "system.get_display_state",
+        "system.get_battery"
+      ],
+      "latency_ms": 1172,
+      "outcome": "selected",
+      "prompt": "Open Display settings",
+      "selected": [
+        "system.open_setting"
+      ],
+      "tool": "system.open_setting",
+      "execution": {
+        "status": "not_executed",
+        "reason": "Read-only audit: the route was evaluated without invoking the selected capability."
+      }
+    },
+    {
+      "discovered": [
+        "system.set_volume",
+        "spotify.set_volume",
+        "system.get_volume"
+      ],
+      "latency_ms": 1319,
+      "outcome": "selected",
+      "prompt": "Set volume to 30 percent",
+      "selected": [
+        "system.set_volume"
+      ],
+      "tool": "system.set_volume",
+      "execution": {
+        "status": "not_executed",
+        "reason": "Read-only audit: the route was evaluated without invoking the selected capability."
+      }
+    },
+    {
+      "discovered": [],
+      "latency_ms": 1321,
+      "outcome": "no_action",
+      "prompt": "Turn on Focus mode",
+      "selected": [],
+      "tool": "system.toggle_focus_mode",
+      "execution": {
+        "status": "not_executed",
+        "reason": "Read-only audit: the route was evaluated without invoking the selected capability."
+      }
+    },
+    {
+      "discovered": [
+        "terminal.cancel",
+        "terminal.run_command",
+        "terminal.get_active_session"
+      ],
+      "latency_ms": 1982,
+      "outcome": "no_action",
+      "prompt": "Stop that terminal command",
+      "selected": [],
+      "tool": "terminal.cancel",
+      "execution": {
+        "status": "not_executed",
+        "reason": "Read-only audit: the route was evaluated without invoking the selected capability."
+      }
+    },
+    {
+      "discovered": [
+        "terminal.get_active_session",
+        "terminal.write_to_session",
+        "terminal.cancel"
+      ],
+      "latency_ms": 1392,
+      "outcome": "selected",
+      "prompt": "Which terminal session is active?",
+      "selected": [
+        "terminal.get_active_session"
+      ],
+      "tool": "terminal.get_active_session",
+      "execution": {
+        "status": "not_executed",
+        "reason": "Read-only audit: the route was evaluated without invoking the selected capability."
+      }
+    },
+    {
+      "discovered": [
+        "terminal.get_output",
+        "vscode.run_command",
+        "terminal.run_command"
+      ],
+      "latency_ms": 2442,
+      "outcome": "no_action",
+      "prompt": "Show output from that command",
+      "selected": [],
+      "tool": "terminal.get_output",
+      "execution": {
+        "status": "not_executed",
+        "reason": "Read-only audit: the route was evaluated without invoking the selected capability."
+      }
+    },
+    {
+      "discovered": [
+        "terminal.open",
+        "terminal.open_tab",
+        "terminal.cancel"
+      ],
+      "latency_ms": 1026,
+      "outcome": "selected",
+      "prompt": "Open Terminal",
+      "selected": [
+        "terminal.open"
+      ],
+      "tool": "terminal.open",
+      "execution": {
+        "status": "not_executed",
+        "reason": "Read-only audit: the route was evaluated without invoking the selected capability."
+      }
+    },
+    {
+      "discovered": [
+        "terminal.open_tab",
+        "terminal.open",
+        "terminal.get_active_session"
+      ],
+      "latency_ms": 1115,
+      "outcome": "selected",
+      "prompt": "Open a new terminal tab",
+      "selected": [
+        "terminal.open_tab"
+      ],
+      "tool": "terminal.open_tab",
+      "execution": {
+        "status": "not_executed",
+        "reason": "Read-only audit: the route was evaluated without invoking the selected capability."
+      }
+    },
+    {
+      "discovered": [
+        "terminal.respond_to_prompt",
+        "terminal.get_output",
+        "terminal.run_command"
+      ],
+      "latency_ms": 3717,
+      "outcome": "selected",
+      "prompt": "Answer yes to the terminal prompt",
+      "selected": [
+        "terminal.respond_to_prompt"
+      ],
+      "tool": "terminal.respond_to_prompt",
+      "execution": {
+        "status": "not_executed",
+        "reason": "Read-only audit: the route was evaluated without invoking the selected capability."
+      }
+    },
+    {
+      "discovered": [
+        "terminal.run_command",
+        "git.status",
+        "git.checkout"
+      ],
+      "latency_ms": 1803,
+      "outcome": "selected",
+      "prompt": "Run git status in this project",
+      "selected": [
+        "terminal.run_command"
+      ],
+      "tool": "terminal.run_command",
+      "execution": {
+        "status": "not_executed",
+        "reason": "Read-only audit: the route was evaluated without invoking the selected capability."
+      }
+    },
+    {
+      "discovered": [
+        "terminal.write_to_session",
+        "terminal.open_tab",
+        "terminal.run_command"
+      ],
+      "latency_ms": 1708,
+      "outcome": "no_action",
+      "prompt": "Run this command in my visible terminal tab",
+      "selected": [],
+      "tool": "terminal.write_to_session",
+      "execution": {
+        "status": "not_executed",
+        "reason": "Read-only audit: the route was evaluated without invoking the selected capability."
+      }
+    },
+    {
+      "discovered": [
+        "vscode.edit_file",
+        "finder.copy",
+        "finder.move"
+      ],
+      "latency_ms": 2468,
+      "outcome": "no_action",
+      "prompt": "Replace this exact function in the file",
+      "selected": [],
+      "tool": "vscode.edit_file",
+      "execution": {
+        "status": "not_executed",
+        "reason": "Read-only audit: the route was evaluated without invoking the selected capability."
+      }
+    },
+    {
+      "discovered": [
+        "vscode.get_active_workspace",
+        "vscode.search_workspace",
+        "vscode.edit_file"
+      ],
+      "latency_ms": 1127,
+      "outcome": "selected",
+      "prompt": "Which VS Code workspace is active?",
+      "selected": [
+        "vscode.get_active_workspace"
+      ],
+      "tool": "vscode.get_active_workspace",
+      "execution": {
+        "status": "not_executed",
+        "reason": "Read-only audit: the route was evaluated without invoking the selected capability."
+      }
+    },
+    {
+      "discovered": [
+        "vscode.open",
+        "vscode.open_file",
+        "vscode.open_project"
+      ],
+      "latency_ms": 1258,
+      "outcome": "selected",
+      "prompt": "Open VS Code",
+      "selected": [
+        "vscode.open"
+      ],
+      "tool": "vscode.open",
+      "execution": {
+        "status": "not_executed",
+        "reason": "Read-only audit: the route was evaluated without invoking the selected capability."
+      }
+    },
+    {
+      "discovered": [
+        "vscode.open_file",
+        "xcode.open_file",
+        "finder.open"
+      ],
+      "latency_ms": 1350,
+      "outcome": "no_action",
+      "prompt": "Open this file at line 20",
+      "selected": [],
+      "tool": "vscode.open_file",
+      "execution": {
+        "status": "not_executed",
+        "reason": "Read-only audit: the route was evaluated without invoking the selected capability."
+      }
+    },
+    {
+      "discovered": [
+        "vscode.open_project",
+        "vscode.open",
+        "vscode.open_file"
+      ],
+      "latency_ms": 1972,
+      "outcome": "no_action",
+      "prompt": "Open this project in VS Code",
+      "selected": [],
+      "tool": "vscode.open_project",
+      "execution": {
+        "status": "not_executed",
+        "reason": "Read-only audit: the route was evaluated without invoking the selected capability."
+      }
+    },
+    {
+      "discovered": [
+        "vscode.run_command",
+        "git.diff",
+        "vscode.search_workspace"
+      ],
+      "latency_ms": 1614,
+      "outcome": "selected",
+      "prompt": "Show VS Code command palette",
+      "selected": [
+        "vscode.run_command"
+      ],
+      "tool": "vscode.run_command",
+      "execution": {
+        "status": "not_executed",
+        "reason": "Read-only audit: the route was evaluated without invoking the selected capability."
+      }
+    },
+    {
+      "discovered": [
+        "vscode.search_workspace",
+        "finder.search",
+        "github.search"
+      ],
+      "latency_ms": 1772,
+      "outcome": "selected",
+      "prompt": "Search this workspace for NotchGeometry",
+      "selected": [
+        "vscode.search_workspace"
+      ],
+      "tool": "vscode.search_workspace",
+      "execution": {
+        "status": "not_executed",
+        "reason": "Read-only audit: the route was evaluated without invoking the selected capability."
+      }
+    },
+    {
+      "discovered": [
+        "xcode.build",
+        "xcode.run",
+        "xcode.test"
+      ],
+      "latency_ms": 2008,
+      "outcome": "no_action",
+      "prompt": "Build this Xcode scheme",
+      "selected": [],
+      "tool": "xcode.build",
+      "execution": {
+        "status": "not_executed",
+        "reason": "Read-only audit: the route was evaluated without invoking the selected capability."
+      }
+    },
+    {
+      "discovered": [
+        "xcode.get_build_status",
+        "xcode.build",
+        "xcode.open"
+      ],
+      "latency_ms": 1464,
+      "outcome": "no_action",
+      "prompt": "How did the Xcode build go?",
+      "selected": [],
+      "tool": "xcode.get_build_status",
+      "execution": {
+        "status": "not_executed",
+        "reason": "Read-only audit: the route was evaluated without invoking the selected capability."
+      }
+    },
+    {
+      "discovered": [
+        "xcode.open",
+        "xcode.open_file",
+        "xcode.open_project"
+      ],
+      "latency_ms": 1018,
+      "outcome": "selected",
+      "prompt": "Open Xcode",
+      "selected": [
+        "xcode.open"
+      ],
+      "tool": "xcode.open",
+      "execution": {
+        "status": "not_executed",
+        "reason": "Read-only audit: the route was evaluated without invoking the selected capability."
+      }
+    },
+    {
+      "discovered": [
+        "xcode.open_file",
+        "xcode.open",
+        "xcode.open_project"
+      ],
+      "latency_ms": 1598,
+      "outcome": "no_action",
+      "prompt": "Open this file in Xcode",
+      "selected": [],
+      "tool": "xcode.open_file",
+      "execution": {
+        "status": "not_executed",
+        "reason": "Read-only audit: the route was evaluated without invoking the selected capability."
+      }
+    },
+    {
+      "discovered": [
+        "xcode.open_project",
+        "xcode.open",
+        "xcode.open_file"
+      ],
+      "latency_ms": 1584,
+      "outcome": "no_action",
+      "prompt": "Open this Xcode project",
+      "selected": [],
+      "tool": "xcode.open_project",
+      "execution": {
+        "status": "not_executed",
+        "reason": "Read-only audit: the route was evaluated without invoking the selected capability."
+      }
+    },
+    {
+      "discovered": [
+        "xcode.run",
+        "xcode.build",
+        "xcode.test"
+      ],
+      "latency_ms": 3280,
+      "outcome": "no_action",
+      "prompt": "Run this Xcode scheme",
+      "selected": [],
+      "tool": "xcode.run",
+      "execution": {
+        "status": "not_executed",
+        "reason": "Read-only audit: the route was evaluated without invoking the selected capability."
+      }
+    },
+    {
+      "discovered": [
+        "xcode.test",
+        "xcode.run",
+        "xcode.build"
+      ],
+      "latency_ms": 1513,
+      "outcome": "no_action",
+      "prompt": "Test this Xcode scheme",
+      "selected": [],
+      "tool": "xcode.test",
+      "execution": {
+        "status": "not_executed",
+        "reason": "Read-only audit: the route was evaluated without invoking the selected capability."
+      }
+    },
+    {
+      "discovered": [
+        "youtube_fullscreen",
+        "youtube_play",
+        "youtube_play_current"
+      ],
+      "latency_ms": 1544,
+      "outcome": "selected",
+      "prompt": "Make this YouTube video full screen",
+      "selected": [
+        "youtube_fullscreen"
+      ],
+      "tool": "youtube_fullscreen",
+      "execution": {
+        "status": "not_executed",
+        "reason": "Read-only audit: the route was evaluated without invoking the selected capability."
+      }
+    },
+    {
+      "discovered": [
+        "youtube_play",
+        "youtube_search",
+        "youtube_play_current"
+      ],
+      "latency_ms": 3284,
+      "outcome": "no_action",
+      "prompt": "Play the selected YouTube search result",
+      "selected": [],
+      "tool": "youtube_play",
+      "execution": {
+        "status": "not_executed",
+        "reason": "Read-only audit: the route was evaluated without invoking the selected capability."
+      }
+    },
+    {
+      "discovered": [
+        "youtube_play_current",
+        "youtube_fullscreen",
+        "youtube_play"
+      ],
+      "latency_ms": 1484,
+      "outcome": "selected",
+      "prompt": "Play the YouTube video I already have open",
+      "selected": [
+        "youtube_play_current"
+      ],
+      "tool": "youtube_play_current",
+      "execution": {
+        "status": "not_executed",
+        "reason": "Read-only audit: the route was evaluated without invoking the selected capability."
+      }
+    },
+    {
+      "discovered": [
+        "youtube_search",
+        "spotify.play",
+        "youtube_play"
+      ],
+      "latency_ms": 1134,
+      "outcome": "selected",
+      "prompt": "Find a calculus tutorial to play",
+      "selected": [
+        "youtube_search"
+      ],
+      "tool": "youtube_search",
+      "execution": {
+        "status": "not_executed",
+        "reason": "Read-only audit: the route was evaluated without invoking the selected capability."
+      }
+    }
+  ]
+}

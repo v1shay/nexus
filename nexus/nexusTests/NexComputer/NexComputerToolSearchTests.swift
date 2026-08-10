@@ -639,7 +639,7 @@ final class NexComputerToolSearchTests: XCTestCase {
         )
     }
 
-    func testDuplicateSemanticActionsCollapseDeterministically() {
+    func testDistinctActionIDsWithSharedMetadataRemainDiscoverable() {
         let first = tool(
             name: "mail.compose",
             description: "Create and send an email.",
@@ -654,7 +654,35 @@ final class NexComputerToolSearchTests: XCTestCase {
             provider: "Native",
             tags: ["email"]
         )
-        XCTAssertEqual(search("send an email", [duplicate, first]).map(\.tool), ["mail.compose"])
+        XCTAssertEqual(
+            Set(search("send an email", [duplicate, first]).map(\.tool)),
+            Set(["mail.compose", "mail.send"])
+        )
+    }
+
+    func testExactRegisteredExampleOutranksBroadDomainVocabulary() {
+        let workspaceSearch = tool(
+            name: "vscode.search_workspace",
+            description: "Search readable text files within an exact workspace directory.",
+            application: "Visual Studio Code",
+            provider: "VS Code CLI",
+            examples: ["Search this workspace for NotchGeometry"],
+            aliases: ["search workspace files"],
+            tags: ["vscode", "code", "editor", "workspace"]
+        )
+        let remoteSearch = tool(
+            name: "notion.search",
+            description: "Search a connected Notion workspace.",
+            application: "Notion",
+            provider: "Notion Connector",
+            aliases: ["search Notion workspace"],
+            tags: ["notion", "workspace", "search"]
+        )
+
+        XCTAssertEqual(
+            search("Search this workspace for NotchGeometry", [remoteSearch, workspaceSearch]).first?.tool,
+            "vscode.search_workspace"
+        )
     }
 
     func testInternalSearchActionUsesSharedRegistryAndReturnsExplicitAllowlist() async throws {
