@@ -1029,7 +1029,14 @@ actor NexGitHubActionCatalog {
             let result = try await cli.git(arguments, repository: URL(fileURLWithPath: path))
             return Self.result(result.stdout.isEmpty ? "Git push completed." : result.stdout, output: result.stdout)
         }
-        try await registry.register(manifest: Self.manifest("github.search", "Search GitHub repositories, issues, or pull requests through authenticated gh.", ["Search GitHub for Nexus issues"], ["query": .init(.string, required: true, description: "Complete GitHub search phrase for the requested repositories, issues, or pull requests."), "type": .init(.string, description: "Search domain. Use repositories unless the request specifically asks for issues or pull requests.", allowedValues: ["repositories", "issues", "pull_requests"]), "limit": .init(.integer, description: "Maximum number of matching results to return.", minimum: 1, maximum: 100)], method: .cli)) { input, _ in
+        try await registry.register(manifest: Self.manifest(
+            "github.search",
+            "Search GitHub repositories, issues, or pull requests through authenticated gh.",
+            ["Search GitHub for Nexus issues", "Find public GitHub repositories related to an agent project"],
+            ["query": .init(.string, required: true, description: "Complete GitHub search phrase for the requested repositories, issues, or pull requests."), "type": .init(.string, description: "Search domain. Use repositories unless the request specifically asks for issues or pull requests.", allowedValues: ["repositories", "issues", "pull_requests"]), "limit": .init(.integer, description: "Maximum number of matching results to return.", minimum: 1, maximum: 100)],
+            method: .cli,
+            aliases: ["find GitHub repositories", "look up public GitHub projects", "search public code repositories"]
+        )) { input, _ in
             let query = try required(input, "query")
             let result = try await cli.gh(
                 Self.githubSearchArguments(

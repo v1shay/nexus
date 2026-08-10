@@ -129,7 +129,10 @@ actor NexConnectorManager {
         for spec in declared.values where !registeredActions.contains(spec.action) {
             let manager = self
             do {
-                try await registry.register(manifest: Self.manifest(spec)) { arguments, _ in
+                try await registry.register(
+                    manifest: Self.manifest(spec),
+                    availability: { await manager.availability(for: spec) }
+                ) { arguments, _ in
                     try await manager.executeOrRequest(spec: spec, arguments: arguments)
                 }
             } catch NexToolError.duplicateRegistration {
@@ -201,6 +204,24 @@ actor NexConnectorManager {
 
     private static func isAvailable(spec: NexConnectorActionSpec, document: NexConnectorCapabilityDocument) -> Bool {
         document.connected && (spec.scope.isEmpty || document.grantedScopes.contains(spec.scope)) && document.capabilities.contains { $0.action == spec.action && $0.available }
+    }
+
+    private func availability(for spec: NexConnectorActionSpec) -> NexComputerAvailability {
+        guard let document = documents[spec.provider], document.connected else {
+            return .unavailable(
+                "\(spec.provider.capitalized) is not connected.",
+                recovery: "Connect \(spec.provider.capitalized) before using \(spec.action)."
+            )
+        }
+        guard let capability = document.capabilities.first(where: { $0.action == spec.action }), capability.available else {
+            let reason = document.capabilities.first(where: { $0.action == spec.action })?.providerLimitation
+                ?? "\(spec.provider.capitalized) has not granted the required scope."
+            return .unavailable(
+                reason,
+                recovery: "Reconnect \(spec.provider.capitalized) with \(spec.scope) permission before using \(spec.action)."
+            )
+        }
+        return .available
     }
 
     private static func humanPurpose(_ action: String) -> String {

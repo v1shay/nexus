@@ -71,6 +71,12 @@ final class NexPrimaryToolPlannerTests: XCTestCase {
         XCTAssertTrue(githubInstructions.contains("github.search"))
         XCTAssertTrue(githubInstructions.contains("public GitHub repository"))
 
+        let fallbackGithubInstructions = NexPrimaryToolPlanner.planningMessages(
+            context: context,
+            tools: tools() + [githubSearchTool()]
+        )[0].content
+        XCTAssertTrue(fallbackGithubInstructions.contains("call github.search rather than web_search"))
+
         let codexInstructions = NexPrimaryToolPlanner.nativePlanningMessages(
             context: context,
             tools: tools() + [codexContinuationTool()]

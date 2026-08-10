@@ -204,6 +204,17 @@ final class NexComputerExtendedActionTests: XCTestCase {
         XCTAssertEqual(candidates.first?.tool, "github.create_issue")
     }
 
+    func testGitHubPublicRepositorySearchIsDiscoverableWithoutAConnector() async throws {
+        let tools = NexToolRegistry()
+        let computer = NexComputerRegistry(toolRegistry: tools, permissionManager: NexComputerPermissionManager(backend: AuthorizedPermissions()))
+        try await NexGitHubActionCatalog().register(on: computer)
+        let candidates = NexToolSearchEngine().search(
+            query: "Find public GitHub repositories related to the Nexus agent project.",
+            documents: await tools.definitions().map { NexToolSearchEngine.Document(tool: $0) }
+        ).candidates
+        XCTAssertEqual(candidates.first?.tool, "github.search")
+    }
+
     func testGitHubPullRequestCreationRequiresAnExplicitSourceBranch() async throws {
         let tools = NexToolRegistry()
         let computer = NexComputerRegistry(toolRegistry: tools, permissionManager: NexComputerPermissionManager(backend: AuthorizedPermissions()))
@@ -398,6 +409,31 @@ final class NexComputerExtendedActionTests: XCTestCase {
         XCTAssertTrue(envelope.ok)
         XCTAssertEqual(envelope.data.object?["status"], .string("connection_required"))
         XCTAssertNotNil(envelope.data.object?["connectionId"]?.string)
+    }
+
+    func testDisconnectedConnectorIsOmittedFromPlanningButStillReturnsConnectionRecovery() async throws {
+        let tools = NexToolRegistry()
+        let computer = NexComputerRegistry(
+            toolRegistry: tools,
+            permissionManager: NexComputerPermissionManager(backend: AuthorizedPermissions())
+        )
+        let manager = NexConnectorManager(executor: MockConnectorExecutor())
+        try await manager.apply(.disconnected(.github), to: computer)
+
+        let availability = try await computer.availability(actionID: "github.search_repositories")
+        XCTAssertFalse(availability.isAvailable)
+        XCTAssertEqual(availability.recovery, "Connect Github before using github.search_repositories.")
+
+        let search = NexToolSearchService(registry: tools, computerRegistry: computer)
+        let candidates = await search.search(query: "Find public GitHub repositories", maximumResults: 8).candidates
+        XCTAssertFalse(candidates.contains { $0.tool == "github.search_repositories" })
+
+        let value = try await tools.execute(
+            name: "github.search_repositories",
+            arguments: ["query": .string("Nexus agent")]
+        )
+        XCTAssertEqual(value.object?["status"], .string("connection_required"))
+        XCTAssertNotNil(value.object?["connectionId"]?.string)
     }
 
     func testOfficialConnectorExecutorUsesAccountBoundCredentialAndStructuredResult() async throws {
