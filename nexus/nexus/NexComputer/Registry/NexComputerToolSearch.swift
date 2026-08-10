@@ -302,9 +302,18 @@ struct NexToolSearchEngine: Sendable {
     }
 
     private static func querySegments(_ query: String) -> [String] {
-        query
+        // An absolute path is a high-information argument. Punctuation or a
+        // simple conjunction after it often continues the same operation
+        // ("in /path, replace …"), rather than introducing an unrelated
+        // second request. Keep that operation intact while still honoring
+        // explicit sequencing and semicolon-separated commands. Queries
+        // without a concrete path retain normal compound-clause splitting.
+        let separator = containsAbsoluteFilesystemPath(query)
+            ? #"\s+(?:then|also)\s+|;"#
+            : #"\s+(?:and|then|also)\s+|[,;]"#
+        return query
             .components(separatedBy: try! NSRegularExpression(
-                pattern: #"\s+(?:and|then|also)\s+|[,;]"#,
+                pattern: separator,
                 options: [.caseInsensitive]
             ))
             .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }

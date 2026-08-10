@@ -257,6 +257,67 @@ final class NexComputerToolSearchTests: XCTestCase {
         )
     }
 
+    func testAbsoluteVSCodeFilePathRanksEditInsteadOfFinder() {
+        let finder = tool(
+            name: "finder.copy",
+            description: "Copy one file or folder into an allowed directory.",
+            application: "Finder",
+            provider: "Nexus Native Files",
+            tags: ["file", "folder", "filesystem"],
+            fields: ["path": .init(.string, required: true, description: "Exact existing source file or folder. Preserve every supplied path segment, including spaces.")]
+        )
+        let vscode = tool(
+            name: "vscode.edit_file",
+            description: "Perform an exact validated text replacement on disk and return a diff.",
+            application: "Visual Studio Code",
+            provider: "VS Code CLI",
+            tags: ["vscode", "code", "editor", "workspace", "developer"],
+            fields: ["path": .init(.string, required: true, description: "Absolute existing file to update. Preserve every supplied path segment, including spaces.")]
+        )
+
+        XCTAssertEqual(
+            search(
+                "In the generated proof file at /Users/example/Documents/nexus 2/VSCODE_ROUTING_PROOF.md, replace STATUS: PENDING with STATUS: VERIFIED.",
+                [finder, vscode]
+            ).first?.tool,
+            "vscode.edit_file"
+        )
+    }
+
+    func testAbsoluteFileEditKeepsCommaContinuationInOneRequest() {
+        let finder = tool(
+            name: "finder.copy",
+            description: "Copy one file or folder into an allowed directory.",
+            application: "Finder",
+            provider: "Nexus Native Files",
+            tags: ["file", "folder", "filesystem"],
+            fields: ["path": .init(.string, required: true, description: "Exact existing source file or folder. Preserve every supplied path segment, including spaces.")]
+        )
+        let vscode = tool(
+            name: "vscode.edit_file",
+            description: "Perform an exact validated text replacement on disk and return a diff.",
+            application: "Visual Studio Code",
+            provider: "VS Code CLI",
+            tags: ["vscode", "code", "editor", "workspace", "developer"],
+            fields: ["path": .init(.string, required: true, description: "Absolute existing file to update. Preserve every supplied path segment, including spaces.")]
+        )
+        let status = tool(
+            name: "codex.get_status",
+            description: "Get the last known structured status for a stable task.",
+            application: "Codex",
+            provider: "Codex CLI",
+            tags: ["task", "status"]
+        )
+
+        XCTAssertEqual(
+            search(
+                "In the generated proof file at /Users/example/Documents/nexus 2/VSCODE_ROUTING_PROOF.md, replace STATUS: PENDING with STATUS: VERIFIED.",
+                [finder, vscode, status]
+            ).first?.tool,
+            "vscode.edit_file"
+        )
+    }
+
     func testFinderNativePlanningPolicyTreatsConcretePathsAsActionable() {
         let finder = tool(
             name: "finder.copy",
