@@ -402,6 +402,51 @@ xcodebuild test -quiet -project nexus/nexus.xcodeproj -scheme nexus \
   ** BUILD SUCCEEDED **
 ```
 
+## 2026-08-10 disconnected connector availability repair (GPT-OSS-20B)
+
+The current catalog has 202 actions. With Google, GitHub OAuth, Notion, and
+Slack disconnected, the availability-probed count is 111, rather than treating
+the 87 account-bound connector actions as immediately executable. This does
+not remove their capability definitions: direct use still returns an exact
+connection-recovery object with a bounded, argument-bound pending request.
+
+| Prompt / operation | Expected / selected action | Result | Latency | Status |
+|---|---|---|---:|---|
+| Catalog/doctor probe before repair | disconnected connector actions | The host correctly reported all four providers as disconnected, but semantic discovery marked their actions as `is_available: true`, inflating the runnable count to 198 and exposing false candidates to the model. | under 1 s diagnostic | FAIL / fixed |
+| `Search GitHub for Nexus agent repositories.` | `github.search` | With disconnected connector actions omitted from the planning allowlist, GPT-OSS selected the working authenticated `gh` CLI action with `query: Nexus agent`, `type: repositories`, and `limit: 10`. The unavailable OAuth `github.search_repositories` action was not supplied to the planner. | 1.5 s planning | PASS after fix |
+| Explicit standalone connector execution: `github.search_repositories` with `query: Nexus agent` | `github.search_repositories` | The tool returned `connection_required`, provider `github`, a pending connection ID, and no items in 0 ms. It did not send an OAuth request, expose a token, or read a repository. | 0 ms execution | PASS (recovery evidence) |
+
+### Defect fixed in this increment
+
+Connector capability documents already tracked connection and scope state, but
+their manifests used an unconditional availability probe. Registry discovery
+now reads the manager's existing capability document: disconnected or
+missing-scope connector actions are unavailable to planning, with a concrete
+connection recovery. The runtime makes a narrow exception for a directly
+invoked connector action, allowing it to return the existing
+`connection_required` object so the authorized account-link flow remains
+reachable. Other unavailable action types remain blocked before execution.
+
+This is connection-state plumbing, not an application or prompt keyword
+route. A focused search action also declares its public-repository capability
+in its own examples/aliases, and both native and JSON planner paths describe
+its semantic `query`/`type` contract.
+
+Focused verification:
+
+```text
+xcodebuild test -quiet -project nexus/nexus.xcodeproj -scheme nexus \
+  -destination 'platform=macOS,arch=arm64,id=00006002-001869AC3489801E' \
+  -only-testing:nexusTests/NexPrimaryToolPlannerTests/testNativePlannerPromptIsCompactAndKeepsSemanticCoverageRules \
+  -only-testing:nexusTests/NexComputerExtendedActionTests/testConnectorCapabilityRegistrationHonorsScopesAndAvailability \
+  -only-testing:nexusTests/NexComputerExtendedActionTests/testDisconnectedConnectorIsOmittedFromPlanningButStillReturnsConnectionRecovery \
+  -only-testing:nexusTests/NexComputerExtendedActionTests/testGitHubPublicRepositorySearchIsDiscoverableWithoutAConnector
+  ** TEST SUCCEEDED **
+
+./scripts/build-nexus.sh --run
+  ** BUILD SUCCEEDED **
+```
+
 ## 2026-08-10 isolated Obsidian lifecycle and relative-path retrieval repair (GPT-OSS-20B)
 
 The planner model was local `gpt-oss:latest` (GPT-OSS 20B). Every operation

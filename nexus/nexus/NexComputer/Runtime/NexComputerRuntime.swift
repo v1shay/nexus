@@ -230,6 +230,12 @@ actor NexComputerRegistry {
         try entry.manifest.inputSchema.validate(arguments)
         let availability = await entry.availability()
         guard availability.isAvailable else {
+            if entry.manifest.implementationMethod == .connector {
+                // A disconnected connector is not a runnable candidate for
+                // planning, but direct invocation must still return the
+                // account-bound connection request that starts its recovery.
+                return try await entry.handler(arguments, context)
+            }
             throw NexComputerActionFailure(
                 code: "UNAVAILABLE",
                 message: availability.reason ?? "Action is unavailable.",
@@ -457,7 +463,7 @@ actor NexComputerRuntime {
             try resolvedManifest.inputSchema.validate(arguments)
 
             let availability = try await registry.availability(actionID: actionID)
-            guard availability.isAvailable else {
+            if !availability.isAvailable && resolvedManifest.implementationMethod != .connector {
                 return await finish(
                     executionID: executionID,
                     actionID: actionID,

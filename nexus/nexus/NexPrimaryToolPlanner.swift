@@ -152,6 +152,7 @@ enum NexPrimaryToolPlanner {
         tools: [NexRegisteredTool],
         date: Date = .now
     ) -> [NexusChatMessage] {
+        let names = Set(tools.map(\.name))
         let readableTools = tools
             .filter { $0.permission != .writeMemory && $0.permission != .forgetMemory }
             .map { tool in
@@ -169,6 +170,10 @@ enum NexPrimaryToolPlanner {
                 """
             }
             .joined(separator: "\n\n")
+
+        let githubSearchGuidance = names.contains("github.search")
+            ? "For a request to find or search public GitHub repositories, issues, or pull requests, call github.search rather than web_search. Give it a complete search phrase in query and use type repositories unless the request specifically asks for issues or pull requests."
+            : ""
 
         let formatter = DateFormatter()
         formatter.locale = Locale(identifier: "en_US_POSIX")
@@ -192,6 +197,8 @@ enum NexPrimaryToolPlanner {
         For Messages, resolve the intended contact with messages.search_contacts before drafting whenever the user gives a name or an ambiguous reference. If the wording depends on prior texts or a pronoun could change the intended recipient wording, use messages.search for that contact's relevant recent messages before drafting. Then use messages.draft with the exact resolved recipient and a natural final body; draft the message for the visible Messages card but never call messages.send_draft yourself. The user taps Send on that card, and Nexus asks for the final confirmation. Do not preserve an awkward quoted pronoun when its ordinary conversational meaning clearly changes in the recipient's voice; for example, “text Test he needs to get the milk” should draft “You need to get the milk.” when Test is the resolved recipient.
 
         `memory_write` is an advisory for Nex's validated background memory policy, not a registered action. Set it only for stable, user-supported preferences, corrections, decisions, workflows, explicit remembering, or explicit forgetting. Do not set it for requests, temporary facts, speculation, sensitive facts without an explicit user request, or assistant-generated claims. Do not call the policy-owned write tools memory_propose or memory_forget directly.
+
+        \(githubSearchGuidance)
 
         When native function definitions are supplied, call the required function directly and do not write an answer or JSON. When native functions are not supplied, your ENTIRE response must be exactly one JSON object. Never answer the user, narrate your reasoning, say what you are about to do, or add Markdown. A normal question such as “What model are you?” needs no action and must return exactly:
         {"actions":[],"memory_write":null}
