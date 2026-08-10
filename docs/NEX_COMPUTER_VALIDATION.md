@@ -978,3 +978,71 @@ the actor. A fresh `./scripts/build-nexus.sh` completed successfully with no
 `NexComputerExtendedActionTests` Xcode run again hung before test execution on
 this locked host and was stopped without affecting user data, so that run is
 not claimed as a pass.
+
+## 2026-08-10 connector discovery and action-schema repair (GPT-OSS-20B)
+
+This increment exercised the compiled headless Nexus registry with local
+`gpt-oss:latest` (GPT-OSS 20B). Google is not connected in this environment,
+so the two account-bound executions below intentionally stopped at the
+structured connection recovery. They did not read, send, modify, or delete any
+account data. The temporary pending-connection records contain only the test
+action and semantic arguments needed to resume after a future user connection.
+
+| Prompt / operation | Expected / selected action | Result | Latency | Status |
+|---|---|---|---:|---|
+| `Find the email thread about the project launch.` — first model pass | `search_tools` | GPT-OSS selected only the safe discovery action and supplied its compressed semantic follow-up query, `email thread project launch`; no unrelated Messages or local side effect was selected. | 1.71 s process wall time | PASS |
+| Same email query — `search_tools` second pass | `gmail.search` | The first candidate was the unavailable Gmail search capability, followed by related Contacts alternatives. The action remains unavailable because Google is disconnected and exposes the precise recovery. | 355 ms tool time; 0.57 s process wall time | PASS |
+| Execute `gmail.search` with `project launch` | `gmail.search` | Returned `connection_required`, `provider: google`, and a bound `connectionId`; no Gmail request was attempted. | 1 ms action time | EXPECTED CONNECTION LIMITATION |
+| `Search my calendar for design reviews.` — first model pass | `search_tools` | GPT-OSS selected safe discovery and supplied `design reviews calendar` for the second pass. | 1.87 s process wall time | PASS |
+| Same calendar query — `search_tools` second pass | `calendar.search_events` | The first candidate was the unavailable Google Calendar search action, rather than Messages, Contacts, or an event mutation. | 334 ms tool time; 0.57 s process wall time | PASS |
+| Execute `calendar.search_events` with `design reviews` | `calendar.search_events` | Returned `connection_required`, `provider: google`, and a bound `connectionId`; no Calendar API request was attempted. | 1 ms action time | EXPECTED CONNECTION LIMITATION |
+
+### Defects fixed in this increment
+
+1. Connector manifests identified Gmail, Calendar, Contacts, and other
+   provider capabilities only as an opaque provider action (for example,
+   `gmail search`). They now declare application-specific, action-owned
+   descriptions, application/provider labels, examples, aliases, and tags.
+   This is metadata consumed by the existing generic retrieval engine, not a
+   provider-keyword planner.
+2. Every connector action exposed the same broad, all-optional input schema.
+   That let a Calendar field contribute lexical evidence to Contacts and let a
+   model submit arguments an action's official endpoint never consumes. Each
+   Notion, Slack, Gmail, Calendar, Contacts, GitHub, and Discord action now
+   projects only its own fields, including required identifiers and required
+   write inputs. The compiler-enforced manifest schema is now the source of
+   both validation and discovery metadata.
+3. Two genuinely distinct actions could be lost before ranking when their
+   descriptions shared a domain vocabulary. Deduplication now compares the
+   complete declared semantic contract (description, examples, aliases, tags,
+   workflows, and schema) so only true duplicates collapse.
+4. GPT-OSS sometimes omits a verb in its second-pass `search_tools` query. A
+   provider-neutral ranking preference now recognizes an action declaring a
+   natural-language search-criteria field, which makes a query-capable search
+   action beat sibling actions that require a previously returned identifier.
+5. `calendar.respond_to_invitation` accepted a response argument but its
+   original planner never used it. It now follows the Google Calendar Events
+   patch contract: read the event, locate only the connected account's
+   attendee entry, preserve every attendee, change that entry's
+   `responseStatus`, then PATCH the complete attendee array. It rejects an
+   unsupported response, a missing attendee array, or an event where the
+   connected account is not an attendee. This avoids a no-op RSVP and avoids
+   accidentally replacing another invitee's response. See the official
+   [Google Events patch reference](https://developers.google.com/workspace/calendar/api/v3/reference/events/patch)
+   and its `attendees[].responseStatus` field.
+
+Verification:
+
+```text
+./scripts/build-nexus.sh
+  ** BUILD SUCCEEDED **
+
+/Applications/Xcode-beta.app/Contents/Developer/usr/bin/xcodebuild … build-for-testing
+  ** TEST BUILD SUCCEEDED **
+```
+
+The newly added focused XCTest method compiled with the test target. The normal
+Xcode test command still stalled before launching any test worker on this
+locked desktop; a direct `xctest` invocation cannot load the app-hosted test
+bundle because the standalone loader does not contain Nexus application
+symbols. Neither condition is represented as a test pass.

@@ -70,9 +70,11 @@ struct NexToolSearchEngine: Sendable {
         let segments = Self.querySegments(query)
         guard !segments.isEmpty else { return .init(query: query, candidates: []) }
 
-        let eligible = deduplicated(documents).filter {
+        let allDocuments = deduplicated(documents).filter {
             $0.tool.name != NexToolSearchService.actionName
-                && (availabilityPolicy == .includeUnavailable || $0.isAvailable)
+        }
+        let eligible = allDocuments.filter {
+            availabilityPolicy == .includeUnavailable || $0.isAvailable
         }
         var bestScores: [String: RankedDocument] = [:]
         // A compound request can contain one low-scoring but essential clause
@@ -81,12 +83,18 @@ struct NexToolSearchEngine: Sendable {
         // applying the small native-function budget below.
         var segmentLeaders: [String: RankedDocument] = [:]
         for segment in segments {
-            let ranked = eligible.compactMap { document -> RankedDocument? in
-                let score = score(document, for: segment)
-                guard score >= 4 else { return nil }
-                return RankedDocument(document: document, score: score)
+            let ranked = rankedDocuments(eligible, for: segment)
+            if availabilityPolicy == .omitUnavailable,
+               suppressesAvailableFallback(
+                unavailable: rankedDocuments(allDocuments.filter { !$0.isAvailable }, for: segment),
+                available: ranked
+               ) {
+                // An unavailable capability is a much stronger semantic fit
+                // than anything runnable. Do not turn a request for that
+                // capability into an unrelated local side effect; the caller
+                // can surface its connection or permission recovery instead.
+                continue
             }
-            .sorted(by: Self.rankOrder)
 
             if let leader = ranked.first {
                 let name = leader.document.tool.name
@@ -129,6 +137,32 @@ struct NexToolSearchEngine: Sendable {
                 )
             }
         )
+    }
+
+    private func rankedDocuments(
+        _ documents: [Document],
+        for query: String
+    ) -> [RankedDocument] {
+        let ranked = documents.compactMap { document -> RankedDocument? in
+            let score = score(document, for: query)
+            guard score >= 4 else { return nil }
+            return RankedDocument(document: document, score: score)
+        }
+        .sorted(by: Self.rankOrder)
+        return ranked
+    }
+
+    private func suppressesAvailableFallback(
+        unavailable: [RankedDocument],
+        available: [RankedDocument]
+    ) -> Bool {
+        guard let unavailable = unavailable.first else { return false }
+        guard let available = available.first else { return true }
+        // A small advantage can be ordinary ambiguity (for example, two
+        // equally appropriate public repository searches). Suppress a
+        // fallback only when the unavailable contract carries substantially
+        // stronger action-owned semantic evidence than every runnable one.
+        return unavailable.score >= available.score + 8
     }
 
     private func score(_ document: Document, for query: String) -> Double {
@@ -212,6 +246,16 @@ struct NexToolSearchEngine: Sendable {
            fields.contains(where: { $0.localizedCaseInsensitiveContains("owner/name") }) {
             score += 18
         }
+        // `search_tools` receives a model-written second-pass request, which
+        // often preserves only the object phrase (for example “email thread
+        // launch”) and drops the verb. An action that declares a dedicated
+        // natural-language query contract is a stronger match for that
+        // incomplete discovery request than a sibling action that needs a
+        // previously returned ID. This is schema-driven and applies equally
+        // to every provider; no app or tool identifiers participate.
+        if tool.schema.fields["query"]?.description?.localizedCaseInsensitiveContains("search criteria") == true {
+            score += 10
+        }
         return score
     }
 
@@ -281,12 +325,20 @@ struct NexToolSearchEngine: Sendable {
         var retained: [String: Document] = [:]
         for document in documents.sorted(by: { $0.tool.name < $1.tool.name }) {
             let tool = document.tool
-            let descriptionTerms = Set(Self.tokens(tool.description))
+            // Descriptions often intentionally share a domain vocabulary
+            // (for example email, inbox, and thread across Gmail actions).
+            // Collapse only tools whose full declared semantic contract is
+            // identical; otherwise distinct operations such as read-message
+            // and read-thread disappear before the model can choose between
+            // them.
+            let semanticTerms = Set(([
+                tool.description
+            ] + tool.examples + tool.aliases + tool.tags + tool.supportedWorkflows).flatMap(Self.tokens))
             let signature = [
                 Self.normalizedPhrase(tool.application),
                 Self.normalizedPhrase(tool.provider),
                 tool.schema.fields.keys.sorted().joined(separator: ","),
-                descriptionTerms.sorted().joined(separator: " ")
+                semanticTerms.sorted().joined(separator: " ")
             ].joined(separator: "|")
             if retained[signature] == nil { retained[signature] = document }
         }

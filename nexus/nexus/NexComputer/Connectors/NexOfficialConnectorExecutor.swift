@@ -70,14 +70,32 @@ actor NexOfficialConnectorExecutor: NexConnectorExecuting {
         if let draftID = arguments["draft_id"]?.string, let draft = localDrafts[draftID], draft.provider == provider {
             resolvedArguments = draft.arguments.merging(arguments) { _, current in current }
         }
+        if action == "calendar.respond_to_invitation" {
+            let value = try await respondToCalendarInvitation(
+                account: credential.account,
+                credential: credential,
+                arguments: resolvedArguments
+            )
+            return Self.completed(action: action, provider: provider, value: value)
+        }
         let plan = try NexConnectorRequestPlanner.plan(provider: providerID, action: action, arguments: resolvedArguments)
+        let value = try await perform(plan: plan, credential: credential, provider: providerID)
+        if let draftID = arguments["draft_id"]?.string { localDrafts[draftID] = nil }
+        return Self.completed(action: action, provider: provider, value: value)
+    }
+
+    private func perform(
+        plan: NexConnectorRequestPlan,
+        credential: NexConnectorCredential,
+        provider: NexConnectorProvider
+    ) async throws -> NexJSONValue {
         var request = URLRequest(url: plan.url)
         request.httpMethod = plan.method
         request.timeoutInterval = 55
         request.setValue("application/json", forHTTPHeaderField: "Accept")
         request.setValue("\(credential.tokenType) \(credential.accessToken)", forHTTPHeaderField: "Authorization")
         request.setValue("Nexus/1.0", forHTTPHeaderField: "User-Agent")
-        if providerID == .notion { request.setValue("2022-06-28", forHTTPHeaderField: "Notion-Version") }
+        if provider == .notion { request.setValue("2022-06-28", forHTTPHeaderField: "Notion-Version") }
         if let body = plan.body {
             request.setValue("application/json", forHTTPHeaderField: "Content-Type")
             request.httpBody = try JSONEncoder.connectorAPI.encode(body)
@@ -86,16 +104,79 @@ actor NexOfficialConnectorExecutor: NexConnectorExecuting {
         let (data, response) = try await transport.send(request)
         guard (200..<300).contains(response.statusCode) else {
             if response.statusCode == 401 || response.statusCode == 403 {
-                try? await session.markRevoked(providerID)
+                try? await session.markRevoked(provider)
             }
             throw NexToolError.executionFailed(
                 code: "connector_http_\(response.statusCode)",
-                message: Self.safeError(data: data, provider: providerID)
+                message: Self.safeError(data: data, provider: provider)
             )
         }
         try await session.markSuccessful(credential)
-        if let draftID = arguments["draft_id"]?.string { localDrafts[draftID] = nil }
-        let value = Self.safeJSON(data)
+        return Self.safeJSON(data)
+    }
+
+    /// Calendar's patch endpoint replaces array fields. To change only the
+    /// connected user's RSVP, first read the event, preserve every attendee,
+    /// and patch the complete attendee array with that account's response
+    /// updated. This avoids the previous no-op implementation and avoids
+    /// deleting other invitees as a side effect.
+    private func respondToCalendarInvitation(
+        account: String,
+        credential: NexConnectorCredential,
+        arguments: [String: NexJSONValue]
+    ) async throws -> NexJSONValue {
+        guard let response = arguments["response"]?.string,
+              ["accepted", "declined", "tentative"].contains(response) else {
+            throw NexToolError.executionFailed(
+                code: "calendar_response_invalid",
+                message: "response must be accepted, declined, or tentative."
+            )
+        }
+        let readPlan = try NexConnectorRequestPlanner.plan(
+            provider: .google,
+            action: "calendar.get_event",
+            arguments: arguments
+        )
+        let current = try await perform(plan: readPlan, credential: credential, provider: .google)
+        guard let attendees = current.object?["attendees"]?.array else {
+            throw NexToolError.executionFailed(
+                code: "calendar_attendees_unavailable",
+                message: "The event does not expose an attendee list, so Nexus cannot safely change the RSVP."
+            )
+        }
+        var foundAccount = false
+        let updatedAttendees = attendees.map { attendee -> NexJSONValue in
+            guard var object = attendee.object,
+                  let email = object["email"]?.string,
+                  email.caseInsensitiveCompare(account) == .orderedSame else {
+                return attendee
+            }
+            foundAccount = true
+            object["responseStatus"] = .string(response)
+            return .object(object)
+        }
+        guard foundAccount else {
+            throw NexToolError.executionFailed(
+                code: "calendar_self_attendee_missing",
+                message: "The connected Google account is not an attendee on this event, so Nexus will not change another person's RSVP."
+            )
+        }
+        guard let eventID = arguments["id"]?.string, !eventID.isEmpty else {
+            throw NexToolError.missingField("id")
+        }
+        let calendarID = arguments["calendar_id"]?.string ?? "primary"
+        let allowed = CharacterSet.urlPathAllowed.subtracting(CharacterSet(charactersIn: "/?#"))
+        let calendarPath = calendarID.addingPercentEncoding(withAllowedCharacters: allowed) ?? calendarID
+        let eventPath = eventID.addingPercentEncoding(withAllowedCharacters: allowed) ?? eventID
+        let patchPlan = NexConnectorRequestPlan(
+            method: "PATCH",
+            url: URL(string: "https://www.googleapis.com/calendar/v3/calendars/\(calendarPath)/events/\(eventPath)")!,
+            body: .object(["attendees": .array(updatedAttendees)])
+        )
+        return try await perform(plan: patchPlan, credential: credential, provider: .google)
+    }
+
+    private static func completed(action: String, provider: String, value: NexJSONValue) -> NexJSONValue {
         return .object([
             "display": .string(Self.display(action: action, value: value)),
             "status": .string("completed"),

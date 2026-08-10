@@ -587,6 +587,44 @@ final class NexComputerToolSearchTests: XCTestCase {
         XCTAssertEqual(included.first?.unavailableReason, "Slack is not connected.")
     }
 
+    func testDominantUnavailableCapabilityDoesNotFallBackToAnUnrelatedAction() {
+        let calendar = NexToolSearchEngine.Document(
+            tool: tool(
+                name: "calendar.search_events",
+                description: "Search events in a connected calendar.",
+                application: "Calendar",
+                provider: "Google Calendar",
+                tags: ["calendar", "event", "schedule", "search"]
+            ),
+            isAvailable: false,
+            unavailableReason: "Google is not connected."
+        )
+        let messages = NexToolSearchEngine.Document(
+            tool: tool(
+                name: "messages.search",
+                description: "Search local Messages conversations.",
+                application: "Messages",
+                provider: "Messages database",
+                tags: ["message", "conversation", "search"]
+            )
+        )
+
+        XCTAssertTrue(
+            engine.search(
+                query: "Search my calendar for design reviews.",
+                documents: [calendar, messages]
+            ).candidates.isEmpty
+        )
+        XCTAssertEqual(
+            engine.search(
+                query: "Search my calendar for design reviews.",
+                documents: [calendar, messages],
+                availabilityPolicy: .includeUnavailable
+            ).candidates.first?.tool,
+            "calendar.search_events"
+        )
+    }
+
     func testOneCharacterTypoStillDiscoversRegisteredCapability() {
         let screenshot = tool(
             name: "browser.screenshot",
