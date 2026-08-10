@@ -204,6 +204,14 @@ struct NexToolSearchEngine: Sendable {
            fields.contains(where: { $0.localizedCaseInsensitiveContains("absolute") && ($0.localizedCaseInsensitiveContains("folder") || $0.localizedCaseInsensitiveContains("path")) }) {
             score += 10
         }
+        // Owner/name is a compact structured identifier rather than ordinary
+        // prose. A field that explicitly declares that contract is stronger
+        // evidence than a generic verb match such as “open”. This remains
+        // schema-driven: no provider, tool, or application name is involved.
+        if Self.containsOwnerNameReference(query),
+           fields.contains(where: { $0.localizedCaseInsensitiveContains("owner/name") }) {
+            score += 18
+        }
         return score
     }
 
@@ -322,6 +330,13 @@ struct NexToolSearchEngine: Sendable {
 
     private static func containsAbsoluteFilesystemPath(_ text: String) -> Bool {
         text.range(of: #"(?:^|\s)/[^\s]+"#, options: .regularExpression) != nil
+    }
+
+    private static func containsOwnerNameReference(_ text: String) -> Bool {
+        text.range(
+            of: #"(?<![:/])[[:alnum:]_.-]+/[[:alnum:]_.-]+"#,
+            options: .regularExpression
+        ) != nil
     }
 
     private static func normalizedPhrase(_ text: String) -> String {
