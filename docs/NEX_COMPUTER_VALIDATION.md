@@ -378,6 +378,35 @@ Focused `NexComputerToolSearchTests` and `NexComputerExtendedActionTests`,
 plus the live Debug-host rebuild, passed. Computer Use visual inspection is
 pending only because the local Mac is locked; no bypass was attempted.
 
+## 2026-08-10 Preview generated-PDF workflow (GPT-OSS-20B)
+
+The planner model was local `gpt-oss:latest` (GPT-OSS 20B). Two letter-size,
+one-page PDFs with distinct blue/green headers were generated solely inside
+`.build/validation-fixtures/PDF Preview Proof`. The source, combined, exported,
+and rendered files are retained as generated validation artifacts; no existing
+user or repository file was changed or deleted.
+
+| Prompt / operation | Expected / selected action | Result | Latency | Status |
+|---|---|---|---:|---|
+| `Combine the generated PDF files …/FIRST.pdf and …/SECOND.pdf into …/COMBINED.pdf in that order.` | `preview.combine_pdfs` | GPT-OSS selected the supplied input order and exact output path. The 5 ms immutable confirmation was approved; Nexus returned two pages. PDF metadata reported two letter-size pages, and rendered page 1/page 2 visually showed the blue First Page followed by green Second Page without clipping. | 3.2 s plan; 5 ms preview; 23 ms run | PASS |
+| `Export the generated combined PDF at …/COMBINED.pdf to …/EXPORTED.pdf.` | `preview.export` | GPT-OSS selected the PDF export/copy action with exact generated paths. The 7 ms preview was approved; the export completed in 10 ms. Metadata and a complete two-page render confirmed the blue-first/green-second document stayed intact. | 2.5 s plan; 7 ms preview; 10 ms run | PASS |
+| `Open the generated combined PDF at …/COMBINED.pdf in Preview.` before path-schema repair | `preview.open` | Preview’s file-path field did not declare an absolute document contract, so the narrow discovery set contained VS Code and Xcode file-open actions instead. GPT-OSS emitted no action; nothing was opened. | 3.4 s plan | FAIL / fixed |
+| Same regular-open prompt after repair | `preview.open` | Preview was first in discovery; GPT-OSS preserved the exact space-containing PDF path and the live action opened it. | 4.1 s plan; 33 ms run | PASS after fix |
+| `Open page 2 of the generated combined PDF at …/COMBINED.pdf in Preview.` | `preview.open_at_page` | GPT-OSS selected the page-aware action with `page: 2` and the exact path. The live open completed successfully. | 2.4 s plan; 108 ms run | PASS |
+
+### Defect fixed in this increment
+
+Preview’s open, page-open, export, and combine contracts now explicitly
+describe their absolute existing-document, ordered-input, and distinct-output
+paths. The shared structural retrieval can therefore rank them against other
+path-capable applications without naming an application in the ranker. A
+regression makes Preview, VS Code, and Xcode compete for a natural PDF-open
+request and asserts Preview wins.
+
+Focused `NexComputerToolSearchTests` and `NexComputerExtendedActionTests`,
+plus the live Debug-host rebuild, passed. Source and combined/exported PDF
+pages were rendered with Poppler and visually inspected for layout and order.
+
 ## 2026-08-09 local Git initialization capability (GPT-OSS-20B)
 
 The Git catalog previously exposed only actions that require an existing
