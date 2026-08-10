@@ -484,7 +484,11 @@ final class NexusAppDelegate: NSObject, NSApplicationDelegate {
             headlessControlHost.attach(controller: notch)
             self?.installMenuBarOrb(for: notch)
             await NexusPermissionHealth.shared.requestCorePermissionsIfNeeded(
-                includeScreenRecording: notch.settings.shareScreenWithVisionModels
+                // Core onboarding is deliberately comprehensive. A vision
+                // model may be selected after launch, and deferring Screen
+                // Recording until then produces an avoidable second setup
+                // loop.
+                includeScreenRecording: true
             )
             notch.reconcilePermissions()
             // The optional NexCLI worker receives a local runtime lease and
@@ -1416,6 +1420,9 @@ final class NotchController: ObservableObject {
                 "input_monitoring": String(permissions.inputMonitoring),
                 "accessibility": String(permissions.accessibility),
                 "screen_recording": String(permissions.screenRecording),
+                "microphone": String(permissions.microphone),
+                "speech_recognition": String(permissions.speechRecognition),
+                "full_disk_access_messages": String(permissions.messagesFullDiskAccess),
                 "connect_enabled": String(connectController.enabled),
                 "connect_paired": String(connectController.isPaired),
                 "connect_role": connectController.role.rawValue,
@@ -1459,11 +1466,14 @@ final class NotchController: ObservableObject {
             return .init(ok: true, result: [
                 "input_monitoring": String(snapshot.inputMonitoring),
                 "accessibility": String(snapshot.accessibility),
-                "screen_recording": String(snapshot.screenRecording)
+                "screen_recording": String(snapshot.screenRecording),
+                "microphone": String(snapshot.microphone),
+                "speech_recognition": String(snapshot.speechRecognition),
+                "full_disk_access_messages": String(snapshot.messagesFullDiskAccess)
             ], error: nil)
         case "permission-open":
             guard let raw = request.arguments["value"], let service = NexusTCCService.cliService(raw) else {
-                return .init(ok: false, result: [:], error: "Use input-monitoring, accessibility, or screen-recording.")
+                return .init(ok: false, result: [:], error: "Use input-monitoring, accessibility, screen-recording, microphone, speech-recognition, or full-disk-access.")
             }
             NexusPermissionHealth.shared.openPermissionSettings(for: service)
             return .init(ok: true, result: ["opened": service.displayName], error: nil)
@@ -3474,6 +3484,7 @@ struct NexusPermissionSnapshot: Equatable {
     let screenRecording: Bool
     let microphone: Bool
     let speechRecognition: Bool
+    let messagesFullDiskAccess: Bool
 
     static var current: NexusPermissionSnapshot {
         .init(
@@ -3481,7 +3492,11 @@ struct NexusPermissionSnapshot: Equatable {
             accessibility: NexusGlobalHotkeyAccess.hasAccessibility,
             screenRecording: NexusScreenCapture.hasAccess,
             microphone: AVCaptureDevice.authorizationStatus(for: .audio) == .authorized,
-            speechRecognition: SFSpeechRecognizer.authorizationStatus() == .authorized
+            speechRecognition: SFSpeechRecognizer.authorizationStatus() == .authorized,
+            messagesFullDiskAccess: FileManager.default.isReadableFile(
+                atPath: FileManager.default.homeDirectoryForCurrentUser
+                    .appendingPathComponent("Library/Messages/chat.db").path
+            )
         )
     }
 
@@ -3492,6 +3507,7 @@ struct NexusPermissionSnapshot: Equatable {
         if !screenRecording { services.append(.screenCapture) }
         if !microphone { services.append(.microphone) }
         if !speechRecognition { services.append(.speechRecognition) }
+        if !messagesFullDiskAccess { services.append(.fullDiskAccess) }
         return services
     }
 }
@@ -3502,6 +3518,7 @@ enum NexusTCCService: String, CaseIterable {
     case screenCapture = "ScreenCapture"
     case microphone = "Microphone"
     case speechRecognition = "SpeechRecognition"
+    case fullDiskAccess = "FullDiskAccess"
 
     var displayName: String {
         switch self {
@@ -3510,6 +3527,7 @@ enum NexusTCCService: String, CaseIterable {
         case .screenCapture: "Screen Recording"
         case .microphone: "Microphone"
         case .speechRecognition: "Speech Recognition"
+        case .fullDiskAccess: "Full Disk Access"
         }
     }
 
@@ -3518,6 +3536,9 @@ enum NexusTCCService: String, CaseIterable {
         case "input-monitoring", "inputmonitoring", "listen-event": .listenEvent
         case "accessibility": .accessibility
         case "screen-recording", "screenrecording", "screen-capture": .screenCapture
+        case "microphone", "audio": .microphone
+        case "speech-recognition", "speechrecognition", "speech": .speechRecognition
+        case "full-disk-access", "fulldiskaccess", "full-disk": .fullDiskAccess
         default: nil
         }
     }
@@ -3569,9 +3590,12 @@ final class NexusPermissionHealth: ObservableObject {
     }
 
     func requestCorePermissionsIfNeeded(includeScreenRecording: Bool) async {
-        let needsPrivacyPrompt = !NexusPermissionSnapshot.current.microphone
-            || !NexusPermissionSnapshot.current.speechRecognition
-            || (includeScreenRecording && !NexusPermissionSnapshot.current.screenRecording)
+        let current = NexusPermissionSnapshot.current
+        let needsPrivacyPrompt = !current.inputMonitoring
+            || !current.accessibility
+            || !current.microphone
+            || !current.speechRecognition
+            || (includeScreenRecording && !current.screenRecording)
         // An accessory-style app launched behind another application can ask
         // Speech.framework for authorization without ever receiving a prompt.
         // Become active only when macOS must show a privacy alert, after the
@@ -3619,6 +3643,17 @@ final class NexusPermissionHealth: ObservableObject {
         }
         _ = NexusGlobalHotkeyAccess.requestInputMonitoringIfNeeded(prompt: true)
         _ = NexusGlobalHotkeyAccess.requestAccessibilityIfNeeded(prompt: true)
+        if AVCaptureDevice.authorizationStatus(for: .audio) == .notDetermined {
+            Task { [weak self] in
+                _ = await AVCaptureDevice.requestAccess(for: .audio)
+                await MainActor.run { self?.refresh() }
+            }
+        }
+        if SFSpeechRecognizer.authorizationStatus() == .notDetermined {
+            SFSpeechRecognizer.requestAuthorization { [weak self] _ in
+                Task { @MainActor in self?.refresh() }
+            }
+        }
         if denied.contains(.screenCapture) {
             _ = NexusScreenCapture.requestAccess(prompt: true)
         }
@@ -3667,6 +3702,8 @@ final class NexusPermissionHealth: ObservableObject {
             NexusGlobalHotkeyAccess.openPrivacyPane("Privacy_Microphone")
         case .speechRecognition:
             NexusGlobalHotkeyAccess.openPrivacyPane("Privacy_SpeechRecognition")
+        case .fullDiskAccess:
+            NexusGlobalHotkeyAccess.openPrivacyPane("Privacy_AllFiles")
         case nil:
             break
         }
