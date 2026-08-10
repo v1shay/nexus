@@ -162,11 +162,20 @@ enum NexComputerCLI {
             switch command {
             case "discover":
                 let availability = await env.registry.availabilitySnapshot()
-                output = await env.registry.manifests().map { manifest in Self.manifestJSON(manifest, availability: availability[manifest.actionID]) }
+                let manifests = await env.registry.manifests()
+                let extraTools = await additionalRegisteredTools(in: env, manifests: manifests)
+                output = manifests.map { manifest in
+                    Self.manifestJSON(manifest, availability: availability[manifest.actionID])
+                } + extraTools.map { tool in
+                    Self.registeredToolJSON(tool, availability: registeredToolAvailability(tool))
+                }
             case "apps":
                 output = Self.foundationJSON(await env.runtime.execute(actionID: "applications.list", arguments: [:]).data)
             case "tools":
-                output = await env.registry.manifests().map { Self.manifestJSON($0) }
+                let manifests = await env.registry.manifests()
+                let extraTools = await additionalRegisteredTools(in: env, manifests: manifests)
+                output = (manifests.map { Self.manifestJSON($0) } + extraTools.map { Self.registeredToolJSON($0) })
+                    .sorted { ($0["action"] as? String ?? "") < ($1["action"] as? String ?? "") }
             case "search":
                 guard arguments.count >= 2 else { throw CLIError.missing("query") }
                 output = try Self.object(try JSONEncoder.cli.encode(await env.search.search(query: arguments.dropFirst().joined(separator: " "), availabilityPolicy: .includeUnavailable)))
@@ -186,13 +195,33 @@ enum NexComputerCLI {
                 output = try await modelPlanAudit(model: model, offset: offset, limit: limit, environment: env)
             case "describe":
                 guard let action = arguments.dropFirst().first else { throw CLIError.missing("action") }
-                output = Self.manifestJSON(try await env.registry.manifest(actionID: action))
+                if await env.registry.contains(actionID: action) {
+                    output = Self.manifestJSON(try await env.registry.manifest(actionID: action))
+                } else if let tool = await env.tools.definitions().first(where: { $0.name == action }) {
+                    output = Self.registeredToolJSON(tool, availability: registeredToolAvailability(tool))
+                } else {
+                    throw NexToolError.notFound(action)
+                }
             case "execute", "dry-run":
                 guard let action = arguments.dropFirst().first else { throw CLIError.missing("action") }
                 let json = Self.value(after: "--json", in: arguments) ?? "{}"
                 guard let data = json.data(using: .utf8), let raw = try JSONSerialization.jsonObject(with: data) as? [String: Any] else { throw CLIError.invalidJSON }
                 let args = try raw.mapValues(Self.nexJSON)
-                let envelope = await env.runtime.execute(actionID: action, arguments: args, options: .init(dryRun: command == "dry-run", invocation: .app))
+                let envelope: NexComputerResultEnvelope
+                if await env.registry.contains(actionID: action) {
+                    envelope = await env.runtime.execute(
+                        actionID: action,
+                        arguments: args,
+                        options: .init(dryRun: command == "dry-run", invocation: .app)
+                    )
+                } else {
+                    envelope = await executeRegisteredTool(
+                        action: action,
+                        arguments: args,
+                        dryRun: command == "dry-run",
+                        tools: env.tools
+                    )
+                }
                 output = try Self.object(JSONEncoder.cli.encode(envelope))
             case "permissions":
                 let manifests = await env.registry.manifests()
@@ -409,6 +438,8 @@ enum NexComputerCLI {
 
     private static func doctor(_ env: NexComputerCLIEnvironment) async -> [String: Any] {
         let manifests = await env.registry.manifests(), availability = await env.registry.availabilitySnapshot()
+        let extraTools = await additionalRegisteredTools(in: env, manifests: manifests)
+        let extraAvailability = extraTools.map { registeredToolAvailability($0) }
         let permissions = Set(manifests.flatMap { $0.requiredPermissions.map(\.id) })
         let previews = Set(manifests.map(\.previewRenderer))
         let connectorStatus = await env.connectors.allDocuments()
@@ -419,7 +450,13 @@ enum NexComputerCLI {
             .sorted()
         let browserRoot = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first?.appendingPathComponent("Nexus/Browser")
         return [
-            "ok": true, "tools": manifests.count, "available_tools": availability.values.filter(\.isAvailable).count,
+            "ok": true,
+            "tools": manifests.count + extraTools.count,
+            "available_tools": availability.values.filter(\.isAvailable).count + extraAvailability.filter(\.isAvailable).count,
+            "headless_unavailable_tools": extraTools.enumerated().compactMap { index, tool in
+                let state = extraAvailability[index]
+                return state.isAvailable ? nil : ["action": tool.name, "reason": state.reason ?? "Unavailable.", "recovery": state.recovery ?? ""]
+            },
             "permissions_declared": permissions.sorted(), "preview_renderers": previews.sorted(),
             "browser_profile": browserRoot.map { FileManager.default.fileExists(atPath: $0.path) ? "ready" : "not provisioned (created lazily after confirmation)" } ?? "unavailable",
             "connectors": connectorStatus,
@@ -445,6 +482,147 @@ enum NexComputerCLI {
         ]
         if let availability { value["available"] = availability.isAvailable; value["unavailable_reason"] = availability.reason ?? "" }
         return value
+    }
+
+    /// The conversational registry also owns a few non-computer actions,
+    /// notably public YouTube discovery and `search_tools`. The headless CLI
+    /// must list and execute the same registry the planner sees; otherwise it
+    /// would advertise a valid model action and reject it as unknown.
+    private static func additionalRegisteredTools(
+        in environment: NexComputerCLIEnvironment,
+        manifests: [NexComputerActionManifest]
+    ) async -> [NexRegisteredTool] {
+        let computerActions = Set(manifests.map(\.actionID))
+        return await environment.tools.definitions().filter { !computerActions.contains($0.name) }
+    }
+
+    private static func registeredToolAvailability(_ tool: NexRegisteredTool) -> NexComputerAvailability {
+        switch tool.name {
+        case "youtube_play", "youtube_play_current", "youtube_fullscreen":
+            return .unavailable(
+                "Headless Nexus has no media-overlay host.",
+                recovery: "Use the Nexus app to present or control YouTube playback."
+            )
+        default:
+            return .available
+        }
+    }
+
+    private static func registeredToolJSON(
+        _ tool: NexRegisteredTool,
+        availability: NexComputerAvailability? = nil
+    ) -> [String: Any] {
+        var value: [String: Any] = [
+            "action": tool.name,
+            "application": tool.application,
+            "provider": tool.provider,
+            "description": tool.description,
+            "examples": tool.examples,
+            "input_schema": (try? object(JSONEncoder.cli.encode(tool.schema))) ?? [:],
+            "tool_permission": tool.permission.rawValue,
+            "risk": "managed_by_tool",
+            "confirmation": "managed_by_tool",
+            "implementation": "tool_registry",
+            "preview": ""
+        ]
+        if let availability {
+            value["available"] = availability.isAvailable
+            value["unavailable_reason"] = availability.reason ?? ""
+        }
+        return value
+    }
+
+    private static func executeRegisteredTool(
+        action: String,
+        arguments: [String: NexJSONValue],
+        dryRun: Bool,
+        tools: NexToolRegistry
+    ) async -> NexComputerResultEnvelope {
+        let startedAt = Date()
+        let executionID = UUID()
+        guard let tool = await tools.definitions().first(where: { $0.name == action }) else {
+            return registeredToolFailure(
+                action: action,
+                executionID: executionID,
+                startedAt: startedAt,
+                code: "TOOL_NOT_FOUND",
+                message: "Unknown tool: \(action)."
+            )
+        }
+        let availability = registeredToolAvailability(tool)
+        guard availability.isAvailable else {
+            return registeredToolFailure(
+                action: action,
+                executionID: executionID,
+                startedAt: startedAt,
+                code: "UNAVAILABLE",
+                message: availability.reason ?? "Action is unavailable.",
+                recovery: availability.recovery,
+                status: .unavailable
+            )
+        }
+        guard !dryRun else {
+            return registeredToolFailure(
+                action: action,
+                executionID: executionID,
+                startedAt: startedAt,
+                code: "DRY_RUN_UNSUPPORTED",
+                message: "\(action) does not declare a standalone dry-run contract."
+            )
+        }
+        do {
+            let result = try await tools.execute(name: action, arguments: arguments, invocation: .app)
+            return .init(
+                schemaVersion: NexComputerResultEnvelope.currentSchemaVersion,
+                executionID: executionID,
+                ok: true,
+                action: action,
+                status: .completed,
+                data: result,
+                display: result.object?["display"]?.string ?? tool.completionLabel,
+                warnings: [],
+                durationMs: Int(Date().timeIntervalSince(startedAt) * 1_000),
+                error: nil
+            )
+        } catch {
+            let actionFailure = error as? NexComputerActionFailure
+            let toolError = error as? NexToolError
+            return registeredToolFailure(
+                action: action,
+                executionID: executionID,
+                startedAt: startedAt,
+                code: actionFailure?.code ?? toolError?.code ?? "EXECUTION_FAILED",
+                message: actionFailure?.message ?? error.localizedDescription,
+                permission: actionFailure?.permission,
+                recovery: actionFailure?.recovery,
+                retryable: actionFailure?.retryable ?? false
+            )
+        }
+    }
+
+    private static func registeredToolFailure(
+        action: String,
+        executionID: UUID,
+        startedAt: Date,
+        code: String,
+        message: String,
+        permission: String? = nil,
+        recovery: String? = nil,
+        retryable: Bool = false,
+        status: NexComputerExecutionStatus = .failed
+    ) -> NexComputerResultEnvelope {
+        .init(
+            schemaVersion: NexComputerResultEnvelope.currentSchemaVersion,
+            executionID: executionID,
+            ok: false,
+            action: action,
+            status: status,
+            data: .object([:]),
+            display: message,
+            warnings: [],
+            durationMs: Int(Date().timeIntervalSince(startedAt) * 1_000),
+            error: .init(code: code, message: message, permission: permission, recovery: recovery, retryable: retryable)
+        )
     }
     private static func connectorJSON(_ status: NexConnectorPublicStatus) -> [String: Any] { ["provider": status.id.rawValue, "connected": status.connected, "healthy": status.healthy, "account": status.account ?? "", "scopes": status.scopes, "detail": status.detail] }
     private static func value(after option: String, in arguments: [String]) -> String? { guard let index = arguments.firstIndex(of: option), arguments.indices.contains(index + 1) else { return nil }; return arguments[index + 1] }

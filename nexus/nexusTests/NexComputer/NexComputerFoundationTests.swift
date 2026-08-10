@@ -312,6 +312,42 @@ final class NexComputerFoundationTests: XCTestCase {
         XCTAssertEqual(result, 0)
     }
 
+    func testCLIExecutesPlannerRegisteredToolOutsideComputerManifestRegistry() async throws {
+        let tools = NexToolRegistry()
+        let registry = NexComputerRegistry(toolRegistry: tools)
+        let counter = Counter()
+        try await tools.register(.init(
+            name: "fixture.discovery",
+            description: "Return a harmless fixture discovery result.",
+            statusLabel: "Discovering…",
+            spokenStatus: "Discovering.",
+            iconSystemName: "sparkle.magnifyingglass",
+            permission: .network,
+            schema: .init(fields: ["query": .init(.string, required: true)]),
+            application: "Fixture",
+            provider: "Tests",
+            examples: ["Find a fixture"]
+        ) { arguments, _ in
+            _ = await counter.increment()
+            return .object(["query": arguments["query"] ?? .null, "count": .number(1)])
+        })
+        let environment = NexComputerCLIEnvironment(
+            tools: tools,
+            registry: registry,
+            runtime: NexComputerRuntime(registry: registry),
+            search: NexToolSearchService(registry: tools, computerRegistry: registry),
+            connectors: NexConnectorManager()
+        )
+
+        let result = await NexComputerCLI.run(
+            arguments: ["execute", "fixture.discovery", "--json", #"{"query":"safe fixture"}"#],
+            environment: environment
+        )
+        XCTAssertEqual(result, 0)
+        let executions = await counter.current()
+        XCTAssertEqual(executions, 1)
+    }
+
     private func makeManifest(
         actionID: String = "fixture.open",
         implementationMethod: NexComputerImplementationMethod = .nativeAPI,
