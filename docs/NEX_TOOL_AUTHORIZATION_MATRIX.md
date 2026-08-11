@@ -72,6 +72,13 @@ person or account-owned item; consequential actions remain confirmation-bound.
 
 ## Platform or host limitation, not a permission request
 
+- `nexcli-status` and NexCLI task execution: the current Nexus build contains
+  no compatible NexCLI runtime (`Contents/Resources/NexCLI/nex` and the
+  Application Support runtime path are both absent). The worker correctly
+  reports `state: failed` with its packaged-runtime recovery. Provide an
+  official compatible Nexus/NexCLI runtime artifact before a genuine
+  headless-task test; do not substitute a generic CLI because Nexus uses its
+  authenticated `/nex/*` protocol.
 - `youtube_play`, `youtube_play_current`, `youtube_fullscreen`: a standalone
   headless run has no Nexus media-overlay host. Test them from the live app
   after the macOS desktop is unlockable for visual/output verification.

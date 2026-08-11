@@ -1132,3 +1132,41 @@ Xcode test command still stalled before launching any test worker on this
 locked desktop; a direct `xctest` invocation cannot load the app-hosted test
 bundle because the standalone loader does not contain Nexus application
 symbols. Neither condition is represented as a test pass.
+
+## 2026-08-10 NexCLI runtime diagnostic repair
+
+The headless `nexcli-status` command previously collapsed an exited managed
+worker into the unhelpful state `unavailable`. This hid the difference between
+a worker that was still starting, a dead worker, and a build that could not
+find its required NexCLI runtime. The status command now retains the last
+supervisor record for diagnostics while `currentStatus()` remains strict for
+callers that require a live worker.
+
+| Prompt / operation | Expected action | Result | Latency | Status |
+|---|---|---|---:|---|
+| `Report whether the managed NexCLI worker is ready.` via `nexusctl nexcli-status` before the repair | `nexcli-status` | Returned only `state: unavailable`; no executable-path or launch failure was exposed. | Not separately recorded | FAIL / fixed |
+| Same operation after rebuilding and launching Nexus | `nexcli-status` | Returned `state: failed`, `live: false`, supervisor PID `96098`, worker PID `0`, and the exact recovery: `Nexus Connect is unavailable: NexCLI runtime is not bundled with this build. Install a Nexus release that includes NexCLI.` | 0.61 s process wall time | PASS (diagnostic) |
+
+The packaged app contains no `Contents/Resources/NexCLI/nex`, the Nexus
+Application Support runtime location contains no `NexCLI/runtime/nex`, and the
+optional local-source fallback has neither the expected source checkout nor
+`bun`. Nexus's API client uses its own authenticated `/nex/*` task protocol,
+so a generic third-party CLI cannot safely be substituted. No model task was
+executed because the required compatible runtime artifact is absent; this is a
+host-package prerequisite, not a TCC grant, OAuth connection, or GPT-OSS tool
+selection result.
+
+Verification:
+
+```text
+./scripts/build-nexus.sh
+  ** BUILD SUCCEEDED **
+
+xcodebuild … -destination 'platform=macOS,arch=arm64,id=00006002-001869AC3489801E' build-for-testing
+  ** TEST BUILD SUCCEEDED **
+
+./scripts/build-nexus.sh --run
+./scripts/nexusctl nexcli-status
+  ok=false; state=failed; live=false
+  Nexus Connect is unavailable: NexCLI runtime is not bundled with this build.
+```

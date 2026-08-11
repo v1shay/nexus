@@ -148,6 +148,14 @@ struct NexCLIHostManager: @unchecked Sendable {
         return status
     }
 
+    /// Preserves the last supervisor result for diagnostics even after the
+    /// supervisor has exited. `currentStatus()` intentionally remains strict
+    /// for callers that need a live worker, while headless status can report
+    /// a missing bundled runtime instead of degrading to an opaque failure.
+    func latestStatus() -> NexCLIHostStatus? {
+        storedStatus()
+    }
+
     /// The app-side client calls this immediately before creating a task. It
     /// reuses a healthy daemon and otherwise asks launchd to start exactly one
     /// managed worker, then waits for its authenticated Nex health endpoint.
