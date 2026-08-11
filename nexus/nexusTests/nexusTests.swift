@@ -619,6 +619,25 @@ final class NexusGeometryTests: XCTestCase {
         XCTAssertEqual(manager.latestStatus(), expected)
         XCTAssertNil(manager.currentStatus())
     }
+
+    func testNexCLIManagedRuntimeUsesTheSameCommandShapeForPackagedAndSourceWorkers() {
+        let packaged = NexCLIManagedRuntime(
+            executable: URL(fileURLWithPath: "/Applications/Nexus.app/Contents/Resources/NexCLI/nex"),
+            commandPrefix: [],
+            description: "bundled NexCLI"
+        )
+        let source = NexCLIManagedRuntime(
+            executable: URL(fileURLWithPath: "/opt/homebrew/bin/bun"),
+            commandPrefix: ["/tmp/nex-cli/packages/opencode/src/index.ts"],
+            description: "local NexCLI development runtime"
+        )
+        let command = ["models", "use", NexLocalCodingModel.modelID]
+
+        XCTAssertEqual(packaged.commandArguments(command), command)
+        XCTAssertEqual(source.commandArguments(command), ["/tmp/nex-cli/packages/opencode/src/index.ts"] + command)
+        XCTAssertEqual(NexApiClient.Model.localCodingDefault.providerID, NexLocalCodingModel.providerID)
+        XCTAssertEqual(NexApiClient.Model.localCodingDefault.modelID, NexLocalCodingModel.modelID)
+    }
     func testOneWordFollowUpKeepsRecentVerbatimConversationContext() async {
         let session = NexConversationSession()
         await session.appendUser("Use a neural network for the image classifier")

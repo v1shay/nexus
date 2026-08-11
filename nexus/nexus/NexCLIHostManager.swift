@@ -18,6 +18,14 @@ enum NexCLIHostProcess {
     }
 }
 
+/// Nexus owns the managed NexCLI model choice. Keeping it shared between the
+/// task client and the worker bootstrap prevents a fresh NexCLI install from
+/// accepting tasks before its Ollama provider configuration exists.
+enum NexLocalCodingModel {
+    static let providerID = "ollama"
+    static let modelID = "gpt-oss:latest"
+}
+
 struct NexCLIHostStatus: Codable, Equatable, Sendable {
     let processID: Int32
     let workerProcessID: Int32
@@ -305,10 +313,17 @@ struct NexCLIHostManager: @unchecked Sendable {
     }
 }
 
-private struct NexCLIManagedRuntime: Sendable {
+struct NexCLIManagedRuntime: Sendable {
     let executable: URL
-    let arguments: [String]
+    /// A compiled runtime needs no prefix; the development runtime needs the
+    /// source entrypoint before its subcommand. Both expose the same Nex CLI
+    /// command surface after that prefix.
+    let commandPrefix: [String]
     let description: String
+
+    func commandArguments(_ command: [String]) -> [String] {
+        commandPrefix + command
+    }
 }
 
 @MainActor
@@ -382,11 +397,11 @@ final class NexCLIHostDaemon {
         // support location permits an updater to atomically replace it without
         // ever changing the LaunchAgent command line.
         if let bundled = Bundle.main.url(forResource: "nex", withExtension: nil, subdirectory: "NexCLI"), fileManager.isExecutableFile(atPath: bundled.path) {
-            return .init(executable: bundled, arguments: ["serve"], description: "bundled NexCLI")
+            return .init(executable: bundled, commandPrefix: [], description: "bundled NexCLI")
         }
         let installed = manager.supportDirectory.appendingPathComponent("runtime/nex")
         if fileManager.isExecutableFile(atPath: installed.path) {
-            return .init(executable: installed, arguments: ["serve"], description: "managed NexCLI")
+            return .init(executable: installed, commandPrefix: [], description: "managed NexCLI")
         }
 
         // Xcode/dev fallback: it is automatic and uses no terminal command,
@@ -400,7 +415,7 @@ final class NexCLIHostDaemon {
         guard fileManager.fileExists(atPath: source.path), let bun = bunExecutable() else {
             throw NexusConnectError.unavailable("NexCLI runtime is not bundled with this build. Install a Nexus release that includes NexCLI.")
         }
-        return .init(executable: bun, arguments: [source.path, "serve"], description: "local NexCLI development runtime")
+        return .init(executable: bun, commandPrefix: [source.path], description: "local NexCLI development runtime")
     }
 
     private func bunExecutable() -> URL? {
@@ -413,20 +428,59 @@ final class NexCLIHostDaemon {
     }
 
     private func startWorker(runtime: NexCLIManagedRuntime, password: String) throws {
+        try configureManagedModel(runtime: runtime)
         let process = Process()
         process.executableURL = runtime.executable
-        process.arguments = runtime.arguments + ["--hostname", "127.0.0.1", "--port", "4096"]
-        var environment = ProcessInfo.processInfo.environment
-        environment["OPENCODE_SERVER_PASSWORD"] = password
-        environment["OPENCODE_CONFIG_DIR"] = fileManager.homeDirectoryForCurrentUser
-            .appendingPathComponent(".config/nex", isDirectory: true).path
-        environment["NO_COLOR"] = "1"
-        process.environment = environment
+        process.arguments = runtime.commandArguments(["serve", "--hostname", "127.0.0.1", "--port", "4096"])
+        process.environment = runtimeEnvironment(password: password)
         process.currentDirectoryURL = fileManager.homeDirectoryForCurrentUser
         process.standardOutput = FileHandle(forWritingAtPath: manager.standardOutputURL.path)
         process.standardError = FileHandle(forWritingAtPath: manager.standardErrorURL.path)
         try process.run()
         worker = process
+    }
+
+    /// NexCLI derives its provider registry from the locally installed Ollama
+    /// inventory. A fresh runtime otherwise accepts `/nex/tasks` while leaving
+    /// each request queued because `ollama/gpt-oss:latest` is unknown to its
+    /// provider registry. This is a local configuration command, not a model
+    /// task, and it is repeated on start so the app-owned model remains exact.
+    private func configureManagedModel(runtime: NexCLIManagedRuntime) throws {
+        let process = Process()
+        let output = Pipe()
+        process.executableURL = runtime.executable
+        process.arguments = runtime.commandArguments(["models", "use", NexLocalCodingModel.modelID])
+        process.environment = runtimeEnvironment(password: nil)
+        process.currentDirectoryURL = fileManager.homeDirectoryForCurrentUser
+        process.standardOutput = output
+        process.standardError = output
+        try process.run()
+        // Fresh Ollama inventories can take several seconds to enumerate.
+        // Give the one-time local configuration enough time to finish rather
+        // than starting a daemon that will accept tasks but cannot run them.
+        for _ in 0..<600 where process.isRunning {
+            Thread.sleep(forTimeInterval: 0.05)
+        }
+        if process.isRunning {
+            process.terminate()
+            process.waitUntilExit()
+            throw NexusConnectError.unavailable("NexCLI timed out while configuring its required local model \(NexLocalCodingModel.modelID).")
+        }
+        guard process.terminationStatus == 0 else {
+            let detail = String(data: output.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8)?
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            let suffix = detail.map { ": \($0.prefix(240))" } ?? ""
+            throw NexusConnectError.unavailable("NexCLI could not configure its required local model \(NexLocalCodingModel.modelID)\(suffix)")
+        }
+    }
+
+    private func runtimeEnvironment(password: String?) -> [String: String] {
+        var environment = ProcessInfo.processInfo.environment
+        if let password { environment["OPENCODE_SERVER_PASSWORD"] = password }
+        environment["OPENCODE_CONFIG_DIR"] = fileManager.homeDirectoryForCurrentUser
+            .appendingPathComponent(".config/nex", isDirectory: true).path
+        environment["NO_COLOR"] = "1"
+        return environment
     }
 
     private func monitorWorker(runtime: NexCLIManagedRuntime?, password: String) async {
