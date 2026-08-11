@@ -22,6 +22,44 @@ final class NexComputerFoundationTests: XCTestCase {
         XCTAssertEqual(NexusTCCService.cliService("full-disk-access"), .fullDiskAccess)
     }
 
+    func testActionPermissionRequestsRequireDurableHostOnlyForTCCServices() {
+        XCTAssertFalse(
+            NexComputerSystemPermissionBackend.shouldRequestTCCPermission(
+                id: "contacts",
+                request: true,
+                durableHost: false
+            )
+        )
+        XCTAssertFalse(
+            NexComputerSystemPermissionBackend.shouldRequestTCCPermission(
+                id: "automation.com.apple.MobileSMS",
+                request: true,
+                durableHost: false
+            )
+        )
+        XCTAssertTrue(
+            NexComputerSystemPermissionBackend.shouldRequestTCCPermission(
+                id: "photos.library",
+                request: true,
+                durableHost: true
+            )
+        )
+        XCTAssertTrue(
+            NexComputerSystemPermissionBackend.shouldRequestTCCPermission(
+                id: "oauth.google.gmail.readonly",
+                request: true,
+                durableHost: false
+            )
+        )
+        XCTAssertFalse(
+            NexComputerSystemPermissionBackend.shouldRequestTCCPermission(
+                id: "contacts",
+                request: false,
+                durableHost: true
+            )
+        )
+    }
+
     func testManifestIsVersionedCodableAndRejectsLowLevelActionIDs() throws {
         let manifest = makeManifest()
         try manifest.validate()

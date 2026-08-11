@@ -34,10 +34,19 @@ headless Settings navigation. It also no longer calls `tccutil reset`, which
 could erase a valid user grant. `nexusctl permission-host` is a read-only JSON
 diagnostic; `nexusctl permissions` includes the same durable-host state.
 
+A follow-up source audit extended the same boundary into the shared request
+helpers themselves, not just their first callers: global hotkeys, screen
+capture, audio-reactive capture, dictation, wake listening, and the action
+permission backend for Accessibility, Contacts, Photos, Calendar, Screen
+Recording, and Automation. Existing grants are still preflighted and used.
+Only a *new* macOS prompt is suppressed for a non-durable host. The action
+backend's pure gate is regression-tested so OAuth and non-TCC policy checks
+are not incorrectly blocked.
+
 | Check | Observed result | Status |
 |---|---|---|
 | `./scripts/build-nexus.sh` | `** BUILD SUCCEEDED **`; the build script reported an ad-hoc `designated => cdhash …` requirement and correctly labeled it non-durable. | PASS |
-| `xcodebuild … build-for-testing` | `** TEST BUILD SUCCEEDED **`, including `NexComputerToolSearchTests.testPermissionHostRequiresAppleAnchoredNexusRequirement`. The regression accepts an Apple-anchored `na.nexus` requirement and rejects an ad-hoc or wrong-bundle requirement. | PASS |
+| `xcodebuild … build-for-testing` | `** TEST BUILD SUCCEEDED **`, including `NexComputerToolSearchTests.testPermissionHostRequiresAppleAnchoredNexusRequirement` and `NexComputerFoundationTests.testActionPermissionRequestsRequireDurableHostOnlyForTCCServices`. The regressions accept an Apple-anchored `na.nexus` requirement, reject an ad-hoc or wrong-bundle requirement, and preserve non-TCC/OAuth policy checks. | PASS |
 | `./scripts/nexusctl permission-host` | Returned `ok: true`, `durable: false`, the live `cdhash` requirement, and an explicit install-Apple-Development-signed-app recovery message. | PASS |
 | `./scripts/nexusctl permissions` | Returned `permission_host_durable: false`; current API checks are Input Monitoring false, Accessibility false, Screen Recording false, Messages FDA false, Microphone true, Speech Recognition true. | PASS |
 | `security find-identity -v -p codesigning` | `0 valid identities found`. A durable host cannot be built or installed on this Mac until the user signs into Xcode with an Apple developer account and installs an Apple Development identity. | BLOCKED EXTERNALLY |

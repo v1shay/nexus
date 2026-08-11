@@ -30,12 +30,14 @@ The present Debug build is ad-hoc signed. Its live designated requirement is a
 `cdhash`, so its TCC grants are not durable across rebuilds; `security
 find-identity -v -p codesigning` reports no valid Apple Development identity.
 Nexus now detects that exact condition at runtime and blocks permission
-requests, Settings navigation, and repairs rather than creating a disposable
-grant. The durable build flow preserves macOS's normal Apple-backed designated
-requirement (rather than forcing an identifier-only requirement), automatically
-selects exactly one installed Apple Development identity, and refuses durable
-installation unless that identity is verified. A stable Apple Development
-certificate is still required before granting the rows above.
+requests, Settings navigation, repairs, dictation/wake flows, capture flows,
+and action-level TCC/Automation requests rather than creating a disposable
+grant. Existing grants remain usable. The durable build flow preserves macOS's
+normal Apple-backed designated requirement (rather than forcing an
+identifier-only requirement), automatically selects exactly one installed Apple
+Development identity, and refuses durable installation unless that identity is
+verified. A stable Apple Development certificate is still required before
+granting the rows above.
 
 ## Account connection needed
 

@@ -53,6 +53,10 @@ final class SpeechTranscriber: NSObject, @unchecked Sendable {
         case .authorized:
             startAfterMicrophoneAuthorization(engine: engine)
         case .notDetermined:
+            guard NexusPermissionHostIdentity.current().isDurable else {
+                onUpdate("Install an Apple Development-signed Nexus.app before granting microphone access.")
+                return
+            }
             AVCaptureDevice.requestAccess(for: .audio) { [weak self] granted in
                 DispatchQueue.main.async {
                     guard let self, self.wantsRecording else { return }
@@ -81,6 +85,10 @@ final class SpeechTranscriber: NSObject, @unchecked Sendable {
         case .authorized:
             beginRecording()
         case .notDetermined:
+            guard NexusPermissionHostIdentity.current().isDurable else {
+                onUpdate?("Install an Apple Development-signed Nexus.app before granting Speech Recognition access.")
+                return
+            }
             SFSpeechRecognizer.requestAuthorization { [weak self] status in
                 DispatchQueue.main.async {
                     guard let self, self.wantsRecording else { return }
@@ -413,11 +421,22 @@ final class WakePhraseListener: NSObject {
 
         switch SFSpeechRecognizer.authorizationStatus() {
         case .authorized:
+            guard AVCaptureDevice.authorizationStatus(for: .audio) == .authorized else {
+                NSLog("Nex wake phrase listener needs Microphone permission")
+                return
+            }
             beginListening()
         case .notDetermined:
+            guard NexusPermissionHostIdentity.current().isDurable else {
+                NSLog("Nex wake phrase listener requires a durable Nexus permission host")
+                return
+            }
             SFSpeechRecognizer.requestAuthorization { [weak self] status in
                 Task { @MainActor in
-                    guard let self, self.wantsListening, status == .authorized else { return }
+                    guard let self,
+                          self.wantsListening,
+                          status == .authorized,
+                          AVCaptureDevice.authorizationStatus(for: .audio) == .authorized else { return }
                     self.beginListening()
                 }
             }

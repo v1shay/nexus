@@ -292,7 +292,8 @@ final class NexusAppDelegate: NSObject, NSApplicationDelegate {
         if CommandLine.arguments.contains("--nexus-request-speech-smoke") {
             NSApp.setActivationPolicy(.regular)
             launchTask = Task { @MainActor in
-                if SFSpeechRecognizer.authorizationStatus() == .notDetermined {
+                if SFSpeechRecognizer.authorizationStatus() == .notDetermined,
+                   NexusPermissionHostIdentity.current().isDurable {
                     NSApp.activate(ignoringOtherApps: true)
                     SFSpeechRecognizer.requestAuthorization { status in
                         NexusDiagnostics.record("[Nexus Permissions] speech smoke result=\(status.rawValue)")
@@ -2905,6 +2906,10 @@ enum NexusScreenCapture {
     @discardableResult
     static func requestAccess(prompt: Bool = false) -> Bool {
         guard !CGPreflightScreenCaptureAccess() else { return true }
+        // A new TCC prompt from an ad-hoc Xcode build would bind the grant to
+        // its changing cdhash. Preserve an already-authorized capture path,
+        // but require the durable app host before creating a new grant.
+        guard NexusPermissionHostIdentity.current().isDurable else { return false }
         guard prompt, !didRequestAccessThisLaunch else { return false }
         didRequestAccessThisLaunch = true
         return CGRequestScreenCaptureAccess()
@@ -3538,6 +3543,7 @@ enum NexusGlobalHotkeyAccess {
     @discardableResult
     static func requestInputMonitoringIfNeeded(prompt: Bool = false) -> Bool {
         guard !CGPreflightListenEventAccess() else { return true }
+        guard NexusPermissionHostIdentity.current().isDurable else { return false }
         guard prompt, !didRequestInputMonitoringThisLaunch else { return false }
         didRequestInputMonitoringThisLaunch = true
         _ = CGRequestListenEventAccess()
@@ -3553,6 +3559,7 @@ enum NexusGlobalHotkeyAccess {
     @discardableResult
     static func requestAccessibilityIfNeeded(prompt: Bool = false) -> Bool {
         guard !AXIsProcessTrusted() else { return true }
+        guard NexusPermissionHostIdentity.current().isDurable else { return false }
         guard prompt, !didRequestAccessibilityThisLaunch else { return false }
         didRequestAccessibilityThisLaunch = true
         let options = [kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true] as CFDictionary
