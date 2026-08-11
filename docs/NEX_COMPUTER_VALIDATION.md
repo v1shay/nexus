@@ -10,8 +10,45 @@ This ledger began on 2026-07-22 and is extended by dated validation increments b
   are currently available in the headless environment.
 - Managed browser: provisioned and isolated under Nexus Application Support.
 - Connectors: Google, Notion, Slack, GitHub, and Discord are not configured on this Mac, and are reported as disconnected.
-- Current permission gaps: Messages Full Disk Access and Photos access are not granted to this signed build.
+- Current permission-host gap: this Mac has no Apple Development signing
+  identity. The running Debug app is ad-hoc signed, so macOS privacy grants
+  cannot survive a rebuild and Nexus intentionally does not request them.
+- Current permission gaps: Messages Full Disk Access and Photos access are not granted to the running build.
 - Current executable gaps: the VS Code CLI/application path is not installed; the installed Codex CLI is `0.142.5` and rejects its configured `gpt-5.6-luna` model as requiring a newer Codex build.
+
+## 2026-08-10 durable macOS permission-host increment
+
+macOS TCC stores a privacy grant against the executable's designated code
+requirement. An Xcode "Sign to Run Locally" build has a requirement containing
+a changing `cdhash`; the next rebuild is therefore a different TCC subject.
+The prior behavior could request Input Monitoring, Accessibility, Microphone,
+Speech Recognition, and Screen Recording from that non-durable process,
+producing an endless re-authorization loop.
+
+Nexus now obtains the live designated requirement through Security.framework,
+hashes it only for local change detection, and treats a host as durable only
+when its requirement contains both `anchor apple generic` and identifier
+`na.nexus`. The app blocks every privacy request route when that check fails:
+launch onboarding, the three Settings buttons, headless permission repair, and
+headless Settings navigation. It also no longer calls `tccutil reset`, which
+could erase a valid user grant. `nexusctl permission-host` is a read-only JSON
+diagnostic; `nexusctl permissions` includes the same durable-host state.
+
+| Check | Observed result | Status |
+|---|---|---|
+| `./scripts/build-nexus.sh` | `** BUILD SUCCEEDED **`; the build script reported an ad-hoc `designated => cdhash …` requirement and correctly labeled it non-durable. | PASS |
+| `xcodebuild … build-for-testing` | `** TEST BUILD SUCCEEDED **`, including `NexComputerToolSearchTests.testPermissionHostRequiresAppleAnchoredNexusRequirement`. The regression accepts an Apple-anchored `na.nexus` requirement and rejects an ad-hoc or wrong-bundle requirement. | PASS |
+| `./scripts/nexusctl permission-host` | Returned `ok: true`, `durable: false`, the live `cdhash` requirement, and an explicit install-Apple-Development-signed-app recovery message. | PASS |
+| `./scripts/nexusctl permissions` | Returned `permission_host_durable: false`; current API checks are Input Monitoring false, Accessibility false, Screen Recording false, Messages FDA false, Microphone true, Speech Recognition true. | PASS |
+| `security find-identity -v -p codesigning` | `0 valid identities found`. A durable host cannot be built or installed on this Mac until the user signs into Xcode with an Apple developer account and installs an Apple Development identity. | BLOCKED EXTERNALLY |
+| Computer Use, Nexus menu | Opened Nexus → `Nexus Control Panel…` read-only. The subsequent accessibility-tree request timed out, so this ledger does not claim a visual inspection of the new Settings row. No privacy toggle was changed. | PARTIAL / NO STATE CHANGE |
+
+To complete a persistent grant test, install exactly one intended Apple
+Development identity in Xcode, run `./scripts/build-nexus.sh --install-run`,
+and grant the requested services to that installed `Nexus.app` in System
+Settings. Then repeat `nexusctl permission-host` and `nexusctl permissions`
+after a rebuild. The install script refuses to install an ad-hoc build, so the
+one-time user grant cannot accidentally attach to the disposable Debug host.
 
 ## Safe workflow matrix
 

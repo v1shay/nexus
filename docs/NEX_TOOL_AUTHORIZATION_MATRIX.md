@@ -26,14 +26,16 @@ recovery object; it does not make an OAuth request or expose a token.
 | Finder Automation | `finder.get_selection` | Approve Finder Automation; other Finder actions can use generated paths without it. |
 | Terminal Automation | `terminal.get_active_session`, `terminal.open_tab`, `terminal.write_to_session` | Approve Terminal Automation. Nexus-owned `terminal.run_command` sessions are separately testable. |
 
-The present Debug build is ad-hoc signed. Its TCC grants are not durable across
-rebuilds because `security find-identity -v -p codesigning` reports no valid
-Apple Development identity. The durable build flow now preserves macOS's
-normal Apple-backed designated requirement (rather than forcing an
-identifier-only requirement), automatically selects exactly one installed
-Apple Development identity, and refuses durable installation unless that
-identity is verified. A stable Apple Development certificate is still required
-before granting the rows above.
+The present Debug build is ad-hoc signed. Its live designated requirement is a
+`cdhash`, so its TCC grants are not durable across rebuilds; `security
+find-identity -v -p codesigning` reports no valid Apple Development identity.
+Nexus now detects that exact condition at runtime and blocks permission
+requests, Settings navigation, and repairs rather than creating a disposable
+grant. The durable build flow preserves macOS's normal Apple-backed designated
+requirement (rather than forcing an identifier-only requirement), automatically
+selects exactly one installed Apple Development identity, and refuses durable
+installation unless that identity is verified. A stable Apple Development
+certificate is still required before granting the rows above.
 
 ## Account connection needed
 
