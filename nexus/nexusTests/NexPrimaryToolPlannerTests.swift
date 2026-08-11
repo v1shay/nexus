@@ -148,6 +148,9 @@ final class NexPrimaryToolPlannerTests: XCTestCase {
         let task = try XCTUnwrap(definitions.first { $0.name == "nex_cli_task" })
         let workspace = try XCTUnwrap(definitions.first { $0.name == "nex_cli_set_workspace" })
         XCTAssertTrue(task.schema.fields["prompt"]?.required == true)
+        XCTAssertTrue(task.examples.contains("Update README.md and verify the change"))
+        XCTAssertTrue(task.aliases.contains("update README"))
+        XCTAssertTrue(task.tags.contains("readme"))
         XCTAssertTrue(workspace.schema.fields["name"]?.required == true)
         XCTAssertFalse(workspace.schema.fields.keys.contains("path"))
     }

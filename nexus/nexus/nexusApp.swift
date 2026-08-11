@@ -820,6 +820,7 @@ final class NotchController: ObservableObject {
     )
     private lazy var toolSearch = NexToolSearchService(registry: memory.registry, computerRegistry: computerRegistry)
     private var memoryObservation: AnyCancellable?
+    private var connectorCredentialsObserver: NSObjectProtocol?
     private var toolEventTask: Task<Void, Never>?
     private var codexProgressMonitor: CodexProgressMonitor?
     private var codexProgressDismissTask: Task<Void, Never>?
@@ -864,6 +865,20 @@ final class NotchController: ObservableObject {
             // The energy changes animate the orb; only playback transitions
             // resize the panel so the 30fps meter never causes layout churn.
             Task { @MainActor in self?.refreshMusicPresentation() }
+        }
+        connectorCredentialsObserver = NotificationCenter.default.addObserver(
+            forName: .nexConnectorCredentialsDidChange,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            guard let self else { return }
+            Task {
+                // This notification follows an explicit Connect UI action,
+                // so it is the first acceptable moment to restore account
+                // availability from Keychain. It must never gate launch or
+                // an unrelated natural-language response.
+                try? await self.connectorManager.reloadStoredConnections(registry: self.computerRegistry)
+            }
         }
     }
 
@@ -938,7 +953,7 @@ final class NotchController: ObservableObject {
                 try? await applicationActions.register(on: computerRegistry)
                 try? await browserActions.register(on: computerRegistry)
                 try? await chromeTabActions.register(on: computerRegistry)
-                try? await connectorManager.reloadStoredConnections(registry: computerRegistry)
+                try? await connectorManager.registerDisconnectedCapabilities(on: computerRegistry)
                 try? await toolSearch.registerIfNeeded()
             }
             installCommandHoldMonitor()
@@ -1863,7 +1878,7 @@ final class NotchController: ObservableObject {
                 try? await applicationActions.register(on: computerRegistry)
                 try? await browserActions.register(on: computerRegistry)
                 try? await chromeTabActions.register(on: computerRegistry)
-                try? await connectorManager.reloadStoredConnections(registry: computerRegistry)
+                try? await connectorManager.registerDisconnectedCapabilities(on: computerRegistry)
                 try? await toolSearch.registerIfNeeded()
                 let allDefinitions = await memory.registry.definitions()
                 let discovery = await toolSearch.search(query: prompt)

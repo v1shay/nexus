@@ -138,7 +138,7 @@ final class NexComputerSystemPermissionBackend: NexComputerPermissionChecking, @
             }
         } else if id.hasPrefix("automation.") {
             let bundleIdentifier = String(requirement.id.dropFirst("automation.".count))
-            state = automationState(bundleIdentifier: bundleIdentifier, request: effectiveRequest)
+            state = Self.automationState(bundleIdentifier: bundleIdentifier, request: effectiveRequest)
         } else {
             // Network, app-managed files, memory, and bounded code execution
             // are enforced by Nexus policy rather than a macOS TCC prompt.
@@ -216,7 +216,15 @@ final class NexComputerSystemPermissionBackend: NexComputerPermissionChecking, @
         }
     }
 
-    private func automationState(
+    /// Checks a target app's Automation grant without showing a macOS prompt.
+    /// Background observers use this before they decide whether an AppleEvent
+    /// is safe to send; explicit tool execution still goes through `request`
+    /// above and may ask the user when a durable host is installed.
+    static func automationStatus(for bundleIdentifier: String) -> NexComputerPermissionState {
+        automationState(bundleIdentifier: bundleIdentifier, request: false)
+    }
+
+    private static func automationState(
         bundleIdentifier: String,
         request: Bool
     ) -> NexComputerPermissionState {

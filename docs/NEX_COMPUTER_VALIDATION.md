@@ -2,12 +2,20 @@
 
 This ledger began on 2026-07-22 and is extended by dated validation increments below. The live CLI commands use the same registry, runtime, permission manager, confirmation gateway, connector roster, and executors as Nexus. No real message or email was sent, no call was placed, no purchase or third-party publication occurred, and no personal file was deleted. The source changes documented here are published through the repository's normal GitHub review flow, not by the Nexus Git tool.
 
-**Current 2026-08-10 snapshot:** 204 catalog actions; 113 pass the live availability probe while Google, GitHub OAuth, Notion, and Slack remain disconnected. The exact prerequisite for every action that cannot currently receive a real-functionality test is in [NEX_TOOL_AUTHORIZATION_MATRIX.md](NEX_TOOL_AUTHORIZATION_MATRIX.md).
+**Current 2026-08-10 snapshot:** the standalone Nex Computer registry has 204
+manifest actions, 113 of which pass its live availability probe. The running
+Nexus control plane exposes those 204 actions plus six memory/web actions
+(`conversation_recall`, `memory_forget`, `memory_get`, `memory_propose`,
+`memory_search`, and `web_search`) for a 210-action live union. Google,
+GitHub OAuth, Notion, and Slack remain disconnected. The exact prerequisite
+for every action that cannot currently receive a real-functionality test is in
+[NEX_TOOL_AUTHORIZATION_MATRIX.md](NEX_TOOL_AUTHORIZATION_MATRIX.md).
 
 ## Environment
 
-- Registry: 204 definitions (203 operational actions plus `search_tools`); 113
-  are currently available in the headless environment.
+- Registry: 204 definitions in standalone Nex Computer (203 operational
+  actions plus `search_tools`), 113 currently available; `nexusctl tools`
+  additionally exposes six live memory/web actions for a 210-action union.
 - Managed browser: provisioned and isolated under Nexus Application Support.
 - Connectors: Google, Notion, Slack, GitHub, and Discord are not configured on this Mac, and are reported as disconnected.
 - Current permission-host gap: this Mac has no Apple Development signing
@@ -15,6 +23,52 @@ This ledger began on 2026-07-22 and is extended by dated validation increments b
   cannot survive a rebuild and Nexus intentionally does not request them.
 - Current permission gaps: Messages Full Disk Access and Photos access are not granted to the running build.
 - Current executable gaps: the VS Code CLI/application path is not installed; the installed Codex CLI is `0.142.5` and rejects its configured `gpt-5.6-luna` model as requiring a newer Codex build.
+
+## 2026-08-10 response startup and managed-browser recovery (GPT-OSS-20B)
+
+The live app had two independent background paths that could prevent an
+otherwise simple local GPT-OSS response from starting: continuous Chrome
+AppleScript polling was running on the main actor, and OAuth credential
+restoration was awaited during every startup and every response. Chrome
+polling now preflights Automation without prompting, performs the AppleEvent
+on a dedicated serial queue with a three-second AppleScript timeout, and
+returns only Sendable tab rows to the main actor. Connector discovery now
+registers disconnected capabilities without reading Keychain; a successful
+interactive Connect or Disconnect notification is the sole trigger that
+refreshes account availability from Keychain.
+
+The model for model-routed rows was local `gpt-oss:latest` (GPT-OSS 20B).
+Direct-control rows deliberately exercise the same live Nexus registry and
+confirmation gateway but do not involve model selection. All browser targets
+were public IANA pages; no account, message, personal file, or third-party
+record was changed.
+
+| Prompt / operation | Model / route | Actual tool and result | Latency | Status |
+|---|---|---|---:|---|
+| `Reply with exactly: local model response verified.` | GPT-OSS 20B, live `nexusctl prompt` | No tool was needed. The primary Nexus response completed with exactly `local model response verified.` after the startup repair. | 6 s wall clock | PASS |
+| `Reply with exactly: startup flow still responds.` | GPT-OSS 20B, live prompt after the final rebuild | No tool was needed. The primary response returned exactly `startup flow still responds.`. | 5 s wall clock | PASS |
+| `Visit https://www.iana.org/domains/reserved, read the page, and tell me whether example.com can be registered for a normal website.` | GPT-OSS 20B, live prompt | Selected `browser.visit_url`; the task read the live IANA page and the final answer correctly said example.com is reserved and cannot be registered or transferred. | 9 s wall clock | PASS |
+| `On https://www.iana.org/domains/reserved, use the browser to open the Domains navigation, take a screenshot, and explain the destination page.` | GPT-OSS 20B, live prompt | Correctly selected `browser.run_task` and presented an immutable confirmation. GPT-OSS supplied a broad `a[href*="/domains"]` selector and omitted the required extract step; after confirmation, Playwright safely rejected the selector because it matched 21 links. | 4 s planning; 20 ms confirmation | ROUTING PARTIAL / SAFE FAILURE |
+| `browser.visit_url` with `https://www.iana.org/domains/reserved` | Direct live registry contract | Returned page text naming `IANA-managed Reserved Domains` and the RFC 2606/6761 explanation of example domains. | 1,694 ms tool duration | PASS |
+| Computer Use visual check of `https://www.iana.org/domains/reserved` in Chrome | Computer Use, independent read-only verification | The visible IANA page showed the `Example domains` section stating that example.com and example.org are documentation-only and unavailable for registration or transfer. | 2.6 s UI navigation/check | PASS |
+| Agentic managed-browser task: navigate to IANA, click `a[href="/domains"]`, extract `main`, screenshot `iana-domains` | Direct live registry + confirmation | The task failed honestly: Playwright strict mode found three matching links. No screenshot was produced; the returned error named each match. | 14 ms confirmation + subsecond task | EXPECTED RECOVERABLE FAILURE |
+| Retry the same task with `header a[href="/domains"]`, extract `main`, screenshot `iana-domains` | Direct live registry + confirmation | Navigation and extraction reached `https://www.iana.org/domains`, but Playwright rejected the extensionless screenshot label with `path: unsupported mime type "null"`. | 21 ms confirmation + subsecond task | DEFECT FOUND |
+| Same scoped agentic task after screenshot fix | Direct live registry + confirmation | Completed; extracted the `Domain Name Services` page, saved the safe task-local `iana-domains.png`, and returned its stable task ID. The generated image was visually inspected and shows the IANA Domain Name Services page with its navigation cards. | 14 ms confirmation + subsecond task | PASS AFTER FIX |
+| `Create a disposable Nexus validation page that says "NexCLI current worker verification" and a short README explaining how to open it, then verify both files are present.` | GPT-OSS 20B, live prompt | Selected `nex_cli_task` against the managed `ollama/gpt-oss:latest` worker. It created `validation.html` with the exact heading and a `README.md`; Computer Use loaded the generated local page in Chrome and observed the exact heading. The initial README was incomplete, omitting the filename in its first opening step. | about 28 s observed end-to-end | PARTIAL / CONTENT DEFECT |
+| `In the current disposable Nexus validation page workspace, fix README.md so it explicitly says to open validation.html in a web browser and says the expected heading is "NexCLI current worker verification". Verify the corrected README.` before NexCLI metadata repair | GPT-OSS 20B, live prompt | Returned a prose claim with an empty tool trace; direct file inspection proved README.md was unchanged. The matching offline GPT-OSS plan did not discover `nex_cli_task`. | 7 s wall clock; 4.1 s offline plan | ROUTING FAILURE |
+| Same README correction after adding file/README aliases, tags, and an example to `nex_cli_task` | GPT-OSS 20B, offline and live prompt | The 5.5 s offline plan selected `nex_cli_task` with a standalone edit brief. The live run streamed the managed worker, completed with the changed README path, and direct file inspection confirmed both `validation.html` opening instructions and the exact expected heading. | 5.5 s offline plan; 27 s live run | PASS AFTER FIX |
+| Focused browser runtime regression and NexCLI metadata regression | Xcode test harness | `build-for-testing` compiled the new screenshot and `NexPrimaryToolPlannerTests.testNexCLIRegistersTaskAndExplicitWorkspaceSwitchTools` assertions with exit 0. Two prior focused `xcodebuild test` attempts for the browser test did not start execution: one left no result-bundle `Info.plist`; the repeat failed in unrelated Swift compiler-driver invocations with `exit code 0 but produced no further output`. The live E2E above is the acceptance evidence; the harness failure is not counted as a test pass. | about 45 s failed execution attempts; 3.3 s final test-bundle build | COMPILED / EXECUTION HARNESS BLOCKED |
+
+The managed screenshot runtime now normalizes a missing extension to `.png`
+and replaces unsafe label characters before joining it to the Nexus-owned
+task directory. This removes the null-MIME failure and prevents a model- or
+user-supplied screenshot label from escaping that evidence directory.
+
+`nex_cli_task` now also carries file-edit and README-specific semantic
+metadata. This is not a keyword shortcut: regular semantic discovery exposes
+the existing generic coding tool for a concrete file edit, and GPT-OSS still
+owns the decision and task brief. The regression above proves Nexus no longer
+claims a local file edit without routing it to the managed worker.
 
 ## 2026-08-10 durable macOS permission-host increment
 

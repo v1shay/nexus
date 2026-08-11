@@ -2,6 +2,11 @@
 
 Snapshot: 2026-08-10. The headless registry exposes 204 definitions: 203
 operational tools plus the non-executing `search_tools` discovery meta-tool.
+The running app's `nexusctl tools` union adds six memory/web actions
+(`conversation_recall`, `memory_forget`, `memory_get`, `memory_propose`,
+`memory_search`, and `web_search`) for 210 live names. Those six do not need
+an additional macOS grant or remote-account connection; their ordinary
+read/write policy and confirmation requirements still apply.
 This matrix lists every operational action that cannot currently receive a meaningful real-functionality
 test without one of: a durable macOS grant, an account connection, an
 explicitly authorized target, or a platform host. The source snapshot is
@@ -53,13 +58,17 @@ person or account-owned item; consequential actions remain confirmation-bound.
 | Google account metadata | `google.connection_status`, `google.account_info`, `google.list_capabilities`, `google.disconnect` | Signing in enables the first three; `google.disconnect` should be tested only after an explicit request to disconnect that account. |
 | Notion | `notion.search`, `notion.read_page`, `notion.open_page`, `notion.search_databases`, `notion.read_database`, `notion.query_database`, `notion.create_page`, `notion.update_page`, `notion.append_content`, `notion.create_database_item`, `notion.update_database_item`, `notion.archive_page` | A dedicated integration-shared test page/database. Archive only generated test content. |
 | Slack | `slack.get_channel`, `slack.get_user`, `slack.list_channels`, `slack.list_recent_messages`, `slack.read_channel`, `slack.read_thread`, `slack.search`, `slack.open_channel`, `slack.draft_message`, `slack.send_draft`, `slack.reply_to_thread`, `slack.add_reaction`, `slack.remove_reaction`, `slack.upload_file` | A dedicated private test channel. Sends, replies, reactions, and uploads require that channel as the explicit target. |
-| GitHub OAuth connector | `github.search_repositories`, `github.get_repository`, `github.list_issues`, `github.get_issue`, `github.list_pull_requests`, `github.get_pull_request`, `github.list_notifications`, `github.list_workflows`, `github.get_workflow_run`, `github.update_issue`, `github.comment_issue`, `github.comment_pull_request`, `github.merge_pull_request`, `github.mark_notification_read`, `github.rerun_workflow`, `github.cancel_workflow` | The private `v1shay/nexus-tool-validation-20260810` fixture repository, never the production repository. Local `gh` alternatives already validated safe search, checks, issue creation, and PR creation. |
+| GitHub OAuth connector | `github.search`, `github.search_repositories`, `github.get_repository`, `github.open`, `github.open_repository`, `github.list_issues`, `github.get_issue`, `github.create_issue`, `github.list_pull_requests`, `github.get_pull_request`, `github.create_pull_request`, `github.open_pull_request`, `github.get_checks`, `github.list_notifications`, `github.list_workflows`, `github.get_workflow_run`, `github.update_issue`, `github.comment_issue`, `github.comment_pull_request`, `github.merge_pull_request`, `github.mark_notification_read`, `github.rerun_workflow`, `github.cancel_workflow` | The private `v1shay/nexus-tool-validation-20260810` fixture repository, never the production repository. Local `gh` alternatives already validated safe search, checks, issue creation, and PR creation. |
 
 ## Explicit target needed even after grants
 
 - `messages.draft` and `messages.open_conversation`: an exact verified Vishay
   phone number or email address. `messages.send_draft` is the only real-message
   send action in scope, and it must target Vishay only.
+- `memory_propose` and `memory_forget`: a named, disposable memory record.
+  `memory_forget` must never be exercised against an existing user memory;
+  the safe flow is to create a clearly labelled validation memory and remove
+  that exact record only after checking its immutable preview.
 - `browser.import_chrome_profile`: explicit consent to read selected state from
   the user's Chrome profile. Nexus should otherwise use its separate managed
   profile.
@@ -69,6 +78,9 @@ person or account-owned item; consequential actions remain confirmation-bound.
   `git.pull`, `git.push`, `preview.export`, and `preview.combine_pdfs`: use
   only generated fixture tabs, paths, repositories, and documents. These are
   testable once a target is named; no blanket access should imply a target.
+- `system.set_volume`: an explicit temporary test value and confirmation,
+  because it changes the user's active macOS audio setting. `system.toggle_focus_mode`
+  is separately unavailable for the platform reason below.
 
 ## Platform or host limitation, not a permission request
 
@@ -82,6 +94,14 @@ person or account-owned item; consequential actions remain confirmation-bound.
 - `youtube_play`, `youtube_play_current`, `youtube_fullscreen`: a standalone
   headless run has no Nexus media-overlay host. Test them from the live app
   after the macOS desktop is unlockable for visual/output verification.
+- The Visual Studio Code application/CLI is not installed, so the seven
+  `vscode.*` actions need a local VS Code installation before they can receive
+  a real end-to-end test. This is an environment prerequisite, not a privacy
+  grant.
+- The installed Codex CLI (`0.142.5`) rejects its configured `gpt-5.6-luna`
+  model as requiring a newer Codex build. The six `codex.*` actions therefore
+  need a compatible local Codex installation or model configuration before a
+  real end-to-end test. This is likewise an environment prerequisite.
 - `system.toggle_focus_mode`: macOS has no stable public API for that mutation;
   Nexus correctly exposes the Settings-navigation recovery instead of claiming
   that Focus was toggled.

@@ -194,9 +194,9 @@ actor NexCLITaskService {
             ]),
             application: "NexCLI",
             provider: "Nex local coding agent",
-            examples: ["Build a playable Snake game", "Fix and test this app", "Create a website from these requirements"],
-            aliases: ["code this", "build an app", "implement this", "fix the code", "coding agent"],
-            tags: ["code", "build", "implement", "debug", "test", "files", "app", "website"],
+            examples: ["Build a playable Snake game", "Fix and test this app", "Create a website from these requirements", "Update README.md and verify the change"],
+            aliases: ["code this", "build an app", "implement this", "fix the code", "coding agent", "edit a file", "update README", "fix a README", "modify project files"],
+            tags: ["code", "build", "implement", "debug", "test", "files", "file", "edit", "update", "readme", "app", "website"],
             supportedWorkflows: ["software implementation", "code modification", "test and validation", "file-based artifact creation"]
         ) { arguments, context in
             guard let prompt = arguments["prompt"]?.string?.trimmingCharacters(in: .whitespacesAndNewlines), !prompt.isEmpty else {
