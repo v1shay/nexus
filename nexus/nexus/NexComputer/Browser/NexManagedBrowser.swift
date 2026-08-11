@@ -168,7 +168,20 @@ try {
       case 'extract': extracted.push(await page.locator(step.selector || 'body').innerText({timeout:15000})); break;
       case 'upload': await page.locator(step.selector).setInputFiles(step.paths || []); break;
       case 'download': await Promise.all([page.waitForEvent('download'),page.locator(step.selector).click()]); break;
-      case 'screenshot': { const target=`${request.taskRoot}/${step.name || `shot-${index}.png`}`; await page.screenshot({path:target,fullPage:step.fullPage ?? step.full_page ?? true}); screenshots.push(target); break; }
+      case 'screenshot': {
+        // Playwright infers its encoder from the filename extension. Models
+        // naturally supply labels such as "results" rather than "results.png",
+        // so normalize to a task-local PNG instead of failing with a null MIME
+        // type. Sanitizing to a basename also prevents a supplied label from
+        // escaping Nexus's per-task evidence directory.
+        const requested = String(step.name || `shot-${index}.png`);
+        const safeBase = requested.replace(/[^A-Za-z0-9._-]/g, '_').replace(/^_+/, '') || `shot-${index}`;
+        const filename = /\.(png|jpe?g|webp)$/i.test(safeBase) ? safeBase : `${safeBase}.png`;
+        const target=`${request.taskRoot}/${filename}`;
+        await page.screenshot({path:target,fullPage:step.fullPage ?? step.full_page ?? true});
+        screenshots.push(target);
+        break;
+      }
       default: throw new Error(`Unsupported browser step: ${step.action}`);
     }
   }

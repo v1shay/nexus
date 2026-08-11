@@ -103,16 +103,73 @@ protocol BrowserTabProviding {
     func activeTab() async throws -> BrowserTab?
 }
 
-enum BrowserTabProviderError: LocalizedError {
+enum BrowserTabProviderError: LocalizedError, Sendable {
     case chromeUnavailable
+    case automationPermissionRequired
     case scriptFailed(String)
     case tabNotFound
 
     var errorDescription: String? {
         switch self {
         case .chromeUnavailable: "Google Chrome is not running."
+        case .automationPermissionRequired:
+            "Allow Nexus to control Google Chrome in System Settings before reading live Chrome tabs."
         case .scriptFailed(let message): "Chrome tab access failed: \(message)"
         case .tabNotFound: "That Chrome tab is no longer available."
+        }
+    }
+}
+
+/// AppleScript waits for a reply from Chrome synchronously. The media observer
+/// runs continuously, so executing that wait on the app's main actor can
+/// freeze unrelated chat and permission work when Chrome is slow or has a
+/// pending Automation prompt. Keep the AppleEvent on one dedicated queue and
+/// return only plain, Sendable tab rows to the main actor.
+private struct ChromeAppleScriptTabRow: Sendable {
+    let windowIndex: Int
+    let tabIndex: Int
+    let title: String
+    let urlString: String
+    let isActive: Bool
+}
+
+private enum ChromeAppleScriptExecutor {
+    private static let queue = DispatchQueue(label: "na.nexus.chrome.apple-script")
+
+    static func tabRows(script: String) async throws -> [ChromeAppleScriptTabRow] {
+        try await withCheckedThrowingContinuation { continuation in
+            queue.async {
+                var error: NSDictionary?
+                guard let result = NSAppleScript(source: script)?.executeAndReturnError(&error) else {
+                    continuation.resume(throwing: BrowserTabProviderError.scriptFailed(error?.description ?? "No AppleScript result"))
+                    return
+                }
+                if let error {
+                    continuation.resume(throwing: BrowserTabProviderError.scriptFailed(error.description))
+                    return
+                }
+                guard result.numberOfItems > 0 else {
+                    continuation.resume(returning: [])
+                    return
+                }
+                var rows: [ChromeAppleScriptTabRow] = []
+                for index in 1...result.numberOfItems {
+                    guard let row = result.atIndex(index), row.numberOfItems >= 5,
+                          let title = row.atIndex(3)?.stringValue,
+                          let urlString = row.atIndex(4)?.stringValue else { continue }
+                    let windowIndex = Int(row.atIndex(1)?.int32Value ?? 0)
+                    let tabIndex = Int(row.atIndex(2)?.int32Value ?? 0)
+                    guard windowIndex > 0, tabIndex > 0 else { continue }
+                    rows.append(.init(
+                        windowIndex: windowIndex,
+                        tabIndex: tabIndex,
+                        title: title,
+                        urlString: urlString,
+                        isActive: row.atIndex(5)?.booleanValue ?? false
+                    ))
+                }
+                continuation.resume(returning: rows)
+            }
         }
     }
 }
@@ -128,48 +185,46 @@ final class ChromeBrowserTabProvider: BrowserTabProviding {
             cachedTabs = [:]
             throw BrowserTabProviderError.chromeUnavailable
         }
-        let script = """
-        tell application "Google Chrome"
-            set tabRows to {}
-            set windowNumber to 0
-            repeat with chromeWindow in windows
-                set windowNumber to windowNumber + 1
-                set currentTabIndex to active tab index of chromeWindow
-                set tabNumber to 0
-                repeat with chromeTab in tabs of chromeWindow
-                    set tabNumber to tabNumber + 1
-                    set end of tabRows to {windowNumber, tabNumber, title of chromeTab, URL of chromeTab, tabNumber is currentTabIndex}
-                end repeat
-            end repeat
-            return tabRows
-        end tell
-        """
-        var error: NSDictionary?
-        guard let result = NSAppleScript(source: script)?.executeAndReturnError(&error) else {
-            throw BrowserTabProviderError.scriptFailed(error?.description ?? "No AppleScript result")
+        // A background media refresh must never send an AppleEvent that opens
+        // a permission dialog or blocks the app's main actor. Explicit Chrome
+        // tool execution first requests this permission through the normal
+        // confirmation/permission flow, then reaches this provider again.
+        guard NexComputerSystemPermissionBackend.automationStatus(for: "com.google.Chrome") == .authorized else {
+            throw BrowserTabProviderError.automationPermissionRequired
         }
-        if let error { throw BrowserTabProviderError.scriptFailed(error.description) }
-
-        guard result.numberOfItems > 0 else {
+        let script = """
+        with timeout of 3 seconds
+            tell application "Google Chrome"
+                set tabRows to {}
+                set windowNumber to 0
+                repeat with chromeWindow in windows
+                    set windowNumber to windowNumber + 1
+                    set currentTabIndex to active tab index of chromeWindow
+                    set tabNumber to 0
+                    repeat with chromeTab in tabs of chromeWindow
+                        set tabNumber to tabNumber + 1
+                        set end of tabRows to {windowNumber, tabNumber, title of chromeTab, URL of chromeTab, tabNumber is currentTabIndex}
+                    end repeat
+                end repeat
+                return tabRows
+            end tell
+        end timeout
+        """
+        let rows = try await ChromeAppleScriptExecutor.tabRows(script: script)
+        guard !rows.isEmpty else {
             cachedTabs = [:]
             return []
         }
         var tabs: [BrowserTab] = []
-        for index in 1...result.numberOfItems {
-            guard let row = result.atIndex(index), row.numberOfItems >= 5,
-                  let title = row.atIndex(3)?.stringValue,
-                  let urlString = row.atIndex(4)?.stringValue,
-                  let url = URL(string: urlString) else { continue }
-            let windowIndex = Int(row.atIndex(1)?.int32Value ?? 0)
-            let tabIndex = Int(row.atIndex(2)?.int32Value ?? 0)
-            guard windowIndex > 0, tabIndex > 0 else { continue }
+        for row in rows {
+            guard let url = URL(string: row.urlString) else { continue }
             let tab = BrowserTab(
-                id: "chrome:\(windowIndex):\(tabIndex):\(urlHash(url))",
-                windowIndex: windowIndex,
-                tabIndex: tabIndex,
-                title: title,
+                id: "chrome:\(row.windowIndex):\(row.tabIndex):\(urlHash(url))",
+                windowIndex: row.windowIndex,
+                tabIndex: row.tabIndex,
+                title: row.title,
                 url: url,
-                isActive: row.atIndex(5)?.booleanValue ?? false
+                isActive: row.isActive
             )
             tabs.append(tab)
         }

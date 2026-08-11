@@ -346,11 +346,14 @@ final class NexComputerExtendedActionTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: root) }
         let result = try await NexManagedBrowserProvider(root: root).run(
             goal: "Read the IANA reserved-domains page heading",
-            stepsJSON: "[{\"action\":\"navigate\",\"url\":\"https://www.iana.org/domains/reserved\"},{\"action\":\"extract\",\"selector\":\"h1\"}]"
+            stepsJSON: "[{\"action\":\"navigate\",\"url\":\"https://www.iana.org/domains/reserved\"},{\"action\":\"extract\",\"selector\":\"h1\"},{\"action\":\"screenshot\",\"name\":\"iana-reserved-domains\",\"fullPage\":false}]"
         ) { _ in }
         XCTAssertEqual(result.status, "completed")
         XCTAssertTrue(result.text.localizedCaseInsensitiveContains("IANA-managed Reserved Domains"))
         XCTAssertTrue(result.error.isEmpty)
+        let screenshot = try XCTUnwrap(result.screenshots.first)
+        XCTAssertTrue(screenshot.hasSuffix("iana-reserved-domains.png"))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: screenshot))
         let reloaded = NexManagedBrowserProvider(root: root)
         let persisted = await reloaded.status(result.taskID)
         XCTAssertEqual(persisted?.taskID, result.taskID)

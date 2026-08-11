@@ -227,6 +227,14 @@ protocol NexConnectorCredentialStoring: Sendable {
     func remove(_ provider: NexConnectorProvider) throws
 }
 
+extension Notification.Name {
+    /// Posted only after an interactive connector authorization or disconnect
+    /// changes a saved credential. Tool discovery stays Keychain-free at
+    /// launch; the live registry refreshes after the user has completed the
+    /// account action that can legitimately touch Keychain.
+    static let nexConnectorCredentialsDidChange = Notification.Name("na.nexus.connectorCredentialsDidChange")
+}
+
 struct NexKeychainConnectorCredentialStore: NexConnectorCredentialStoring, Sendable {
     private let secrets: NexusSecretStore
     init(secrets: NexusSecretStore = NexusKeychainSecretStore(service: "na.nexus.connectors.oauth")) { self.secrets = secrets }
@@ -546,6 +554,7 @@ final class NexConnectorAuthController: NSObject, ObservableObject, ASWebAuthent
                 let account = provider == .notion ? credential.account : try await transport.verify(configuration: configuration, credential: credential)
                 credential = .init(provider: credential.provider, account: account, accessToken: credential.accessToken, refreshToken: credential.refreshToken, tokenType: credential.tokenType, scopes: credential.scopes, expiresAt: credential.expiresAt, connectedAt: credential.connectedAt, lastSuccessfulUse: .now)
                 try store.save(credential)
+                NotificationCenter.default.post(name: .nexConnectorCredentialsDidChange, object: provider)
                 message = "\(provider.title) connected."
             } catch {
                 message = error.localizedDescription
@@ -560,6 +569,7 @@ final class NexConnectorAuthController: NSObject, ObservableObject, ASWebAuthent
             do {
                 if revoke, let credential = try store.credential(for: provider), let configuration = try? NexOAuthConfiguration.configured(provider) { try await transport.revoke(configuration: configuration, credential: credential) }
                 try store.remove(provider)
+                NotificationCenter.default.post(name: .nexConnectorCredentialsDidChange, object: provider)
                 message = "\(provider.title) disconnected."
             } catch { message = error.localizedDescription }
             reload()
