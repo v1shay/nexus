@@ -597,6 +597,28 @@ final class NexusGeometryTests: XCTestCase {
         XCTAssertEqual(plist["KeepAlive"] as? Bool, true)
         XCTAssertFalse(String(decoding: data, as: UTF8.self).contains("OPENCODE_SERVER_PASSWORD"))
     }
+
+    func testNexCLIHostRetainsLatestFailureStatusForDiagnostics() throws {
+        let home = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: home) }
+        let manager = NexCLIHostManager(
+            homeDirectory: home,
+            executableURL: URL(fileURLWithPath: "/Applications/Nexus.app/Contents/MacOS/nexus")
+        )
+        try FileManager.default.createDirectory(at: manager.supportDirectory, withIntermediateDirectories: true)
+        let expected = NexCLIHostStatus(
+            processID: Int32.max,
+            workerProcessID: 0,
+            state: "failed",
+            detail: "NexCLI runtime is not bundled with this build.",
+            runtime: nil,
+            updatedAt: .now
+        )
+        try NexusPayloadCoder.encoder.encode(expected).write(to: manager.statusURL, options: .atomic)
+
+        XCTAssertEqual(manager.latestStatus(), expected)
+        XCTAssertNil(manager.currentStatus())
+    }
     func testOneWordFollowUpKeepsRecentVerbatimConversationContext() async {
         let session = NexConversationSession()
         await session.appendUser("Use a neural network for the image classifier")

@@ -1430,16 +1430,19 @@ final class NotchController: ObservableObject {
                 "connect_route": connectController.modelRoute.id
             ], error: nil)
         case "nexcli-status":
-            guard let status = NexCLIHostManager.shared.currentStatus() else {
+            guard let status = NexCLIHostManager.shared.latestStatus() else {
                 return .init(ok: false, result: ["state": "unavailable"], error: "The managed NexCLI worker is not live.")
             }
-            return .init(ok: status.state == "ready", result: [
+            let isLive = status.isLive
+            let isReady = status.state == "ready" && isLive
+            return .init(ok: isReady, result: [
                 "state": status.state,
+                "live": String(isLive),
                 "supervisor_pid": String(status.processID),
                 "worker_pid": String(status.workerProcessID),
                 "runtime": status.runtime ?? "",
                 "detail": status.detail ?? ""
-            ], error: status.state == "ready" ? nil : (status.detail ?? "NexCLI is still starting."))
+            ], error: isReady ? nil : (status.detail ?? "The managed NexCLI worker is not live."))
         case "cancel":
             responseTask?.cancel()
             responseGeneration = UUID()
