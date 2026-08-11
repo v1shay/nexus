@@ -1,13 +1,13 @@
 # Nexus Tool Authorization Matrix
 
-Snapshot: 2026-08-10. The headless registry exposes 202 definitions: 201
+Snapshot: 2026-08-10. The headless registry exposes 204 definitions: 203
 operational tools plus the non-executing `search_tools` discovery meta-tool.
 This matrix lists every operational action that cannot currently receive a meaningful real-functionality
 test without one of: a durable macOS grant, an account connection, an
 explicitly authorized target, or a platform host. The source snapshot is
 `./scripts/nex-computer doctor` plus the full machine-readable
 `./scripts/nex-computer tools` output. The GPT-OSS planning and discovery
-audits exclude `search_tools`, so their 201-tool total is expected.
+audits exclude `search_tools`, so their 203-tool total is expected.
 
 Nexus now excludes disconnected connector actions from the model's runnable
 allowlist. Directly invoking one returns a bounded `connection_required`
@@ -72,22 +72,23 @@ person or account-owned item; consequential actions remain confirmation-bound.
 
 ## Platform or host limitation, not a permission request
 
-- `nexcli-status` and NexCLI task execution: the current Nexus build contains
-  no compatible NexCLI runtime (`Contents/Resources/NexCLI/nex` and the
-  Application Support runtime path are both absent). The worker correctly
-  reports `state: failed` with its packaged-runtime recovery. Provide an
-  official compatible Nexus/NexCLI runtime artifact before a genuine
-  headless-task test; do not substitute a generic CLI because Nexus uses its
-  authenticated `/nex/*` protocol.
+- `nex_cli_task`, `nex_cli_set_workspace`, and `nexcli-status` are now real
+  headless capabilities, not a permission blocker. Nexus uses the managed
+  official NexCLI runtime with its authenticated `/nex/*` protocol and the
+  exact local `ollama/gpt-oss:latest` model. The safe generated-workspace
+  create-and-visual-verify flow passed. A future packaged release still needs
+  to bundle or deliver that managed runtime; this Debug validation used the
+  Nexus-owned Application Support runtime.
 - `youtube_play`, `youtube_play_current`, `youtube_fullscreen`: a standalone
   headless run has no Nexus media-overlay host. Test them from the live app
   after the macOS desktop is unlockable for visual/output verification.
 - `system.toggle_focus_mode`: macOS has no stable public API for that mutation;
   Nexus correctly exposes the Settings-navigation recovery instead of claiming
   that Focus was toggled.
-- Visual verification of launch actions is currently blocked because the Mac
-  desktop is locked to Computer Use. Headless launch/process evidence remains
-  available, but it is not a substitute for an unlocked visual check.
+- Computer Use can now visually verify generated local output in Finder and
+  Safari; it verified the NexCLI recovery page. Launch, media, and private-app
+  tests still need their action-specific macOS grant, signed-in session, and
+  explicit safe target before a visual check is meaningful.
 
 All remaining local action families have a safe generated-fixture strategy
 and are tracked with prompts, model, result, and latency in

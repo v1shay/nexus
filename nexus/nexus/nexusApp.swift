@@ -1535,7 +1535,9 @@ final class NotchController: ObservableObject {
             guard await waitForHeadlessTools() else {
                 return .init(ok: false, result: [:], error: "Nexus tool registry is still starting.")
             }
-            let tools = await computerRegistry.manifests().map(\.actionID).sorted().joined(separator: "\n")
+            let computerActions = await computerRegistry.manifests().map(\.actionID)
+            let registryActions = await memory.registry.definitions().map(\.name)
+            let tools = Set(computerActions + registryActions).sorted().joined(separator: "\n")
             return .init(ok: true, result: ["tools": tools], error: nil)
         case "tool-execute", "tool-dry-run":
             guard let action = request.arguments["action"],

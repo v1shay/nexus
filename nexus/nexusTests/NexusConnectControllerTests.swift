@@ -320,6 +320,25 @@ extension NexusGeometryTests {
         XCTAssertEqual(manager.installCount, 1, "UI shutdown must not own or terminate the host process")
     }
 
+    @MainActor
+    func testUnpairedStudioHostKeepsInferenceLocal() async throws {
+        let suiteName = "NexusInferenceRoute.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let controller = NexusConnectController(
+            defaults: defaults,
+            secretStore: NexusMemorySecretStore(),
+            discovery: NexusRunningDiscoveryStub(),
+            persistentHost: NexusPersistentHostManagerSpy()
+        )
+        controller.setRole(.studioHost)
+        controller.setEnabled(true)
+
+        XCTAssertFalse(controller.isPaired)
+        XCTAssertFalse(controller.shouldUseStudio)
+        controller.shutdown()
+    }
+
     func testPairingCodeRoundTripsAndDetectsDamage() throws {
         let generated = try NexusPairingCode.generate()
         let decoded = try NexusPairingCode.decode(generated.code)

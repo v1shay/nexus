@@ -1,12 +1,12 @@
 # Nex Computer Phase 27 Validation
 
-This ledger began on 2026-07-22 and is extended by dated validation increments below. The live CLI commands use the same registry, runtime, permission manager, confirmation gateway, connector roster, and executors as Nexus. No real message or email was sent, no call was placed, no purchase or publication occurred, no remote Git push ran, and no personal file was deleted.
+This ledger began on 2026-07-22 and is extended by dated validation increments below. The live CLI commands use the same registry, runtime, permission manager, confirmation gateway, connector roster, and executors as Nexus. No real message or email was sent, no call was placed, no purchase or third-party publication occurred, and no personal file was deleted. The source changes documented here are published through the repository's normal GitHub review flow, not by the Nexus Git tool.
 
-**Current 2026-08-10 snapshot:** 202 catalog actions; 111 pass the live availability probe while Google, GitHub OAuth, Notion, and Slack remain disconnected. The exact prerequisite for every action that cannot currently receive a real-functionality test is in [NEX_TOOL_AUTHORIZATION_MATRIX.md](NEX_TOOL_AUTHORIZATION_MATRIX.md).
+**Current 2026-08-10 snapshot:** 204 catalog actions; 113 pass the live availability probe while Google, GitHub OAuth, Notion, and Slack remain disconnected. The exact prerequisite for every action that cannot currently receive a real-functionality test is in [NEX_TOOL_AUTHORIZATION_MATRIX.md](NEX_TOOL_AUTHORIZATION_MATRIX.md).
 
 ## Environment
 
-- Registry: 202 definitions (201 operational actions plus `search_tools`); 111
+- Registry: 204 definitions (203 operational actions plus `search_tools`); 113
   are currently available in the headless environment.
 - Managed browser: provisioned and isolated under Nexus Application Support.
 - Connectors: Google, Notion, Slack, GitHub, and Discord are not configured on this Mac, and are reported as disconnected.
@@ -1170,3 +1170,56 @@ xcodebuild … -destination 'platform=macOS,arch=arm64,id=00006002-001869AC34898
   ok=false; state=failed; live=false
   Nexus Connect is unavailable: NexCLI runtime is not bundled with this build.
 ```
+
+## 2026-08-10 official NexCLI runtime and headless GPT-OSS validation
+
+Nexus now has the official `v1shay/nexCLI` source build installed as its
+managed Application Support runtime. It was built from the upstream
+`v1shay/nex-foundation` branch at `e680b4200afacf964a7dcde102d8b8c752726d24`,
+then rebuilt after the recoverable-tool-state repair in
+[nexCLI PR #1](https://github.com/v1shay/nexCLI/pull/1). The active binary
+reports `0.0.0-v1shay/nex-foundation-202608110048`; `nexusctl nexcli-status`
+reports `state: ready`, `live: true`, and `runtime: managed NexCLI`.
+
+The host now runs the official `nex models use gpt-oss:latest` configuration
+step before it starts `nex serve`. A fresh provider registry otherwise accepts
+`/nex/tasks` but leaves the exact required `ollama/gpt-oss:latest` task queued.
+The bootstrap was tested after moving only Nexus-generated NexCLI config files
+aside: the host recreated them, became ready, and a read-only task completed
+with `bash ls -al` in an empty generated workspace. No personal file was
+modified.
+
+| Prompt / operation | Expected action | Actual output | Model | Latency | Status |
+|---|---|---|---|---:|---|
+| `In the managed coding workspace, build a small local page that shows the words Nexus CLI validation and include a short README explaining how to open it.` | Semantic discovery and `nex_cli_task` | Headless discovery ranked both NexCLI actions; GPT-OSS selected `nex_cli_task` with a standalone HTML/README brief instead of the stale `codex.start_task` action. | `gpt-oss:latest` | 3.85 s | PASS after registry repair |
+| `Set workspace name: Nexus CLI Headless E2E 20260810.` | `nex_cli_set_workspace` | Created only the app-managed workspace under the Nex vault. | N/A (direct headless tool action) | 3 ms | PASS |
+| The GPT-OSS-generated HTML/README brief above | `nex_cli_task` | The model first supplied a malformed `workdir`, then corrected itself, created both files, and returned a final answer. The old gateway wrongly surfaced the transient tool failure as a failed task despite the completed artifacts. | `gpt-oss:latest` | 11.65 s | FAIL FOUND / FIXED |
+| `Create a simple static page that displays "Nexus CLI recovery validation" and a short README explaining how to open it. Use index.html and README.md, then verify both files are present.` | `nex_cli_task` | Created `index.html` and `README.md`; returned `status: completed`, a file URL for the page, and final text confirming both files. | `gpt-oss:latest` | 15.41 s | PASS |
+| Computer Use visual verification of the generated page | Finder + Safari (read-only UI verification) | Finder showed exactly `index.html` and `README.md` in the generated workspace. Safari rendered local `127.0.0.1:8123/recovery/index.html` with heading `Nexus CLI recovery validation`. The temporary local server was stopped afterward. | N/A | UI inspection | PASS |
+| `In the managed coding workspace, list every file and state in one sentence whether a README and index.html are present. Do not edit, create, rename, or delete anything.` via `nexusctl prompt` | Primary-app response route | NexCLI actions were registered and the worker was live, but the ordinary app response remained `is_streaming: true` for about 41 s, created no NexCLI session, and returned no tool trace. The request was cancelled without a file change. This read-only wording did not itself prove that the planner should choose a coding task. | `gpt-oss:latest` | about 41 s before cancellation | FAIL / PRIMARY RESPONSE PATH OPEN |
+| `Reply with exactly: local model response verified.` via `nexusctl prompt` | Primary-app, no-tool response | The same live app again stayed in `thinking` with an empty answer and had to be cancelled. This removes tool selection and NexCLI from the immediate cause. | `gpt-oss:latest` | about 16.5 s before cancellation | FAIL / PRIMARY RESPONSE PATH OPEN |
+| Direct local Ollama check: `Reply with exactly: local model response verified.` | `ollama /api/chat` | Returned the exact phrase with HTTP 200, including a 2.77 s total request time. This is a control measurement: the local GPT-OSS runtime is healthy; the remaining failure is in Nexus's primary response orchestration. | `gpt-oss:latest` | 2.77 s | PASS / CONTROL |
+
+### Defects fixed in this increment
+
+1. The standalone `nex-computer` environment registered computer manifests,
+   YouTube, and disconnected connectors but omitted the shared NexCLI task
+   service. It now registers the same two schema-defined NexCLI actions before
+   semantic search, so GPT-OSS can discover and select them naturally. The
+   app's `nexusctl tools` output also unions computer manifests with its shared
+   registry rather than silently hiding non-computer actions.
+2. Fresh NexCLI installations did not know `ollama/gpt-oss:latest`; the host
+   now configures that exact local coding model before serving and waits up to
+   30 seconds for a cold Ollama inventory.
+3. A recoverable Nex tool error ended the Nexus SSE client before the agent
+   could repair its work. The client now ends only on task-level terminal
+   events. The NexCLI gateway now reports a completed final reply after a
+   recoverable tool failure, while retaining that tool's structured error for
+   diagnostics. The focused NexCLI gateway suite passed 6 tests; Nexus build
+   and test-bundle builds both succeeded.
+4. A Connect-enabled but unpaired Studio host was treated as a remote route.
+   Inference and native tool planning now use the local model unless
+   `shouldUseStudio` confirms a real paired destination. The focused controller
+   regression test covers this route. The two primary-app controls above still
+   expose a separate response-orchestration failure and are intentionally not
+   represented as a pass.

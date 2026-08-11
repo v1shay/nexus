@@ -7,7 +7,10 @@ actor NexApiClient {
         let providerID: String
         let modelID: String
 
-        static let localCodingDefault = Self(providerID: "ollama", modelID: "gpt-oss:latest")
+        static let localCodingDefault = Self(
+            providerID: NexLocalCodingModel.providerID,
+            modelID: NexLocalCodingModel.modelID
+        )
     }
 
     struct TaskRequest: Sendable {
@@ -129,7 +132,10 @@ actor NexApiClient {
             let event = try decode(Event.self, from: data, endpoint: "event stream")
             guard event.taskId == task.taskId else { continue }
             await receive(event)
-            if [.completed, .failed].contains(event.kind) || event.status == "cancelled" { return }
+            // `tool.failed` is recoverable: the agent may correct its input
+            // and finish the same session. Only task-level terminal events
+            // end the stream before we fetch the definitive task snapshot.
+            if event.type == "task.completed" || event.type == "task.failed" || event.status == "cancelled" { return }
         }
     }
 

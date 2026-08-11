@@ -182,6 +182,10 @@ struct NexComputerCLIEnvironment: Sendable {
             NexYouTubeToolController(registry: tools) { _, _ in false }
         }
         try await youtube.registerIfNeeded()
+        // NexCLI is a registry-owned tool rather than a computer-action
+        // manifest. Register it before semantic search/planning so the
+        // headless surface has the same coding capability as the app.
+        try await NexCLITaskService.shared.register(in: tools)
         // This standalone process must not read the login Keychain while it
         // is merely listing, planning, or dry-running tools. A stale ACL can
         // otherwise make every headless command hang before it produces a

@@ -389,7 +389,11 @@ final class ModelDownloadViewModel: ObservableObject {
         guard let activeModel else {
             throw LocalModelError.invalidResponse("Choose an installed model in the model window first")
         }
-        if let connect, connect.modelRoute != .thisMac {
+        // A persisted automatic route is only remote when Nexus Connect has
+        // an actual paired client destination. A studio host (or an unpaired
+        // client) must keep inference local instead of waiting forever on a
+        // Connect workload that has nowhere to run.
+        if let connect, connect.shouldUseStudio {
             return try await connect.response(
                 model: activeModel,
                 messages: messages,
@@ -449,7 +453,7 @@ final class ModelDownloadViewModel: ObservableObject {
         if !selectedAPIProvider,
            let activeModel,
            activeModel.backend == .ollama,
-           (connect == nil || connect?.modelRoute == .thisMac) {
+           connect?.shouldUseStudio != true {
             return try await ollama.planTools(
                 model: activeModel.identifier,
                 messages: messages,
