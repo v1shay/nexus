@@ -1463,13 +1463,24 @@ final class NotchController: ObservableObject {
             return .init(ok: true, result: ["active": model.id, "model": model.name], error: nil)
         case "permissions":
             let snapshot = NexusPermissionSnapshot.current
+            let host = NexusPermissionHostIdentity.current()
             return .init(ok: true, result: [
                 "input_monitoring": String(snapshot.inputMonitoring),
                 "accessibility": String(snapshot.accessibility),
                 "screen_recording": String(snapshot.screenRecording),
                 "microphone": String(snapshot.microphone),
                 "speech_recognition": String(snapshot.speechRecognition),
-                "full_disk_access_messages": String(snapshot.messagesFullDiskAccess)
+                "full_disk_access_messages": String(snapshot.messagesFullDiskAccess),
+                "permission_host_durable": String(host.isDurable),
+                "permission_host_message": host.statusMessage
+            ], error: nil)
+        case "permission-host":
+            let host = NexusPermissionHostIdentity.current()
+            return .init(ok: true, result: [
+                "durable": String(host.isDurable),
+                "designated_requirement": host.designatedRequirement,
+                "fingerprint": host.fingerprint,
+                "message": host.statusMessage
             ], error: nil)
         case "permission-open":
             guard let raw = request.arguments["value"], let service = NexusTCCService.cliService(raw) else {
@@ -1725,6 +1736,14 @@ final class NotchController: ObservableObject {
         if let attachment = NexusScreenCapture.captureCurrentScreen() {
             NSLog("[Nexus Vision] Encoded frontmost app window (%d base64 bytes)", attachment.base64.utf8.count)
             return attachment
+        }
+        // Existing access is useful even for a development build, but a
+        // failed capture must not launch a new TCC request from an ad-hoc
+        // identity. That grant would attach to this build's changing cdhash
+        // and immediately recreate the permission loop after the next build.
+        guard NexusPermissionHealth.shared.permissionHostIsDurable else {
+            NexusPermissionHealth.shared.refresh()
+            return nil
         }
         _ = NexusScreenCapture.requestAccess(prompt: true)
         guard let attachment = NexusScreenCapture.captureCurrentScreen() else {
@@ -3550,6 +3569,64 @@ enum NexusGlobalHotkeyAccess {
     }
 }
 
+/// TCC associates a grant with the app's designated code requirement, not a
+/// SwiftUI view or the current build directory. An ad-hoc requirement embeds a
+/// changing code hash, so asking for privacy access from an Xcode rebuild
+/// creates the exact re-authorization loop that a durable host must avoid.
+struct NexusPermissionHostIdentity: Equatable {
+    let designatedRequirement: String
+    let fingerprint: String
+
+    static let expectedBundleIdentifier = "na.nexus"
+
+    var isDurable: Bool {
+        Self.isDurable(designatedRequirement: designatedRequirement)
+    }
+
+    var statusMessage: String {
+        if isDurable {
+            return "Stable Apple-signed permission host detected. macOS can retain grants across rebuilt Nexus copies."
+        }
+        return "This Nexus build is ad-hoc or has an unverified signing requirement. Install an Apple Development-signed Nexus.app before granting privacy access; macOS cannot retain grants for rebuilt ad-hoc copies."
+    }
+
+    static func isDurable(designatedRequirement: String) -> Bool {
+        let normalized = designatedRequirement.lowercased()
+        return normalized.contains("anchor apple generic")
+            && normalized.contains("identifier \"\(expectedBundleIdentifier)\"")
+    }
+
+    static func current() -> Self {
+        var dynamicCode: SecCode?
+        guard SecCodeCopySelf([], &dynamicCode) == errSecSuccess,
+              let dynamicCode else {
+            return .init(designatedRequirement: "", fingerprint: "")
+        }
+        var staticCode: SecStaticCode?
+        guard SecCodeCopyStaticCode(dynamicCode, [], &staticCode) == errSecSuccess,
+              let staticCode else {
+            return .init(designatedRequirement: "", fingerprint: "")
+        }
+        var requirement: SecRequirement?
+        guard SecCodeCopyDesignatedRequirement(staticCode, [], &requirement) == errSecSuccess,
+              let requirement else {
+            return .init(designatedRequirement: "", fingerprint: "")
+        }
+        var requirementText: CFString?
+        var requirementData: CFData?
+        guard SecRequirementCopyString(requirement, [], &requirementText) == errSecSuccess,
+              let requirementText,
+              SecRequirementCopyData(requirement, [], &requirementData) == errSecSuccess,
+              let requirementData else {
+            return .init(designatedRequirement: "", fingerprint: "")
+        }
+        let fingerprint = SHA256.hash(data: requirementData as Data)
+            .map { String(format: "%02x", $0) }
+            .joined()
+        return .init(designatedRequirement: requirementText as String, fingerprint: fingerprint)
+    }
+}
+
 struct NexusPermissionSnapshot: Equatable {
     let inputMonitoring: Bool
     let accessibility: Bool
@@ -3627,6 +3704,7 @@ final class NexusPermissionHealth: ObservableObject {
     static let shared = NexusPermissionHealth()
 
     @Published private(set) var snapshot = NexusPermissionSnapshot.current
+    @Published private(set) var permissionHost = NexusPermissionHostIdentity.current()
     @Published private(set) var statusMessage = "Checked against the running Nexus process."
 
     private let defaults = UserDefaults.standard
@@ -3634,15 +3712,22 @@ final class NexusPermissionHealth: ObservableObject {
 
     private init() {}
 
+    var permissionHostIsDurable: Bool { permissionHost.isDurable }
+    var permissionHostMessage: String { permissionHost.statusMessage }
+
     func validateAtLaunch() {
-        let currentFingerprint = Self.designatedRequirementFingerprint()
+        let host = NexusPermissionHostIdentity.current()
+        permissionHost = host
+        let currentFingerprint = host.fingerprint
         let previousFingerprint = defaults.string(forKey: fingerprintKey)
 
         if !currentFingerprint.isEmpty {
             defaults.set(currentFingerprint, forKey: fingerprintKey)
         }
         refresh()
-        if let previousFingerprint,
+        if !host.isDurable {
+            statusMessage = host.statusMessage
+        } else if let previousFingerprint,
            previousFingerprint != currentFingerprint,
            !currentFingerprint.isEmpty {
             statusMessage = "Nexus signing identity changed. " + Self.liveStatusMessage(for: snapshot)
@@ -3657,11 +3742,15 @@ final class NexusPermissionHealth: ObservableObject {
     }
 
     func refresh() {
+        permissionHost = NexusPermissionHostIdentity.current()
         snapshot = .current
-        statusMessage = Self.liveStatusMessage(for: snapshot)
+        statusMessage = permissionHost.isDurable
+            ? Self.liveStatusMessage(for: snapshot)
+            : permissionHost.statusMessage
     }
 
     func requestCorePermissionsIfNeeded(includeScreenRecording: Bool) async {
+        guard requireDurableHost() else { return }
         let current = NexusPermissionSnapshot.current
         let needsPrivacyPrompt = !current.inputMonitoring
             || !current.accessibility
@@ -3706,7 +3795,45 @@ final class NexusPermissionHealth: ObservableObject {
         )
     }
 
+    func requestPermission(_ service: NexusTCCService) async {
+        guard requireDurableHost() else { return }
+        switch service {
+        case .listenEvent:
+            if !NexusGlobalHotkeyAccess.requestInputMonitoringIfNeeded(prompt: true) {
+                openSettings(for: .listenEvent)
+            }
+        case .accessibility:
+            if !NexusGlobalHotkeyAccess.requestAccessibilityIfNeeded(prompt: true) {
+                openSettings(for: .accessibility)
+            }
+        case .screenCapture:
+            if !NexusScreenCapture.requestAccess(prompt: true) {
+                openSettings(for: .screenCapture)
+            }
+        case .microphone:
+            if AVCaptureDevice.authorizationStatus(for: .audio) == .notDetermined {
+                _ = await AVCaptureDevice.requestAccess(for: .audio)
+            }
+            if !NexusPermissionSnapshot.current.microphone {
+                openSettings(for: .microphone)
+            }
+        case .speechRecognition:
+            if SFSpeechRecognizer.authorizationStatus() == .notDetermined {
+                SFSpeechRecognizer.requestAuthorization { [weak self] _ in
+                    Task { @MainActor in self?.refresh() }
+                }
+            }
+            if !NexusPermissionSnapshot.current.speechRecognition {
+                openSettings(for: .speechRecognition)
+            }
+        case .fullDiskAccess:
+            openSettings(for: .fullDiskAccess)
+        }
+        refresh()
+    }
+
     func repairDeniedPermissions() {
+        guard requireDurableHost() else { return }
         refresh()
         let denied = snapshot.deniedServices
         guard !denied.isEmpty else {
@@ -3735,31 +3862,18 @@ final class NexusPermissionHealth: ObservableObject {
     }
 
     func openPermissionSettings(for service: NexusTCCService) {
-        refresh()
+        guard requireDurableHost() else { return }
         openSettings(for: service)
         statusMessage = "Open \(service.displayName) in System Settings, enable Nexus, then run nexusctl permissions to verify the running app."
     }
 
-    private func reset(_ services: [NexusTCCService]) -> Bool {
-        guard let bundleIdentifier = Bundle.main.bundleIdentifier, !bundleIdentifier.isEmpty else {
+    private func requireDurableHost() -> Bool {
+        refresh()
+        guard permissionHost.isDurable else {
+            statusMessage = permissionHost.statusMessage
             return false
         }
-        var allSucceeded = true
-        for service in services {
-            let process = Process()
-            process.executableURL = URL(fileURLWithPath: "/usr/bin/tccutil")
-            process.arguments = ["reset", service.rawValue, bundleIdentifier]
-            process.standardOutput = FileHandle.nullDevice
-            process.standardError = FileHandle.nullDevice
-            do {
-                try process.run()
-                process.waitUntilExit()
-                allSucceeded = allSucceeded && process.terminationStatus == 0
-            } catch {
-                allSucceeded = false
-            }
-        }
-        return allSucceeded
+        return true
     }
 
     private func openSettings(for service: NexusTCCService?) {
@@ -3781,30 +3895,16 @@ final class NexusPermissionHealth: ObservableObject {
         }
     }
 
-    static func designatedRequirementFingerprint() -> String {
-        var dynamicCode: SecCode?
-        guard SecCodeCopySelf([], &dynamicCode) == errSecSuccess,
-              let dynamicCode else { return "" }
-        var staticCode: SecStaticCode?
-        guard SecCodeCopyStaticCode(dynamicCode, [], &staticCode) == errSecSuccess,
-              let staticCode else { return "" }
-        var requirement: SecRequirement?
-        guard SecCodeCopyDesignatedRequirement(staticCode, [], &requirement) == errSecSuccess,
-              let requirement else { return "" }
-        var requirementData: CFData?
-        guard SecRequirementCopyData(requirement, [], &requirementData) == errSecSuccess,
-              let requirementData else { return "" }
-        return SHA256.hash(data: requirementData as Data)
-            .map { String(format: "%02x", $0) }
-            .joined()
-    }
-
     private static func liveStatusMessage(for snapshot: NexusPermissionSnapshot) -> String {
         let denied = snapshot.deniedServices.map(\.displayName)
         guard !denied.isEmpty else {
             return "Live check: all permissions authorize this running Nexus build."
         }
         return "Live check: macOS currently denies " + denied.joined(separator: ", ") + "."
+    }
+
+    static func designatedRequirementFingerprint() -> String {
+        NexusPermissionHostIdentity.current().fingerprint
     }
 }
 

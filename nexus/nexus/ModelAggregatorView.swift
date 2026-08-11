@@ -382,6 +382,26 @@ private struct NexusExperienceSettingsPage: View {
                     .help("Migrates the Nexus credentials already on this Mac into one Keychain record. Nexus never stores your Mac password.")
                 }
                 NexusHairline(axis: .horizontal)
+                NexusSettingsLine(label: "Permission host") {
+                    VStack(alignment: .trailing, spacing: 7) {
+                        HStack(spacing: 8) {
+                            permissionBadge(
+                                "Durable",
+                                enabled: permissionHealth.permissionHostIsDurable
+                            )
+                            Button("Refresh") {
+                                permissionHealth.refresh()
+                            }
+                        }
+                        Text(permissionHealth.permissionHostMessage)
+                            .font(.system(size: 10.5, weight: .medium))
+                            .foregroundStyle(permissionHealth.permissionHostIsDurable ? Color.secondary : Color.orange)
+                            .multilineTextAlignment(.trailing)
+                            .frame(maxWidth: 390, alignment: .trailing)
+                    }
+                    .help("A stable Apple-signed Nexus.app is required before macOS privacy grants can persist across rebuilds.")
+                }
+                NexusHairline(axis: .horizontal)
                 NexusSettingsLine(label: "Hotkey access") {
                     VStack(alignment: .trailing, spacing: 7) {
                         HStack(spacing: 8) {
@@ -407,16 +427,14 @@ private struct NexusExperienceSettingsPage: View {
                         }
                         HStack(spacing: 8) {
                             Button(permissionHealth.snapshot.inputMonitoring ? "Input settings" : "Enable input") {
-                                if !NexusGlobalHotkeyAccess.requestInputMonitoringIfNeeded(prompt: true) {
-                                    NexusGlobalHotkeyAccess.openInputMonitoringSettings()
+                                Task {
+                                    await permissionHealth.requestPermission(.listenEvent)
                                 }
-                                permissionHealth.refresh()
                             }
                             Button(permissionHealth.snapshot.accessibility ? "Paste settings" : "Enable paste") {
-                                if !NexusGlobalHotkeyAccess.requestAccessibilityIfNeeded(prompt: true) {
-                                    NexusGlobalHotkeyAccess.openAccessibilitySettings()
+                                Task {
+                                    await permissionHealth.requestPermission(.accessibility)
                                 }
-                                permissionHealth.refresh()
                             }
                             if !permissionHealth.snapshot.deniedServices.isEmpty {
                                 Button("Repair stale records") {
@@ -445,10 +463,9 @@ private struct NexusExperienceSettingsPage: View {
                             )
                         }
                         Button(permissionHealth.snapshot.screenRecording ? "Screen settings" : "Enable screen access") {
-                            if !NexusScreenCapture.requestAccess(prompt: true) {
-                                NexusScreenCapture.openScreenRecordingSettings()
+                            Task {
+                                await permissionHealth.requestPermission(.screenCapture)
                             }
-                            permissionHealth.refresh()
                         }
                     }
                     .help("Nexus attaches the current screen to every prompt for a vision-capable model. Screen Recording permission is required.")

@@ -97,7 +97,18 @@ if [[ "${1:-}" == "--run" || "${1:-}" == "--install-run" ]]; then
   [[ "${1:-}" == "--install-run" ]] && RUN_APP="$INSTALL_APP_PATH"
   EXECUTABLE="$RUN_APP/Contents/MacOS/nexus"
   running_pids() {
-    /bin/ps -axo pid=,command= | /usr/bin/awk -v executable="$EXECUTABLE" '$2 == executable { print $1 }'
+    # The executable path can contain spaces (for example a workspace named
+    # "nexus 2"), so `$2` is not the command path. Strip the pid from the
+    # complete command line and match its prefix instead; this also catches
+    # the app-owned headless helper processes that share the executable.
+    /bin/ps -axo pid=,command= | /usr/bin/awk -v executable="$EXECUTABLE" '
+      {
+        pid = $1
+        command = $0
+        sub(/^[[:space:]]*[0-9]+[[:space:]]+/, "", command)
+        if (index(command, executable) == 1) print pid
+      }
+    '
   }
 
   for pid in ${(f)"$(running_pids)"}; do

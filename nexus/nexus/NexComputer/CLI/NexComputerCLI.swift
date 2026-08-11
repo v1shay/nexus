@@ -100,7 +100,7 @@ final class NexusHeadlessControlHost {
 
 enum NexusHeadlessControlClient {
     static func run(arguments: [String]) async -> Int32 {
-        guard let command = arguments.first else { return fail("Usage: nexusctl <status|nexcli-status|prompt|cancel|models|model-select|permissions|permission-open|permission-repair|memory-status|memory-save|settings|settings-set|tools|tool-execute|tool-dry-run|tool-confirm|tool-cancel-confirmation|connect-enable|connect-role|connect-route>") }
+        guard let command = arguments.first else { return fail("Usage: nexusctl <status|nexcli-status|prompt|cancel|models|model-select|permissions|permission-host|permission-open|permission-repair|memory-status|memory-save|settings|settings-set|tools|tool-execute|tool-dry-run|tool-confirm|tool-cancel-confirmation|connect-enable|connect-role|connect-route>") }
         var values: [String: String] = [:]
         if ["prompt", "model-select", "permission-open", "connect-enable", "connect-role", "connect-route"].contains(command) {
             guard arguments.count > 1 else { return fail("Missing value for \(command).") }

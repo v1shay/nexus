@@ -4,6 +4,24 @@ import XCTest
 final class NexComputerToolSearchTests: XCTestCase {
     private let engine = NexToolSearchEngine()
 
+    func testPermissionHostRequiresAppleAnchoredNexusRequirement() {
+        XCTAssertTrue(
+            NexusPermissionHostIdentity.isDurable(
+                designatedRequirement: "designated => anchor apple generic and identifier \"na.nexus\""
+            )
+        )
+        XCTAssertFalse(
+            NexusPermissionHostIdentity.isDurable(
+                designatedRequirement: "designated => cdhash H\"aabbcc\""
+            )
+        )
+        XCTAssertFalse(
+            NexusPermissionHostIdentity.isDurable(
+                designatedRequirement: "designated => anchor apple generic and identifier \"com.example.other\""
+            )
+        )
+    }
+
     func testRanksNamesDescriptionsExamplesAliasesTagsFieldsAndWorkflows() {
         let playlist = tool(
             name: "spotify.play_playlist",
