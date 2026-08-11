@@ -71,6 +71,14 @@ actor NexComputerPermissionManager {
 }
 
 final class NexComputerSystemPermissionBackend: NexComputerPermissionChecking, @unchecked Sendable {
+    private let permissionHostIsDurable: @Sendable () -> Bool
+
+    init(permissionHostIsDurable: @escaping @Sendable () -> Bool = {
+        NexusPermissionHostIdentity.current().isDurable
+    }) {
+        self.permissionHostIsDurable = permissionHostIsDurable
+    }
+
     func status(for requirement: NexComputerPermissionRequirement) async -> NexComputerPermissionStatus {
         await resolve(requirement, request: false)
     }
@@ -84,20 +92,25 @@ final class NexComputerSystemPermissionBackend: NexComputerPermissionChecking, @
         request: Bool
     ) async -> NexComputerPermissionStatus {
         let id = requirement.id.lowercased()
+        let effectiveRequest = Self.shouldRequestTCCPermission(
+            id: id,
+            request: request,
+            durableHost: permissionHostIsDurable()
+        )
         let state: NexComputerPermissionState
         if id == "accessibility" || id.hasPrefix("accessibility.") {
-            let options = [kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: request] as CFDictionary
-            state = AXIsProcessTrustedWithOptions(options) ? .authorized : (request ? .denied : .notDetermined)
+            let options = [kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: effectiveRequest] as CFDictionary
+            state = AXIsProcessTrustedWithOptions(options) ? .authorized : (effectiveRequest ? .denied : .notDetermined)
         } else if id == "contacts" || id.hasPrefix("contacts.") {
-            state = await contactsState(request: request)
+            state = await contactsState(request: effectiveRequest)
         } else if id == "photos" || id.hasPrefix("photos.") {
-            state = await photosState(request: request)
+            state = await photosState(request: effectiveRequest)
         } else if id == "calendar" || id.hasPrefix("calendar.") {
-            state = await calendarState(request: request)
+            state = await calendarState(request: effectiveRequest)
         } else if id == "screen_recording" || id.hasPrefix("screen_recording.") {
             if CGPreflightScreenCaptureAccess() {
                 state = .authorized
-            } else if request {
+            } else if effectiveRequest {
                 state = CGRequestScreenCaptureAccess() ? .authorized : .denied
             } else {
                 state = .notDetermined
@@ -125,7 +138,7 @@ final class NexComputerSystemPermissionBackend: NexComputerPermissionChecking, @
             }
         } else if id.hasPrefix("automation.") {
             let bundleIdentifier = String(requirement.id.dropFirst("automation.".count))
-            state = automationState(bundleIdentifier: bundleIdentifier, request: request)
+            state = automationState(bundleIdentifier: bundleIdentifier, request: effectiveRequest)
         } else {
             // Network, app-managed files, memory, and bounded code execution
             // are enforced by Nexus policy rather than a macOS TCC prompt.
@@ -134,8 +147,31 @@ final class NexComputerSystemPermissionBackend: NexComputerPermissionChecking, @
         return .init(
             requirementID: requirement.id,
             state: state,
-            recovery: requirement.recovery ?? Self.defaultRecovery(for: requirement.id, state: state)
+            recovery: request && !effectiveRequest
+                ? NexusPermissionHostIdentity.current().statusMessage
+                : requirement.recovery ?? Self.defaultRecovery(for: requirement.id, state: state)
         )
+    }
+
+    static func shouldRequestTCCPermission(
+        id: String,
+        request: Bool,
+        durableHost: Bool
+    ) -> Bool {
+        guard request else { return false }
+        let normalized = id.lowercased()
+        let needsDurableHost = normalized == "accessibility"
+            || normalized.hasPrefix("accessibility.")
+            || normalized == "contacts"
+            || normalized.hasPrefix("contacts.")
+            || normalized == "photos"
+            || normalized.hasPrefix("photos.")
+            || normalized == "calendar"
+            || normalized.hasPrefix("calendar.")
+            || normalized == "screen_recording"
+            || normalized.hasPrefix("screen_recording.")
+            || normalized.hasPrefix("automation.")
+        return !needsDurableHost || durableHost
     }
 
     private func contactsState(request: Bool) async -> NexComputerPermissionState {

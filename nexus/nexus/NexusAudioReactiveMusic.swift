@@ -403,13 +403,18 @@ final class NexusAudioReactiveMusic: NSObject, ObservableObject {
         }
     }
 
-    /// The first call triggers macOS's Screen & System Audio Recording prompt.
-    /// Afterwards the grant is persistent and no Spotify sign-in is involved.
+    /// A durable Nexus host can request Screen & System Audio Recording once;
+    /// subsequent captures reuse that macOS grant and need no Spotify sign-in.
     func requestAndStartCaptureIfPossible() {
         guard stream == nil, !isStartingCapture else { return }
         guard CGPreflightScreenCaptureAccess() else {
+            let host = NexusPermissionHostIdentity.current()
+            guard host.isDurable else {
+                captureState = .unavailable(host.statusMessage)
+                return
+            }
             captureState = .awaitingPermission
-            _ = CGRequestScreenCaptureAccess()
+            guard NexusScreenCapture.requestAccess(prompt: true) else { return }
             // CGRequestScreenCaptureAccess returns while the privacy sheet is
             // still up on some macOS releases. Retry briefly so accepting it
             // starts the meter immediately rather than requiring an app restart.
