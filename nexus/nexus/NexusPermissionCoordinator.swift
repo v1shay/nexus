@@ -484,6 +484,18 @@ final class NexusPermissionCoordinator: ObservableObject {
         }
         for capability in session.selectedCapabilities {
             let live = await system.status(for: capability)
+            // AEDeterminePermissionToAutomateTarget cannot reliably report a
+            // persisted grant once its target has quit. "Target unavailable"
+            // is not "Nexus was revoked". Keep a grant we already verified
+            // in setup; actual tool execution opens its target and performs a
+            // fresh live check before sending an Apple event.
+            if Self.shouldPreserveVerifiedAutomation(
+                capability: capability,
+                previous: session.states[capability] ?? .notStarted,
+                live: live
+            ) {
+                continue
+            }
             session.states[capability] = Self.setupState(from: live, previous: session.states[capability] ?? .notStarted)
         }
         session.currentCapability = session.selectedCapabilities.first { session.states[$0] != .verified }
@@ -568,7 +580,10 @@ final class NexusPermissionCoordinator: ObservableObject {
     func check(_ capability: NexusPermissionCapability) async -> NexusPermissionCheck {
         guard validateSigningIdentity(allowExistingSession: session != nil) else { return .init(capability: capability, liveState: .unsupported, setupState: .needsAttention, recovery: diagnostic) }
         let live = await system.status(for: capability)
-        let setup = Self.setupState(from: live, previous: state(for: capability))
+        let previous = state(for: capability)
+        let setup = Self.shouldPreserveVerifiedAutomation(capability: capability, previous: previous, live: live)
+            ? .verified
+            : Self.setupState(from: live, previous: previous)
         if session != nil { ensureSelected(capability); update(capability, to: setup) }
         return .init(capability: capability, liveState: live, setupState: setup, recovery: recovery(for: capability, state: setup))
     }
@@ -681,6 +696,15 @@ final class NexusPermissionCoordinator: ObservableObject {
             }
         case .denied, .restricted, .unsupported: .needsAttention
         }
+    }
+
+    private static func shouldPreserveVerifiedAutomation(
+        capability: NexusPermissionCapability,
+        previous: NexusPermissionSetupState,
+        live: NexusPermissionLiveState
+    ) -> Bool {
+        guard case .automation = capability else { return false }
+        return previous == .verified && live == .notDetermined
     }
 
     private func recovery(for capability: NexusPermissionCapability, state: NexusPermissionSetupState) -> String? {

@@ -148,6 +148,28 @@ final class NexusPermissionCoordinatorTests: XCTestCase {
         XCTAssertEqual(restartedSystem.requested, [.microphone])
     }
 
+    func testVerifiedAutomationIsPreservedWhenTargetQuits() async {
+        let target = NexusPermissionCapability.automation("com.google.Chrome")
+        let system = MockSystem()
+        system.statuses[target] = .authorized
+        let coordinator = NexusPermissionCoordinator(
+            system: system,
+            identityProvider: { Self.durableIdentity() },
+            fileURL: temporarySessionURL()
+        )
+        await coordinator.beginSetup(selectedCapabilities: [target])
+        XCTAssertEqual(coordinator.state(for: target), .verified)
+
+        // This is the live state produced by AEDeterminePermission when the
+        // application which was just approved is no longer running.
+        system.statuses[target] = .notDetermined
+        await coordinator.resumeAtLaunch()
+        XCTAssertEqual(coordinator.state(for: target), .verified)
+
+        _ = await coordinator.check(target)
+        XCTAssertEqual(coordinator.state(for: target), .verified)
+    }
+
     func testPersistentCertificateIdentitiesAreDurableAndAdHocIsRejected() {
         XCTAssertTrue(NexusPermissionSigningIdentity(bundleIdentifier: "na.nexus", requirementHash: "development", hasCertificate: true, certificateSubject: "Apple Development: Nexus", diagnostic: nil).isDurable)
         XCTAssertTrue(NexusPermissionSigningIdentity(bundleIdentifier: "na.nexus", requirementHash: "production", hasCertificate: true, certificateSubject: "Developer ID Application: Nexus", diagnostic: nil).isDurable)
