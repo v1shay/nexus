@@ -592,6 +592,10 @@ private struct NexusAutomationsPage: View {
     @State private var frequency: NexusAutomationFrequency = .daily
     @State private var hour = 7
     @State private var minute = 0
+    @State private var weekdays: Set<Int> = [2, 3, 4, 5, 6]
+    @State private var oneTimeDate = Date().addingTimeInterval(3600)
+    @State private var selectedModelID = ""
+    @State private var approvedActions: Set<String> = []
     @State private var error = ""
 
     var body: some View {
@@ -606,6 +610,23 @@ private struct NexusAutomationsPage: View {
                     Spacer()
                     Button("Set up OS wake") { controller.installPowerHelper() }
                         .controlSize(.small)
+                }
+
+                HStack(spacing: 10) {
+                    Text("Model").font(.caption.weight(.medium)).foregroundStyle(.secondary)
+                    Picker("Automation model", selection: $selectedModelID) {
+                        Text(activeModelLabel).tag("")
+                        ForEach(viewModel.installedModels) { model in
+                            Text("\(model.name) · \(model.backend.title)").tag(model.id)
+                        }
+                    }
+                    .labelsHidden()
+                    .frame(maxWidth: 340)
+                    Spacer()
+                    Text("\(TimeZone.current.identifier) · (controller.powerStatus)")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
                 }
 
                 TextEditor(text: $prompt)
@@ -628,12 +649,100 @@ private struct NexusAutomationsPage: View {
                     Stepper("Hour \(hour)", value: $hour, in: 0...23).frame(width: 120)
                     Stepper("Minute \(minute)", value: $minute, in: 0...59).frame(width: 140)
                     Spacer()
-                    Button("Save automation") { save() }
+                    Button(controller.isBuildingDraft ? "Building…" : "Build automation") { build() }
                         .buttonStyle(.borderedProminent)
-                        .disabled(prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                        .disabled(controller.isBuildingDraft || prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                 }
-                Text(controller.powerStatus).font(.caption).foregroundStyle(.secondary)
+                if frequency == .weekly {
+                    HStack(spacing: 6) {
+                        ForEach(Array(1...7), id: \.self) { day in
+                            Button(Self.weekdaySymbol(day)) {
+                                if weekdays.contains(day) { weekdays.remove(day) } else { weekdays.insert(day) }
+                            }
+                            .buttonStyle(.bordered)
+                            .tint(weekdays.contains(day) ? theme.mainLight : .gray)
+                            .controlSize(.small)
+                        }
+                        Text("Runs on the selected days.").font(.caption).foregroundStyle(.secondary)
+                    }
+                } else if frequency == .once {
+                    DatePicker("Run once", selection: $oneTimeDate, in: Date()..., displayedComponents: [.date, .hourAndMinute])
+                        .datePickerStyle(.compact)
+                }
+                Text("Schedule preview: \(selectedSchedule.summary)").font(.caption).foregroundStyle(.secondary)
                 if !error.isEmpty { Text(error).font(.caption).foregroundStyle(.red) }
+                if !controller.buildError.isEmpty { Text(controller.buildError).font(.caption).foregroundStyle(.red) }
+
+                if !controller.buildEvents.isEmpty {
+                    VStack(alignment: .leading, spacing: 9) {
+                        HStack {
+                            Text("Live automation canvas").font(.headline)
+                            Spacer()
+                            if controller.isBuildingDraft { ProgressView().controlSize(.small) }
+                        }
+                        ForEach(controller.buildEvents) { event in
+                            HStack(alignment: .top, spacing: 10) {
+                                VStack(spacing: 0) {
+                                    Image(systemName: canvasIcon(for: event.stage))
+                                        .foregroundStyle(event.stage == .ready ? .green : theme.mainLight)
+                                        .frame(width: 22, height: 22)
+                                    if event.id != controller.buildEvents.last?.id {
+                                        Rectangle().fill(.white.opacity(0.16)).frame(width: 1, height: 20)
+                                    }
+                                }
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(event.title).font(.subheadline.weight(.medium))
+                                    Text(event.detail).font(.caption).foregroundStyle(.secondary)
+                                }
+                            }
+                        }
+                    }
+                    .padding(14)
+                    .background(.white.opacity(0.055), in: RoundedRectangle(cornerRadius: 14))
+                }
+
+                if let draft = controller.draft {
+                    VStack(alignment: .leading, spacing: 12) {
+                        HStack {
+                            VStack(alignment: .leading, spacing: 3) {
+                                Text(draft.title).font(.headline)
+                                Text("\(draft.schedule.summary) · \(modelLabel(draft.modelID))")
+                                    .font(.caption).foregroundStyle(.secondary)
+                            }
+                            Spacer()
+                            Text("Review before enabling").font(.caption.weight(.medium)).foregroundStyle(.green)
+                        }
+                        ForEach(draft.blueprint.steps) { step in
+                            HStack(spacing: 10) {
+                                Image(systemName: step.requiresApproval ? "exclamationmark.shield" : "checkmark.circle")
+                                    .foregroundStyle(step.requiresApproval ? .orange : .green)
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(step.tool).font(.subheadline.monospaced())
+                                    Text(step.purpose).font(.caption).foregroundStyle(.secondary)
+                                    Text(step.arguments.isEmpty ? "No inputs" : "Inputs: \(step.arguments.keys.sorted().joined(separator: ", "))")
+                                        .font(.caption2).foregroundStyle(.secondary)
+                                }
+                                Spacer()
+                                if step.requiresApproval {
+                                    Toggle("Approve", isOn: approvalBinding(for: step.tool)).toggleStyle(.switch).labelsHidden()
+                                }
+                            }
+                        }
+                        ForEach(draft.blueprint.setupNotes, id: \.self) { note in
+                            Label(note, systemImage: "info.circle").font(.caption).foregroundStyle(.secondary)
+                        }
+                        HStack {
+                            Button("Discard") { controller.discardDraft() }
+                            Spacer()
+                            Button("Save & enable") { saveReviewedDraft() }
+                                .buttonStyle(.borderedProminent)
+                            Button("Save & test now") { saveAndTestDraft() }
+                                .buttonStyle(.bordered)
+                        }
+                    }
+                    .padding(15)
+                    .background(.white.opacity(0.08), in: RoundedRectangle(cornerRadius: 16))
+                }
 
                 Divider()
                 if controller.automations.isEmpty {
@@ -654,8 +763,23 @@ private struct NexusAutomationsPage: View {
                                 Button(role: .destructive) { Task { try? await controller.delete(automation) } } label: { Image(systemName: "trash") }
                             }
                             Text(automation.prompt).lineLimit(2).foregroundStyle(.secondary)
-                            Text("\(automation.schedule.summary)  ·  Next: \(automation.nextRun.map { Self.dateFormatter.string(from: $0) } ?? "not scheduled")")
+                            HStack(spacing: 8) {
+                                Text("Run model").font(.caption).foregroundStyle(.secondary)
+                                Picker("Run model", selection: savedModelBinding(for: automation)) {
+                                    Text("Use current active model").tag("")
+                                    ForEach(viewModel.installedModels) { model in
+                                        Text("\(model.name) · \(model.backend.title)").tag(model.id)
+                                    }
+                                }
+                                .labelsHidden()
+                                .frame(maxWidth: 300)
+                            }
+                            Text("\(automation.schedule.summary)  ·  \(modelLabel(automation.modelID))  ·  Next: \(automation.nextRun.map { Self.dateFormatter.string(from: $0) } ?? "not scheduled")")
                                 .font(.caption).foregroundStyle(.secondary)
+                            if let blueprint = automation.blueprint {
+                                Text("Plan: \(blueprint.steps.map(\.tool).joined(separator: " → "))")
+                                    .font(.caption2).foregroundStyle(.secondary).lineLimit(1)
+                            }
                         }
                         .padding(14)
                         .background(.white.opacity(0.05), in: RoundedRectangle(cornerRadius: 14))
@@ -666,23 +790,109 @@ private struct NexusAutomationsPage: View {
             .nexusGlassPanel(theme: theme, role: .content, radius: 20)
             .padding(.top, 18)
         }
-        .onAppear { controller.start(); Task { await controller.reload() } }
+        .onAppear {
+            controller.start()
+            if selectedModelID.isEmpty, !viewModel.apiProvider.enabled { selectedModelID = viewModel.activeModel?.id ?? "" }
+            Task { await controller.reload() }
+        }
+        .onChange(of: controller.draft?.id) { _, _ in
+            approvedActions = []
+        }
     }
 
-    private func save() {
+    private var selectedSchedule: NexusSchedule {
+        .init(
+            frequency: frequency,
+            hour: hour,
+            minute: minute,
+            weekdays: weekdays,
+            oneTimeDate: frequency == .once ? oneTimeDate : nil
+        )
+    }
+
+    private var activeModelLabel: String {
+        if viewModel.apiProvider.enabled { return "Active API · \(viewModel.apiProvider.model)" }
+        return viewModel.activeModel.map { "Active · \($0.name)" } ?? "Select a model"
+    }
+
+    private func build() {
         error = ""
-        let schedule = NexusSchedule(frequency: frequency, hour: hour, minute: minute)
         Task {
             do {
-                try await controller.saveDraft(
-                    title: String(prompt.prefix(56)),
+                _ = try await controller.buildDraft(
                     prompt: prompt,
-                    schedule: schedule,
-                    modelID: viewModel.activeModel?.id ?? ""
+                    modelID: selectedModelID,
+                    fallbackSchedule: selectedSchedule
                 )
-                prompt = ""
             } catch let saveError { error = saveError.localizedDescription }
         }
+    }
+
+    private func saveReviewedDraft() {
+        error = ""
+        Task {
+            do {
+                _ = try await controller.saveReviewedDraft(approvedActionIDs: approvedActions)
+                prompt = ""
+            } catch let failure { error = failure.localizedDescription }
+        }
+    }
+
+    private func saveAndTestDraft() {
+        error = ""
+        Task {
+            do {
+                if let automation = try await controller.saveReviewedDraft(approvedActionIDs: approvedActions) {
+                    prompt = ""
+                    await controller.testNow(automation)
+                }
+            } catch let failure { error = failure.localizedDescription }
+        }
+    }
+
+    private func approvalBinding(for action: String) -> Binding<Bool> {
+        Binding(
+            get: { approvedActions.contains(action) },
+            set: { enabled in
+                if enabled { approvedActions.insert(action) } else { approvedActions.remove(action) }
+            }
+        )
+    }
+
+    private func savedModelBinding(for automation: NexusAutomation) -> Binding<String> {
+        Binding(
+            get: { automation.modelID },
+            set: { modelID in
+                Task {
+                    do {
+                        try await controller.setModel(automation, modelID: modelID)
+                    } catch let failure {
+                        error = failure.localizedDescription
+                    }
+                }
+            }
+        )
+    }
+
+    private func modelLabel(_ modelID: String) -> String {
+        if modelID.isEmpty { return activeModelLabel }
+        return viewModel.installedModels.first(where: { $0.id == modelID })?.name ?? modelID
+    }
+
+    private func canvasIcon(for stage: NexusAutomationBuildStage) -> String {
+        switch stage {
+        case .interpreting: "text.magnifyingglass"
+        case .selectingTools: "shippingbox"
+        case .designing: "point.3.connected.trianglepath.dotted"
+        case .ready: "checkmark.seal.fill"
+        case .failed: "exclamationmark.triangle"
+        }
+    }
+
+    private static func weekdaySymbol(_ day: Int) -> String {
+        let symbols = Calendar.current.veryShortWeekdaySymbols
+        guard symbols.indices.contains(day - 1) else { return "?" }
+        return symbols[day - 1]
     }
 
     private static let dateFormatter: DateFormatter = {

@@ -24,12 +24,68 @@ final class NexusAutomationTests: XCTestCase {
         XCTAssertEqual(calendar.component(.day, from: next), 11)
     }
 
+    func testPromptScheduleResolutionKeepsTimezoneAndRecognizesWeekdays() {
+        let fallback = NexusSchedule(frequency: .daily, timeZoneIdentifier: "America/Los_Angeles", hour: 7, minute: 0)
+        let resolved = NexusAutomationScheduleParser.resolve(
+            prompt: "Every Monday and Thursday at 7:30 pm, prepare my briefing",
+            fallback: fallback
+        )
+        XCTAssertEqual(resolved.frequency, .weekly)
+        XCTAssertEqual(resolved.weekdays, [2, 5])
+        XCTAssertEqual(resolved.hour, 19)
+        XCTAssertEqual(resolved.minute, 30)
+        XCTAssertEqual(resolved.timeZoneIdentifier, "America/Los_Angeles")
+    }
+
+    func testEveryWeekdayResolvesToMondayThroughFriday() {
+        let resolved = NexusAutomationScheduleParser.resolve(
+            prompt: "Every weekday at 7 AM, make my morning briefing",
+            fallback: .init(frequency: .daily, timeZoneIdentifier: "America/Los_Angeles")
+        )
+        XCTAssertEqual(resolved.frequency, .weekly)
+        XCTAssertEqual(resolved.weekdays, [2, 3, 4, 5, 6])
+        XCTAssertEqual(resolved.hour, 7)
+    }
+
+    func testMorningBriefingRecipeHasExactBrowserReadSchemas() {
+        let blueprint = NexusMorningBriefingRecipe.blueprint(modelID: "ollama:qwen2.5:1.5b:default")
+        XCTAssertEqual(blueprint.steps.map(\.tool), [
+            "browser.run_task",
+            "browser.run_task",
+            "web_search",
+            "browser.run_task",
+            "web_search"
+        ])
+        XCTAssertEqual(blueprint.steps[0].arguments["steps"]?.array?.first?.object?["url"]?.string, "https://mail.google.com/mail/u/0/#search/is%3Aunread%20newer_than%3A2d")
+        XCTAssertEqual(blueprint.steps[1].arguments["steps"]?.array?.first?.object?["url"]?.string, "https://calendar.google.com/calendar/u/0/r/agenda")
+        XCTAssertTrue(blueprint.steps[3].requiresApproval)
+        XCTAssertEqual(blueprint.steps[3].arguments["steps"]?.array?.count, 2)
+    }
+
+    func testMorningBriefingUsesNamedEvidenceSourcesAndStrictVoiceFormat() {
+        let blueprint = NexusMorningBriefingRecipe.blueprint(modelID: "ollama:qwen")
+        XCTAssertEqual(NexusMorningBriefingRecipe.sourceName(for: blueprint.steps[0]), "Gmail")
+        XCTAssertEqual(NexusMorningBriefingRecipe.sourceName(for: blueprint.steps[1]), "Google Calendar")
+        XCTAssertEqual(NexusMorningBriefingRecipe.sourceName(for: blueprint.steps[2]), "Weather")
+        XCTAssertEqual(NexusMorningBriefingRecipe.sourceName(for: blueprint.steps[3]), "Fidelity portfolio")
+        XCTAssertEqual(NexusMorningBriefingRecipe.sourceName(for: blueprint.steps[4]), "Market research")
+
+        let valid = "Good morning, Vishay. It is Tuesday, August 12 at 7:00 AM PDT. Weather: It is 68 degrees and clear. Your inbox: You have two urgent requests. Your calendar: Your next meeting is at 10 AM. Your portfolio: Your portfolio is up 1.2%. Market context: Technology shares are higher after the earnings reports."
+        XCTAssertTrue(NexusMorningBriefingRecipe.conformsToBriefingFormat(valid))
+        XCTAssertFalse(NexusMorningBriefingRecipe.conformsToBriefingFormat("Good morning, Vishay. I found your weather."))
+        XCTAssertTrue(NexusMorningBriefingRecipe.hasFirstPersonVoice("I found your calendar."))
+    }
+
     func testStorePersistsAutomationAndRun() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("NexusAutomationTests-\(UUID().uuidString)", isDirectory: true)
         let url = root.appendingPathComponent("automations.json")
         defer { try? FileManager.default.removeItem(at: root) }
         let store = NexusAutomationStore(url: url)
-        let automation = NexusAutomation(title: "Briefing", prompt: "Summarize my day", schedule: .init())
+        let blueprint = NexusAutomationBlueprint(
+            modelID: "ollama:qwen",
+            steps: [.init(tool: "gmail.triage", arguments: ["limit": .number(10)], purpose: "Read inbox", requiresApproval: false)]
+        )
+        let automation = NexusAutomation(title: "Briefing", prompt: "Summarize my day", schedule: .init(), blueprint: blueprint)
         try await store.save(automation)
         var run = NexusAutomationRun(automationID: automation.id, scheduledFor: .now, state: .completed)
         run.summary = "Good morning"
@@ -40,6 +96,7 @@ final class NexusAutomationTests: XCTestCase {
         let runs = await restored.runs(for: automation.id)
         XCTAssertEqual(automations.map(\.id), [automation.id])
         XCTAssertEqual(runs.first?.summary, "Good morning")
+        XCTAssertEqual(automations.first?.blueprint?.steps.map(\.tool), ["gmail.triage"])
     }
 
     func testAutomationInvocationCarriesExactApproval() {

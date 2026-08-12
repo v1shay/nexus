@@ -157,6 +157,7 @@ struct NexusApp: App {
 
 private extension Notification.Name {
     static let nexusOpenControlPanel = Notification.Name("na.nexus.open-control-panel")
+    static let nexusInteractiveHandoff = Notification.Name("na.nexus.interactive-handoff")
 }
 
 private struct NexusSettingsShortcutView: View {
@@ -201,6 +202,7 @@ final class NexusAppDelegate: NSObject, NSApplicationDelegate {
     private var headlessControlHost: NexusHeadlessControlHost?
     private var launchTask: Task<Void, Never>?
     private var settingsPanelObserver: NSObjectProtocol?
+    private var interactiveHandoffObserver: NSObjectProtocol?
     private var ownsInteractiveSession = false
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -211,6 +213,19 @@ final class NexusAppDelegate: NSObject, NSApplicationDelegate {
         ) { [weak self] _ in
             Task { @MainActor [weak self] in
                 self?.notch?.openModelAggregator()
+            }
+        }
+        // A process may have survived a debugger detach or a system hang
+        // while still holding the old UI lease.  A new launch only gives up
+        // after this live process acknowledges its activation request.
+        interactiveHandoffObserver = DistributedNotificationCenter.default().addObserver(
+            forName: .nexusInteractiveHandoff,
+            object: nil,
+            queue: .main
+        ) { notification in
+            guard let token = notification.object as? String else { return }
+            Task { @MainActor in
+                Self.acknowledgeInteractiveHandoff(token)
             }
         }
         // SwiftUI's default Settings command can produce a chrome-only
@@ -499,19 +514,26 @@ final class NexusAppDelegate: NSObject, NSApplicationDelegate {
         headlessControlHost.start()
         self.headlessControlHost = headlessControlHost
         launchTask = Task { @MainActor [weak self] in
-            if Self.activateExistingInteractiveInstanceIfNeeded() {
+            if await Self.activateExistingInteractiveInstanceIfNeeded() {
                 NSApp.terminate(nil)
                 return
             }
             Self.claimInteractiveSession()
             self?.ownsInteractiveSession = true
             guard !Task.isCancelled else { return }
-            await NexusPermissionCoordinator.shared.resumeAtLaunch()
+            // Permission reconciliation includes per-target Apple Event TCC
+            // probes. Some target applications can take a long time to
+            // answer those probes, so never make the visible Nexus surface
+            // wait for them before it has installed.
             let notch = NotchController()
             self?.notch = notch
             notch.install()
             headlessControlHost.attach(controller: notch)
             self?.installMenuBarOrb(for: notch)
+            Task { @MainActor in
+                await NexusPermissionCoordinator.shared.resumeAtLaunch()
+                notch.reconcilePermissions()
+            }
             // The optional NexCLI worker receives a local runtime lease and
             // must never delay the live notch or its in-process control host.
             Task { @MainActor in
@@ -545,6 +567,9 @@ final class NexusAppDelegate: NSObject, NSApplicationDelegate {
     func applicationWillTerminate(_ notification: Notification) {
         if let settingsPanelObserver {
             NotificationCenter.default.removeObserver(settingsPanelObserver)
+        }
+        if let interactiveHandoffObserver {
+            DistributedNotificationCenter.default().removeObserver(interactiveHandoffObserver)
         }
         launchTask?.cancel()
         notch?.shutdown()
@@ -617,7 +642,7 @@ final class NexusAppDelegate: NSObject, NSApplicationDelegate {
     /// Background automation/CLI hosts share the app bundle but never own the
     /// UI lease. This avoids both invisible handoffs and force-killing a
     /// process while macOS may be presenting a consent sheet.
-    private static func activateExistingInteractiveInstanceIfNeeded() -> Bool {
+    private static func activateExistingInteractiveInstanceIfNeeded() async -> Bool {
         guard NSClassFromString("XCTestCase") == nil,
               !CommandLine.arguments.contains(where: { $0.localizedCaseInsensitiveContains("xctest") }) else {
             return false
@@ -633,7 +658,37 @@ final class NexusAppDelegate: NSObject, NSApplicationDelegate {
             return false
         }
         application.activate(options: [.activateIgnoringOtherApps])
-        return true
+        let token = UUID().uuidString
+        let acknowledgement = interactiveHandoffAcknowledgementURL(token: token)
+        try? FileManager.default.removeItem(at: acknowledgement)
+        DistributedNotificationCenter.default().post(
+            name: .nexusInteractiveHandoff,
+            object: token,
+            userInfo: nil
+        )
+        // Do not treat a PID as a healthy UI. A small, asynchronous handshake
+        // lets a responsive existing instance foreground itself, while a hung
+        // process or older implementation cannot strand a fresh launch.
+        try? await Task.sleep(for: .milliseconds(450))
+        let acknowledged = (try? String(contentsOf: acknowledgement, encoding: .utf8)) == token
+        try? FileManager.default.removeItem(at: acknowledgement)
+        return acknowledged
+    }
+
+    private static func interactiveHandoffAcknowledgementURL(token: String) -> URL {
+        interactiveSessionURL.deletingLastPathComponent()
+            .appendingPathComponent("InteractiveHandoff-\(token).ack")
+    }
+
+    private static func acknowledgeInteractiveHandoff(_ token: String) {
+        let currentPID = ProcessInfo.processInfo.processIdentifier
+        guard let data = try? Data(contentsOf: interactiveSessionURL),
+              let session = try? JSONDecoder().decode(InteractiveSession.self, from: data),
+              session.pid == currentPID else { return }
+        let acknowledgement = interactiveHandoffAcknowledgementURL(token: token)
+        try? FileManager.default.createDirectory(at: acknowledgement.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try? token.data(using: .utf8)?.write(to: acknowledgement, options: .atomic)
+        NSApp.activate(ignoringOtherApps: true)
     }
 
     private static func claimInteractiveSession() {

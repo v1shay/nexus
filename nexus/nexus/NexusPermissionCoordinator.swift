@@ -214,6 +214,28 @@ protocol NexusPermissionSystemAPI: Sendable {
     func request(for capability: NexusPermissionCapability) async -> NexusPermissionLiveState
 }
 
+/// `AEDeterminePermissionToAutomateTarget` can block indefinitely while an
+/// application is launching, quitting, or waiting on TCC.  A status refresh
+/// must never hold Nexus startup hostage, so this one-shot gate returns the
+/// best live result within a bounded interval and safely ignores a later C
+/// API return from its worker thread.
+private final class NexusAutomationPermissionProbe: @unchecked Sendable {
+    private let lock = NSLock()
+    private var continuation: CheckedContinuation<NexusPermissionLiveState, Never>?
+
+    init(_ continuation: CheckedContinuation<NexusPermissionLiveState, Never>) {
+        self.continuation = continuation
+    }
+
+    func finish(_ state: NexusPermissionLiveState) {
+        lock.lock()
+        let pending = continuation
+        continuation = nil
+        lock.unlock()
+        pending?.resume(returning: state)
+    }
+}
+
 /// The only code in Nexus that talks to macOS permission APIs. Every caller
 /// receives a durable capability state through `NexusPermissionCoordinator`.
 final class NexusPermissionSystem: NexusPermissionSystemAPI, @unchecked Sendable {
@@ -404,13 +426,14 @@ final class NexusPermissionSystem: NexusPermissionSystemAPI, @unchecked Sendable
 
     private static func automationState(target: String, request: Bool) async -> NexusPermissionLiveState {
         await withCheckedContinuation { continuation in
+            let probe = NexusAutomationPermissionProbe(continuation)
             DispatchQueue.global(qos: .userInitiated).async {
                 var address = AEAddressDesc()
                 let bytes = Array(target.utf8)
                 let creation = bytes.withUnsafeBytes { buffer in
                     AECreateDesc(DescType(typeApplicationBundleID), buffer.baseAddress, buffer.count, &address)
                 }
-                guard creation == noErr else { continuation.resume(returning: .unsupported); return }
+                guard creation == noErr else { probe.finish(.unsupported); return }
                 defer { AEDisposeDesc(&address) }
                 // A concrete, harmless core Apple event gives macOS an exact
                 // target/event pair to authorize. Wildcards can be reported
@@ -422,9 +445,12 @@ final class NexusPermissionSystem: NexusPermissionSystemAPI, @unchecked Sendable
                     AEEventID(kAEGetData),
                     request
                 )
-                if status == noErr { continuation.resume(returning: .authorized) }
-                else if status == errAEEventNotPermitted { continuation.resume(returning: .denied) }
-                else { continuation.resume(returning: request ? .waitingForSystemSettings : .notDetermined) }
+                if status == noErr { probe.finish(.authorized) }
+                else if status == errAEEventNotPermitted { probe.finish(.denied) }
+                else { probe.finish(request ? .waitingForSystemSettings : .notDetermined) }
+            }
+            DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + 2) {
+                probe.finish(request ? .waitingForSystemSettings : .notDetermined)
             }
         }
     }
