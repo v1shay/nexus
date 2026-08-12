@@ -74,6 +74,55 @@ final class NexusPermissionCoordinatorTests: XCTestCase {
         XCTAssertEqual(system.requested, [])
     }
 
+    func testLaunchRemovesLegacyMessagesAutomationWithoutRemovingFullDiskAccess() async {
+        let system = MockSystem()
+        system.statuses[.protectedResource("messages")] = .authorized
+        let coordinator = NexusPermissionCoordinator(
+            system: system,
+            identityProvider: { Self.durableIdentity() },
+            fileURL: temporarySessionURL()
+        )
+        await coordinator.beginSetup(selectedCapabilities: [
+            .automation("com.apple.MobileSMS"),
+            .protectedResource("messages")
+        ])
+        await coordinator.resumeAtLaunch()
+
+        XCTAssertFalse(coordinator.setupCapabilities.contains(.automation("com.apple.MobileSMS")))
+        XCTAssertEqual(coordinator.state(for: .protectedResource("messages")), .verified)
+    }
+
+    func testExistingSessionPreservesLiveGrantWhenRuntimeIdentityInspectionFails() async {
+        let url = temporarySessionURL()
+        let first = NexusPermissionCoordinator(
+            system: MockSystem(),
+            identityProvider: { Self.durableIdentity() },
+            fileURL: url
+        )
+        await first.beginSetup(selectedCapabilities: [.microphone])
+
+        let restartedSystem = MockSystem()
+        restartedSystem.statuses[.microphone] = .authorized
+        let restarted = NexusPermissionCoordinator(
+            system: restartedSystem,
+            identityProvider: {
+                .init(
+                    bundleIdentifier: "na.nexus",
+                    requirementHash: "",
+                    hasCertificate: false,
+                    certificateSubject: "",
+                    diagnostic: "Runtime certificate inspection unavailable."
+                )
+            },
+            fileURL: url
+        )
+
+        await restarted.resumeAtLaunch()
+
+        XCTAssertEqual(restarted.state(for: .microphone), .verified)
+        XCTAssertEqual(restarted.diagnostic, "")
+    }
+
     func testPersistentCertificateIdentitiesAreDurableAndAdHocIsRejected() {
         XCTAssertTrue(NexusPermissionSigningIdentity(bundleIdentifier: "na.nexus", requirementHash: "development", hasCertificate: true, certificateSubject: "Apple Development: Nexus", diagnostic: nil).isDurable)
         XCTAssertTrue(NexusPermissionSigningIdentity(bundleIdentifier: "na.nexus", requirementHash: "production", hasCertificate: true, certificateSubject: "Developer ID Application: Nexus", diagnostic: nil).isDurable)

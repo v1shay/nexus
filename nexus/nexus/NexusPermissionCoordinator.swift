@@ -456,8 +456,21 @@ final class NexusPermissionCoordinator: ObservableObject {
     func isVerified(_ capability: NexusPermissionCapability) -> Bool { state(for: capability) == .verified }
 
     func resumeAtLaunch() async {
-        guard validateSigningIdentity() else { return }
+        // A code-signature inspection failure must never erase or hide a real
+        // macOS grant. TCC is the source of truth for already-authorized
+        // capabilities, so retain and recheck the saved session even when a
+        // development launch cannot expose its certificate chain to Security.
+        let hasSavedSession = session != nil
+        guard validateSigningIdentity(allowExistingSession: hasSavedSession) else { return }
         guard var session else { isReadyForOnboarding = true; return }
+        // Older sessions included Messages Automation. That target is not
+        // available on this Mac class and must not hold up Messages history
+        // search, which is separately verified through Full Disk Access.
+        session.selectedCapabilities.removeAll { capability in
+            if case .automation("com.apple.MobileSMS") = capability { return true }
+            return false
+        }
+        session.states.removeValue(forKey: .automation("com.apple.MobileSMS"))
         for capability in NexusPermissionCapability.defaultOnboardingCapabilities() where !session.selectedCapabilities.contains(capability) {
             session.selectedCapabilities.append(capability)
             session.states[capability] = .notStarted
@@ -600,14 +613,28 @@ final class NexusPermissionCoordinator: ObservableObject {
         return unfinished.isEmpty ? "All selected Nexus capabilities are live-verified." : "Nexus is waiting for \(unfinished.first?.displayName ?? "permission") setup."
     }
 
-    private func validateSigningIdentity() -> Bool {
+    /// Validates identity before a *new* permission request. Existing TCC
+    /// grants are never discarded merely because Security.framework cannot
+    /// inspect an Xcode-local build's certificate chain at runtime.
+    private func validateSigningIdentity(allowExistingSession: Bool = false) -> Bool {
         let identity = identityProvider()
         guard identity.isDurable else {
-            diagnostic = identity.diagnostic ?? "Nexus signing identity is not durable."
-            isReadyForOnboarding = false
-            return false
+            guard allowExistingSession, session != nil,
+                  identity.bundleIdentifier == "na.nexus" else {
+                diagnostic = identity.diagnostic ?? "Nexus signing identity is not durable."
+                isReadyForOnboarding = false
+                return false
+            }
+            // The running process has the correct bundle ID and its live TCC
+            // checks will decide capability state. Do not surface an error
+            // that contradicts successfully verified permissions.
+            diagnostic = ""
+            return true
         }
-        if let session, session.signingRequirementHash != identity.requirementHash {
+        if let session,
+           !session.signingRequirementHash.isEmpty,
+           !identity.requirementHash.isEmpty,
+           session.signingRequirementHash != identity.requirementHash {
             diagnostic = "Nexus signing lineage changed. Existing macOS grants are not assumed valid; install a build signed by the original certificate lineage."
             isReadyForOnboarding = false
             return false
