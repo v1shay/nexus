@@ -1636,11 +1636,6 @@ final class NotchController: ObservableObject {
             guard let text = request.arguments["text"]?.trimmingCharacters(in: .whitespacesAndNewlines), !text.isEmpty else {
                 return .init(ok: false, result: [:], error: "Missing prompt text.")
             }
-            if settings.shareScreenWithVisionModels,
-               modelDownloadViewModel.activeModelSupportsImageInput,
-               !NexusScreenCapture.hasAccess {
-                return .init(ok: false, result: [:], error: "Screen Recording is required by the active vision model. Run nexusctl permission-open screen-recording, or use nexusctl settings-set screen-sharing false for a text-only test.")
-            }
             let priorAnswer = answer
             headlessToolTrace.removeAll()
             await submitTypedPrompt(text)
@@ -1748,16 +1743,7 @@ final class NotchController: ObservableObject {
         if await conversationSession.appendUser(finalizedPrompt) != nil {
             await memory.conversationDidChange()
         }
-        let visionScreenRequired = settings.shareScreenWithVisionModels
-            && modelDownloadViewModel.activeModelSupportsImageInput
         currentRequestScreenAttachment = await captureScreenAttachmentIfNeeded()
-        guard !visionScreenRequired || currentRequestScreenAttachment != nil else {
-            // Do not let a vision question silently degrade to text-only and
-            // make the model ask the user to describe a screen it never saw.
-            interaction.acknowledge("Enable Screen Recording to send the current screen to this vision model.")
-            if let screen { resize(to: expandedSize(for: screen), animated: true) }
-            return
-        }
         automaticRevealIsWaitingForNotchVisit = true
         if let screen {
             resize(to: expandedSize(for: screen), animated: true)
@@ -1780,20 +1766,15 @@ final class NotchController: ObservableObject {
     private func captureScreenAttachmentIfNeeded() async -> NexusScreenAttachment? {
         guard settings.shareScreenWithVisionModels,
               modelDownloadViewModel.activeModelSupportsImageInput else { return nil }
-        // The privacy toggle can be correct while CoreGraphics preflight is
-        // stale after an app replacement. Attempt the real capture first.
+        // Screen sharing enriches a vision request; it must never prevent a
+        // normal text conversation. A functional capture is attached, while
+        // any unavailable/transient ScreenCaptureKit state simply sends text.
         if let attachment = await NexusScreenCapture.captureCurrentScreen() {
             NSLog("[Nexus Vision] Encoded frontmost app window (%d base64 bytes)", attachment.base64.utf8.count)
             return attachment
         }
-        let check = await NexusPermissionCoordinator.shared.request(.screenRecording)
-        guard check.isAuthorized,
-              let attachment = await NexusScreenCapture.captureCurrentScreen() else {
-            NSLog("[Nexus Vision] Screen capture unavailable; request is text-only")
-            return nil
-        }
-        NSLog("[Nexus Vision] Encoded frontmost app window (%d base64 bytes)", attachment.base64.utf8.count)
-        return attachment
+        NSLog("[Nexus Vision] Screen capture unavailable; continuing text-only")
+        return nil
     }
 
     private func applyingCurrentScreenAttachment(to messages: [NexusChatMessage]) -> [NexusChatMessage] {

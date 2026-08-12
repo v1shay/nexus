@@ -123,6 +123,31 @@ final class NexusPermissionCoordinatorTests: XCTestCase {
         XCTAssertEqual(restarted.diagnostic, "")
     }
 
+    func testExistingSessionCanStillRequestAfterRuntimeIdentityInspectionFails() async {
+        let url = temporarySessionURL()
+        let first = NexusPermissionCoordinator(
+            system: MockSystem(),
+            identityProvider: { Self.durableIdentity() },
+            fileURL: url
+        )
+        await first.beginSetup(selectedCapabilities: [.microphone])
+
+        let restartedSystem = MockSystem()
+        restartedSystem.requests[.microphone] = .authorized
+        let restarted = NexusPermissionCoordinator(
+            system: restartedSystem,
+            identityProvider: {
+                .init(bundleIdentifier: "na.nexus", requirementHash: "", hasCertificate: false, certificateSubject: "", diagnostic: "Runtime certificate inspection unavailable.")
+            },
+            fileURL: url
+        )
+
+        let result = await restarted.request(.microphone)
+
+        XCTAssertEqual(result.setupState, .verified)
+        XCTAssertEqual(restartedSystem.requested, [.microphone])
+    }
+
     func testPersistentCertificateIdentitiesAreDurableAndAdHocIsRejected() {
         XCTAssertTrue(NexusPermissionSigningIdentity(bundleIdentifier: "na.nexus", requirementHash: "development", hasCertificate: true, certificateSubject: "Apple Development: Nexus", diagnostic: nil).isDurable)
         XCTAssertTrue(NexusPermissionSigningIdentity(bundleIdentifier: "na.nexus", requirementHash: "production", hasCertificate: true, certificateSubject: "Developer ID Application: Nexus", diagnostic: nil).isDurable)

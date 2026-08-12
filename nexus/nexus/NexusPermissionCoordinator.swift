@@ -515,7 +515,7 @@ final class NexusPermissionCoordinator: ObservableObject {
     /// a distinct user decision, because macOS has no universal Automation
     /// grant.
     func requestRemainingAutomationApprovals() async {
-        guard validateSigningIdentity() else { return }
+        guard validateSigningIdentity(allowExistingSession: session != nil) else { return }
         if session == nil {
             await beginSetup()
         } else {
@@ -531,7 +531,7 @@ final class NexusPermissionCoordinator: ObservableObject {
     }
 
     func request(_ capability: NexusPermissionCapability) async -> NexusPermissionCheck {
-        guard validateSigningIdentity() else { return .init(capability: capability, liveState: .unsupported, setupState: .needsAttention, recovery: diagnostic) }
+        guard validateSigningIdentity(allowExistingSession: session != nil) else { return .init(capability: capability, liveState: .unsupported, setupState: .needsAttention, recovery: diagnostic) }
         if session == nil { await beginSetup(selectedCapabilities: [capability]) }
         ensureSelected(capability)
         update(capability, to: .requesting)
@@ -559,7 +559,7 @@ final class NexusPermissionCoordinator: ObservableObject {
     }
 
     func check(_ capability: NexusPermissionCapability) async -> NexusPermissionCheck {
-        guard validateSigningIdentity() else { return .init(capability: capability, liveState: .unsupported, setupState: .needsAttention, recovery: diagnostic) }
+        guard validateSigningIdentity(allowExistingSession: session != nil) else { return .init(capability: capability, liveState: .unsupported, setupState: .needsAttention, recovery: diagnostic) }
         let live = await system.status(for: capability)
         let setup = Self.setupState(from: live, previous: state(for: capability))
         if session != nil { ensureSelected(capability); update(capability, to: setup) }
@@ -567,7 +567,7 @@ final class NexusPermissionCoordinator: ObservableObject {
     }
 
     func openSystemSettings(for capability: NexusPermissionCapability) {
-        guard validateSigningIdentity() else { return }
+        guard validateSigningIdentity(allowExistingSession: session != nil) else { return }
         ensureSelected(capability)
         update(capability, to: capability == .screenRecording ? .waitingForRestart : .waitingForSystemSettings)
         let anchor: String?
@@ -592,7 +592,7 @@ final class NexusPermissionCoordinator: ObservableObject {
     }
 
     func prepareControlledRestart() -> Bool {
-        guard validateSigningIdentity(), state(for: .screenRecording) == .waitingForRestart, var session else { return false }
+        guard validateSigningIdentity(allowExistingSession: session != nil), state(for: .screenRecording) == .waitingForRestart, var session else { return false }
         session.resumeAfterRestart = true
         session.updatedAt = Date()
         self.session = session
