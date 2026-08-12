@@ -388,7 +388,14 @@ final class NexusPermissionSystem: NexusPermissionSystemAPI, @unchecked Sendable
             let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
             guard let display = content.displays.first else { return .unsupported }
             let filter = SCContentFilter(display: display, excludingWindows: [])
-            _ = try await SCScreenshotManager.captureImage(contentFilter: filter, configuration: SCStreamConfiguration())
+            // SCScreenshotManager does not reliably infer a non-zero output
+            // size for a verification capture on every macOS release. An
+            // otherwise valid Screen Recording grant was therefore reported
+            // as needing a restart after Nexus relaunched.
+            let configuration = SCStreamConfiguration()
+            configuration.width = max(1, display.width)
+            configuration.height = max(1, display.height)
+            _ = try await SCScreenshotManager.captureImage(contentFilter: filter, configuration: configuration)
             return .authorized
         } catch {
             return .notDetermined
@@ -720,7 +727,10 @@ enum NexusScreenCapture {
             let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
             guard let display = content.displays.first else { return nil }
             let filter = SCContentFilter(display: display, excludingWindows: [])
-            let image = try await SCScreenshotManager.captureImage(contentFilter: filter, configuration: SCStreamConfiguration())
+            let configuration = SCStreamConfiguration()
+            configuration.width = max(1, display.width)
+            configuration.height = max(1, display.height)
+            let image = try await SCScreenshotManager.captureImage(contentFilter: filter, configuration: configuration)
             let source = NSImage(cgImage: image, size: .init(width: image.width, height: image.height))
             let longestEdge = CGFloat(max(image.width, image.height))
             let scale = min(1, 1_920 / max(1, longestEdge))
