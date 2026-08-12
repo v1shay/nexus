@@ -13,51 +13,17 @@ final class NexComputerFoundationTests: XCTestCase {
         func current() -> Int { value }
     }
 
-    func testPermissionCLIRecognizesEveryCorePrivacyService() {
-        XCTAssertEqual(NexusTCCService.cliService("input-monitoring"), .listenEvent)
-        XCTAssertEqual(NexusTCCService.cliService("accessibility"), .accessibility)
-        XCTAssertEqual(NexusTCCService.cliService("screen-recording"), .screenCapture)
-        XCTAssertEqual(NexusTCCService.cliService("microphone"), .microphone)
-        XCTAssertEqual(NexusTCCService.cliService("speech-recognition"), .speechRecognition)
-        XCTAssertEqual(NexusTCCService.cliService("full-disk-access"), .fullDiskAccess)
+    func testPermissionRequirementsMapToCoordinatorCapabilities() {
+        XCTAssertEqual(NexusPermissionCapability.from(requirementID: "accessibility"), .accessibility)
+        XCTAssertEqual(NexusPermissionCapability.from(requirementID: "screen_recording.capture"), .screenRecording)
+        XCTAssertEqual(NexusPermissionCapability.from(requirementID: "automation.com.apple.finder"), .automation("com.apple.finder"))
+        XCTAssertEqual(NexusPermissionCapability.from(requirementID: "full_disk_access.messages"), .protectedResource("messages"))
     }
 
-    func testActionPermissionRequestsRequireDurableHostOnlyForTCCServices() {
-        XCTAssertFalse(
-            NexComputerSystemPermissionBackend.shouldRequestTCCPermission(
-                id: "contacts",
-                request: true,
-                durableHost: false
-            )
-        )
-        XCTAssertFalse(
-            NexComputerSystemPermissionBackend.shouldRequestTCCPermission(
-                id: "automation.com.apple.MobileSMS",
-                request: true,
-                durableHost: false
-            )
-        )
-        XCTAssertTrue(
-            NexComputerSystemPermissionBackend.shouldRequestTCCPermission(
-                id: "photos.library",
-                request: true,
-                durableHost: true
-            )
-        )
-        XCTAssertTrue(
-            NexComputerSystemPermissionBackend.shouldRequestTCCPermission(
-                id: "oauth.google.gmail.readonly",
-                request: true,
-                durableHost: false
-            )
-        )
-        XCTAssertFalse(
-            NexComputerSystemPermissionBackend.shouldRequestTCCPermission(
-                id: "contacts",
-                request: false,
-                durableHost: true
-            )
-        )
+    @MainActor
+    func testCoreSetupDoesNotRequireInputMonitoringOrMessagesAutomation() {
+        XCTAssertEqual(NexusPermissionCapability.coreSetup, [.microphone, .speechRecognition, .accessibility, .screenRecording])
+        XCTAssertFalse(NexusPermissionCapability.defaultOnboardingCapabilities().contains(.automation("com.apple.MobileSMS")))
     }
 
     func testManifestIsVersionedCodableAndRejectsLowLevelActionIDs() throws {

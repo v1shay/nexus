@@ -17,6 +17,7 @@ struct ModelAggregatorView: View {
     @ObservedObject var cli: NexCLITaskController
     @ObservedObject var cliSettings: NexCLITaskSettings
     @ObservedObject var connectorAuth: NexConnectorAuthController
+    @ObservedObject var automations: NexusAutomationController
     @State private var page: NexusAppPage = .models
 
     var body: some View {
@@ -43,6 +44,8 @@ struct ModelAggregatorView: View {
                     NexusConnectorsPage(connectorAuth: connectorAuth, theme: settings.glassTheme)
                 case .cli:
                     NexCLIWorkspacePage(controller: cli, settings: cliSettings, theme: settings.glassTheme)
+                case .automations:
+                    NexusAutomationsPage(controller: automations, viewModel: viewModel, theme: settings.glassTheme)
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -70,6 +73,7 @@ private enum NexusAppPage: String, CaseIterable, Identifiable {
     case settings
     case connectors
     case cli
+    case automations
 
     var id: String { rawValue }
     var icon: String {
@@ -80,6 +84,7 @@ private enum NexusAppPage: String, CaseIterable, Identifiable {
         case .settings: "gearshape"
         case .connectors: "point.3.connected.trianglepath.dotted"
         case .cli: "terminal"
+        case .automations: "clock.arrow.circlepath"
         }
     }
 }
@@ -268,7 +273,7 @@ private struct NexusExperienceSettingsPage: View {
     @ObservedObject var settings: NexusAppSettings
     @ObservedObject var viewModel: ModelDownloadViewModel
     @ObservedObject private var duplexRuntime = NexusDuplexVoiceRuntime.shared
-    @ObservedObject private var permissionHealth = NexusPermissionHealth.shared
+    @ObservedObject private var permissionCoordinator = NexusPermissionCoordinator.shared
     @State private var piperVoices: [PiperVoice] = []
     @State private var isImportingPiperVoice = false
     @State private var secureVaultMessage = NexusUnifiedKeychainVault.shared.isConfigured
@@ -382,93 +387,49 @@ private struct NexusExperienceSettingsPage: View {
                     .help("Migrates the Nexus credentials already on this Mac into one Keychain record. Nexus never stores your Mac password.")
                 }
                 NexusHairline(axis: .horizontal)
-                NexusSettingsLine(label: "Permission host") {
+                NexusSettingsLine(label: "Nexus setup") {
                     VStack(alignment: .trailing, spacing: 7) {
-                        HStack(spacing: 8) {
-                            permissionBadge(
-                                "Durable",
-                                enabled: permissionHealth.permissionHostIsDurable
-                            )
-                            Button("Refresh") {
-                                permissionHealth.refresh()
-                            }
-                        }
-                        Text(permissionHealth.permissionHostMessage)
-                            .font(.system(size: 10.5, weight: .medium))
-                            .foregroundStyle(permissionHealth.permissionHostIsDurable ? Color.secondary : Color.orange)
-                            .multilineTextAlignment(.trailing)
-                            .frame(maxWidth: 390, alignment: .trailing)
-                    }
-                    .help("A stable Apple-signed Nexus.app is required before macOS privacy grants can persist across rebuilds.")
-                }
-                NexusHairline(axis: .horizontal)
-                NexusSettingsLine(label: "Hotkey access") {
-                    VStack(alignment: .trailing, spacing: 7) {
-                        HStack(spacing: 8) {
-                            permissionBadge(
-                                "Input",
-                                enabled: permissionHealth.snapshot.inputMonitoring
-                            )
-                            permissionBadge(
-                                "Paste",
-                                enabled: permissionHealth.snapshot.accessibility
-                            )
-                            permissionBadge(
-                                "Mic",
-                                enabled: permissionHealth.snapshot.microphone
-                            )
-                            permissionBadge(
-                                "Speech",
-                                enabled: permissionHealth.snapshot.speechRecognition
-                            )
-                            Button("Refresh") {
-                                permissionHealth.refresh()
-                            }
-                        }
-                        HStack(spacing: 8) {
-                            Button(permissionHealth.snapshot.inputMonitoring ? "Input settings" : "Enable input") {
-                                Task {
-                                    await permissionHealth.requestPermission(.listenEvent)
-                                }
-                            }
-                            Button(permissionHealth.snapshot.accessibility ? "Paste settings" : "Enable paste") {
-                                Task {
-                                    await permissionHealth.requestPermission(.accessibility)
-                                }
-                            }
-                            if !permissionHealth.snapshot.deniedServices.isEmpty {
-                                Button("Repair stale records") {
-                                    permissionHealth.repairDeniedPermissions()
+                        ForEach(permissionCoordinator.setupCapabilities, id: \.id) { capability in
+                            HStack(spacing: 8) {
+                                Text(capability.displayName)
+                                Text(permissionCoordinator.state(for: capability).rawValue)
+                                    .foregroundStyle(permissionCoordinator.isVerified(capability) ? .green : .secondary)
+                                if !permissionCoordinator.isVerified(capability) {
+                                    if case .protectedResource = capability {
+                                        Button("Open + add Nexus") { permissionCoordinator.openSystemSettings(for: capability) }
+                                        Button("Reveal app") { permissionCoordinator.revealCurrentAppForFullDiskAccess() }
+                                    } else {
+                                        Button("Allow") { Task { _ = await permissionCoordinator.request(capability) } }
+                                        Button("Settings") { permissionCoordinator.openSystemSettings(for: capability) }
+                                    }
                                 }
                             }
                         }
-                        Text(permissionHealth.statusMessage)
+                        HStack(spacing: 8) {
+                            Button("Start / continue setup") { Task { await permissionCoordinator.startOrContinueSetup() } }
+                            Button("Refresh") { Task { await permissionCoordinator.resumeAtLaunch() } }
+                            Button("Ask remaining app approvals") { Task { await permissionCoordinator.requestRemainingAutomationApprovals() } }
+                            if permissionCoordinator.state(for: .screenRecording) == .waitingForRestart {
+                                Button("Restart Nexus") { permissionCoordinator.restartToFinishScreenRecording() }
+                            }
+                        }
+                        Text(permissionCoordinator.statusMessage())
                             .font(.system(size: 10.5, weight: .medium))
                             .foregroundStyle(.secondary)
                             .multilineTextAlignment(.trailing)
                             .frame(maxWidth: 390, alignment: .trailing)
+                        Text("Automation is granted separately by macOS for each installed app Nexus can control; it is not a universal switch.")
+                            .font(.system(size: 10, weight: .regular))
+                            .foregroundStyle(.secondary)
+                            .multilineTextAlignment(.trailing)
+                            .frame(maxWidth: 390, alignment: .trailing)
                     }
-                    .font(.caption)
-                    .help("Input Monitoring lets Nexus detect both global holds. Accessibility lets Globe/Fn dictation insert the cleaned text into another app.")
                 }
                 NexusHairline(axis: .horizontal)
                 NexusSettingsLine(label: "Screen context") {
-                    VStack(alignment: .trailing, spacing: 7) {
-                        HStack(spacing: 8) {
-                            Toggle("Share with vision models", isOn: $settings.shareScreenWithVisionModels)
-                                .toggleStyle(.switch)
-                            permissionBadge(
-                                "Screen",
-                                enabled: permissionHealth.snapshot.screenRecording
-                            )
-                        }
-                        Button(permissionHealth.snapshot.screenRecording ? "Screen settings" : "Enable screen access") {
-                            Task {
-                                await permissionHealth.requestPermission(.screenCapture)
-                            }
-                        }
-                    }
-                    .help("Nexus attaches the current screen to every prompt for a vision-capable model. Screen Recording permission is required.")
+                    Toggle("Share with vision models", isOn: $settings.shareScreenWithVisionModels)
+                        .toggleStyle(.switch)
+                        .help("Screen Recording is requested through Nexus setup and live-verified with ScreenCaptureKit.")
                 }
                 NexusHairline(axis: .horizontal)
                 NexusSettingsLine(label: "Duplex") {
@@ -576,17 +537,11 @@ private struct NexusExperienceSettingsPage: View {
         }
         .onAppear {
             refreshPiperVoices()
-            permissionHealth.refresh()
+            Task { await permissionCoordinator.resumeAtLaunch() }
         }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
-            permissionHealth.refresh()
+            Task { await permissionCoordinator.resumeAtLaunch() }
         }
-    }
-
-    private func permissionBadge(_ label: String, enabled: Bool) -> some View {
-        Label(enabled ? "\(label) allowed" : "\(label) denied", systemImage: enabled ? "checkmark.circle.fill" : "exclamationmark.triangle.fill")
-            .foregroundStyle(enabled ? Color.green : Color.orange)
-            .help("This is the permission reported by the running Nexus process, not the visual toggle shown by System Settings.")
     }
 
     private func refreshPiperVoices() {
@@ -626,6 +581,113 @@ private struct NexusConnectorsPage: View {
                 .padding(.top, 18)
         }
     }
+}
+
+private struct NexusAutomationsPage: View {
+    @ObservedObject var controller: NexusAutomationController
+    @ObservedObject var viewModel: ModelDownloadViewModel
+    let theme: NexusGlassTheme
+
+    @State private var prompt = ""
+    @State private var frequency: NexusAutomationFrequency = .daily
+    @State private var hour = 7
+    @State private var minute = 0
+    @State private var error = ""
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 18) {
+                HStack {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Automations").font(.title2.weight(.semibold))
+                        Text("Reviewed, multi-step workflows that run through the signed Nexus host.")
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
+                    Spacer()
+                    Button("Set up OS wake") { controller.installPowerHelper() }
+                        .controlSize(.small)
+                }
+
+                TextEditor(text: $prompt)
+                    .font(.body)
+                    .frame(minHeight: 120)
+                    .padding(10)
+                    .background(.black.opacity(0.18), in: RoundedRectangle(cornerRadius: 12))
+                    .overlay(alignment: .topLeading) {
+                        if prompt.isEmpty {
+                            Text("Describe an automation — for example, every weekday at 7 AM, prepare my Gmail, calendar, weather, and portfolio briefing.")
+                                .foregroundStyle(.secondary).padding(16).allowsHitTesting(false)
+                        }
+                    }
+
+                HStack(spacing: 12) {
+                    Picker("Schedule", selection: $frequency) {
+                        ForEach(NexusAutomationFrequency.allCases) { Text($0.title).tag($0) }
+                    }
+                    .frame(width: 140)
+                    Stepper("Hour \(hour)", value: $hour, in: 0...23).frame(width: 120)
+                    Stepper("Minute \(minute)", value: $minute, in: 0...59).frame(width: 140)
+                    Spacer()
+                    Button("Save automation") { save() }
+                        .buttonStyle(.borderedProminent)
+                        .disabled(prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                }
+                Text(controller.powerStatus).font(.caption).foregroundStyle(.secondary)
+                if !error.isEmpty { Text(error).font(.caption).foregroundStyle(.red) }
+
+                Divider()
+                if controller.automations.isEmpty {
+                    ContentUnavailableView("No automations yet", systemImage: "clock.badge.questionmark", description: Text("Create one above or ask Nexus to build one from a prompt."))
+                        .frame(maxWidth: .infinity, minHeight: 180)
+                } else {
+                    ForEach(controller.automations) { automation in
+                        VStack(alignment: .leading, spacing: 8) {
+                            HStack {
+                                Text(automation.title).font(.headline)
+                                Spacer()
+                                Text(automation.enabled ? "Enabled" : "Paused")
+                                    .foregroundStyle(automation.enabled ? .green : .secondary)
+                                Button("Test now") { Task { await controller.testNow(automation) } }
+                                Button(automation.enabled ? "Pause" : "Resume") {
+                                    Task { try? await controller.setEnabled(automation, enabled: !automation.enabled) }
+                                }
+                                Button(role: .destructive) { Task { try? await controller.delete(automation) } } label: { Image(systemName: "trash") }
+                            }
+                            Text(automation.prompt).lineLimit(2).foregroundStyle(.secondary)
+                            Text("\(automation.schedule.summary)  ·  Next: \(automation.nextRun.map { Self.dateFormatter.string(from: $0) } ?? "not scheduled")")
+                                .font(.caption).foregroundStyle(.secondary)
+                        }
+                        .padding(14)
+                        .background(.white.opacity(0.05), in: RoundedRectangle(cornerRadius: 14))
+                    }
+                }
+            }
+            .padding(22)
+            .nexusGlassPanel(theme: theme, role: .content, radius: 20)
+            .padding(.top, 18)
+        }
+        .onAppear { controller.start(); Task { await controller.reload() } }
+    }
+
+    private func save() {
+        error = ""
+        let schedule = NexusSchedule(frequency: frequency, hour: hour, minute: minute)
+        Task {
+            do {
+                try await controller.saveDraft(
+                    title: String(prompt.prefix(56)),
+                    prompt: prompt,
+                    schedule: schedule,
+                    modelID: viewModel.activeModel?.id ?? ""
+                )
+                prompt = ""
+            } catch let saveError { error = saveError.localizedDescription }
+        }
+    }
+
+    private static let dateFormatter: DateFormatter = {
+        let formatter = DateFormatter(); formatter.dateStyle = .medium; formatter.timeStyle = .short; return formatter
+    }()
 }
 
 private struct NexusAppRail: View {

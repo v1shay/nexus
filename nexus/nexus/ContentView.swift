@@ -1139,6 +1139,17 @@ private struct TranscriptContents: View {
 
                     BatteryPercentageView()
 
+                    Button { notch.openAutomations() } label: {
+                        Image(systemName: "clock.arrow.2.circlepath")
+                            .font(.system(size: 14, weight: .medium))
+                            .frame(width: 30, height: 30)
+                            .background(.cyan.opacity(0.12), in: Circle())
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(.cyan.opacity(0.9))
+                    .help("Automations")
+                    .accessibilityLabel("Open Nexus automations")
+
                     Button { notch.openModelAggregator() } label: {
                         Image(systemName: "cube.transparent")
                             .font(.system(size: 15, weight: .medium))

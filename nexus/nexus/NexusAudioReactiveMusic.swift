@@ -458,34 +458,16 @@ final class NexusAudioReactiveMusic: NSObject, ObservableObject {
         }
     }
 
-    /// A durable Nexus host can request Screen & System Audio Recording once;
-    /// subsequent captures reuse that macOS grant and need no Spotify sign-in.
+    /// Screen & System Audio Recording is owned by the shared coordinator.
+    /// This surface never invokes a separate TCC API or races its own prompt.
     func requestAndStartCaptureIfPossible() {
         guard stream == nil, !isStartingCapture else { return }
-        guard CGPreflightScreenCaptureAccess() else {
-            let host = NexusPermissionHostIdentity.current()
-            guard host.isDurable else {
-                captureState = .unavailable(host.statusMessage)
-                return
-            }
+        guard NexusPermissionCoordinator.shared.isVerified(.screenRecording) else {
             captureState = .awaitingPermission
-            guard NexusScreenCapture.requestAccess(prompt: true) else { return }
-            // CGRequestScreenCaptureAccess returns while the privacy sheet is
-            // still up on some macOS releases. Retry briefly so accepting it
-            // starts the meter immediately rather than requiring an app restart.
-            permissionRetryTask?.cancel()
-            permissionRetryTask = Task { @MainActor [weak self] in
-                for _ in 0..<20 {
-                    // `Task.sleep(for:)` triggered inconsistent Swift 6
-                    // diagnostics in Xcode's test compiler. Nanoseconds is
-                    // available on every deployment target Nexus supports.
-                    try? await Task.sleep(nanoseconds: 500_000_000)
-                    guard !Task.isCancelled, let self else { return }
-                    if CGPreflightScreenCaptureAccess() {
-                        self.requestAndStartCaptureIfPossible()
-                        return
-                    }
-                }
+            Task { @MainActor [weak self] in
+                let result = await NexusPermissionCoordinator.shared.request(.screenRecording)
+                guard let self, result.isAuthorized else { return }
+                self.requestAndStartCaptureIfPossible()
             }
             return
         }

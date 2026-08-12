@@ -4,21 +4,15 @@ import XCTest
 final class NexComputerToolSearchTests: XCTestCase {
     private let engine = NexToolSearchEngine()
 
-    func testPermissionHostRequiresAppleAnchoredNexusRequirement() {
+    func testPermissionHostRequiresAStableNexusSigningIdentity() {
         XCTAssertTrue(
-            NexusPermissionHostIdentity.isDurable(
-                designatedRequirement: "designated => anchor apple generic and identifier \"na.nexus\""
-            )
+            NexusPermissionSigningIdentity(bundleIdentifier: "na.nexus", requirementHash: "development", hasCertificate: true, certificateSubject: "Apple Development: Nexus", diagnostic: nil).isDurable
         )
         XCTAssertFalse(
-            NexusPermissionHostIdentity.isDurable(
-                designatedRequirement: "designated => cdhash H\"aabbcc\""
-            )
+            NexusPermissionSigningIdentity(bundleIdentifier: "na.nexus", requirementHash: "", hasCertificate: false, certificateSubject: "", diagnostic: nil).isDurable
         )
         XCTAssertFalse(
-            NexusPermissionHostIdentity.isDurable(
-                designatedRequirement: "designated => anchor apple generic and identifier \"com.example.other\""
-            )
+            NexusPermissionSigningIdentity(bundleIdentifier: "com.example.other", requirementHash: "development", hasCertificate: true, certificateSubject: "Apple Development: Other", diagnostic: nil).isDurable
         )
     }
 
