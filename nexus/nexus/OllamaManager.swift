@@ -106,10 +106,11 @@ enum NexAssistantIdentityIntent {
 final class OllamaManager: @unchecked Sendable {
     static let serverURL = URL(string: "http://127.0.0.1:11434")!
     static let officialMacDownloadURL = URL(string: "https://ollama.com/download/Ollama-darwin.zip")!
-    /// Inference can legitimately take a long time before emitting an answer,
-    /// especially with native reasoning enabled. This is deliberately far
-    /// beyond normal model work; user cancellation remains immediate.
-    static let inferenceRequestTimeout: TimeInterval = 7 * 24 * 60 * 60
+    /// A local model may need time to load, but leaving a chat request open
+    /// for days means a wedged Ollama daemon looks like Nexus simply ignored
+    /// the user. This bounds the time-to-first-response; a normal generation
+    /// continues streaming once Ollama starts responding.
+    static let inferenceRequestTimeout: TimeInterval = 120
     /// Tool selection is a short advisory pass.  It must never inherit the
     /// effectively-unbounded answer timeout, otherwise a model that stalls
     /// before its first tool token can leave both the notch and nexus CLI in
@@ -304,7 +305,13 @@ final class OllamaManager: @unchecked Sendable {
                 options: .init(temperature: temperature, numPredict: maximumTokens, numContext: 32_768)
             )
         )
-        let (bytes, response) = try await session.bytes(for: request)
+        let bytes: URLSession.AsyncBytes
+        let response: URLResponse
+        do {
+            (bytes, response) = try await session.bytes(for: request)
+        } catch let error as URLError where error.code == .timedOut {
+            throw LocalModelError.serverUnavailable("Ollama accepted the request but produced no response within two minutes. Restart the Ollama service, then retry the local model.")
+        }
         try Self.requireSuccess(response)
         let isToolPlanningPass = messages.contains {
             $0.role == "system" && $0.content.contains("NEXUS_TOOL_PLANNING_PASS")

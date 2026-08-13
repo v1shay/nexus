@@ -17,6 +17,7 @@ struct ModelAggregatorView: View {
     @ObservedObject var cli: NexCLITaskController
     @ObservedObject var cliSettings: NexCLITaskSettings
     @ObservedObject var connectorAuth: NexConnectorAuthController
+    @ObservedObject var automations: NexusAutomationController
     @State private var page: NexusAppPage = .models
 
     var body: some View {
@@ -43,6 +44,8 @@ struct ModelAggregatorView: View {
                     NexusConnectorsPage(connectorAuth: connectorAuth, theme: settings.glassTheme)
                 case .cli:
                     NexCLIWorkspacePage(controller: cli, settings: cliSettings, theme: settings.glassTheme)
+                case .automations:
+                    NexusAutomationsPage(controller: automations, viewModel: viewModel, theme: settings.glassTheme)
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -70,6 +73,7 @@ private enum NexusAppPage: String, CaseIterable, Identifiable {
     case settings
     case connectors
     case cli
+    case automations
 
     var id: String { rawValue }
     var icon: String {
@@ -80,6 +84,7 @@ private enum NexusAppPage: String, CaseIterable, Identifiable {
         case .settings: "gearshape"
         case .connectors: "point.3.connected.trianglepath.dotted"
         case .cli: "terminal"
+        case .automations: "clock.arrow.circlepath"
         }
     }
 }
@@ -268,7 +273,7 @@ private struct NexusExperienceSettingsPage: View {
     @ObservedObject var settings: NexusAppSettings
     @ObservedObject var viewModel: ModelDownloadViewModel
     @ObservedObject private var duplexRuntime = NexusDuplexVoiceRuntime.shared
-    @ObservedObject private var permissionHealth = NexusPermissionHealth.shared
+    @ObservedObject private var permissionCoordinator = NexusPermissionCoordinator.shared
     @State private var piperVoices: [PiperVoice] = []
     @State private var isImportingPiperVoice = false
     @State private var secureVaultMessage = NexusUnifiedKeychainVault.shared.isConfigured
@@ -382,93 +387,49 @@ private struct NexusExperienceSettingsPage: View {
                     .help("Migrates the Nexus credentials already on this Mac into one Keychain record. Nexus never stores your Mac password.")
                 }
                 NexusHairline(axis: .horizontal)
-                NexusSettingsLine(label: "Permission host") {
+                NexusSettingsLine(label: "Nexus setup") {
                     VStack(alignment: .trailing, spacing: 7) {
-                        HStack(spacing: 8) {
-                            permissionBadge(
-                                "Durable",
-                                enabled: permissionHealth.permissionHostIsDurable
-                            )
-                            Button("Refresh") {
-                                permissionHealth.refresh()
-                            }
-                        }
-                        Text(permissionHealth.permissionHostMessage)
-                            .font(.system(size: 10.5, weight: .medium))
-                            .foregroundStyle(permissionHealth.permissionHostIsDurable ? Color.secondary : Color.orange)
-                            .multilineTextAlignment(.trailing)
-                            .frame(maxWidth: 390, alignment: .trailing)
-                    }
-                    .help("A stable Apple-signed Nexus.app is required before macOS privacy grants can persist across rebuilds.")
-                }
-                NexusHairline(axis: .horizontal)
-                NexusSettingsLine(label: "Hotkey access") {
-                    VStack(alignment: .trailing, spacing: 7) {
-                        HStack(spacing: 8) {
-                            permissionBadge(
-                                "Input",
-                                enabled: permissionHealth.snapshot.inputMonitoring
-                            )
-                            permissionBadge(
-                                "Paste",
-                                enabled: permissionHealth.snapshot.accessibility
-                            )
-                            permissionBadge(
-                                "Mic",
-                                enabled: permissionHealth.snapshot.microphone
-                            )
-                            permissionBadge(
-                                "Speech",
-                                enabled: permissionHealth.snapshot.speechRecognition
-                            )
-                            Button("Refresh") {
-                                permissionHealth.refresh()
-                            }
-                        }
-                        HStack(spacing: 8) {
-                            Button(permissionHealth.snapshot.inputMonitoring ? "Input settings" : "Enable input") {
-                                Task {
-                                    await permissionHealth.requestPermission(.listenEvent)
-                                }
-                            }
-                            Button(permissionHealth.snapshot.accessibility ? "Paste settings" : "Enable paste") {
-                                Task {
-                                    await permissionHealth.requestPermission(.accessibility)
-                                }
-                            }
-                            if !permissionHealth.snapshot.deniedServices.isEmpty {
-                                Button("Repair stale records") {
-                                    permissionHealth.repairDeniedPermissions()
+                        ForEach(permissionCoordinator.setupCapabilities, id: \.id) { capability in
+                            HStack(spacing: 8) {
+                                Text(capability.displayName)
+                                Text(permissionCoordinator.state(for: capability).rawValue)
+                                    .foregroundStyle(permissionCoordinator.isVerified(capability) ? .green : .secondary)
+                                if !permissionCoordinator.isVerified(capability) {
+                                    if case .protectedResource = capability {
+                                        Button("Open + add Nexus") { permissionCoordinator.openSystemSettings(for: capability) }
+                                        Button("Reveal app") { permissionCoordinator.revealCurrentAppForFullDiskAccess() }
+                                    } else {
+                                        Button("Allow") { Task { _ = await permissionCoordinator.request(capability) } }
+                                        Button("Settings") { permissionCoordinator.openSystemSettings(for: capability) }
+                                    }
                                 }
                             }
                         }
-                        Text(permissionHealth.statusMessage)
+                        HStack(spacing: 8) {
+                            Button("Start / continue setup") { Task { await permissionCoordinator.startOrContinueSetup() } }
+                            Button("Refresh") { Task { await permissionCoordinator.resumeAtLaunch() } }
+                            Button("Ask remaining app approvals") { Task { await permissionCoordinator.requestRemainingAutomationApprovals() } }
+                            if permissionCoordinator.state(for: .screenRecording) == .waitingForRestart {
+                                Button("Restart Nexus") { permissionCoordinator.restartToFinishScreenRecording() }
+                            }
+                        }
+                        Text(permissionCoordinator.statusMessage())
                             .font(.system(size: 10.5, weight: .medium))
                             .foregroundStyle(.secondary)
                             .multilineTextAlignment(.trailing)
                             .frame(maxWidth: 390, alignment: .trailing)
+                        Text("Automation is granted separately by macOS for each installed app Nexus can control; it is not a universal switch.")
+                            .font(.system(size: 10, weight: .regular))
+                            .foregroundStyle(.secondary)
+                            .multilineTextAlignment(.trailing)
+                            .frame(maxWidth: 390, alignment: .trailing)
                     }
-                    .font(.caption)
-                    .help("Input Monitoring lets Nexus detect both global holds. Accessibility lets Globe/Fn dictation insert the cleaned text into another app.")
                 }
                 NexusHairline(axis: .horizontal)
                 NexusSettingsLine(label: "Screen context") {
-                    VStack(alignment: .trailing, spacing: 7) {
-                        HStack(spacing: 8) {
-                            Toggle("Share with vision models", isOn: $settings.shareScreenWithVisionModels)
-                                .toggleStyle(.switch)
-                            permissionBadge(
-                                "Screen",
-                                enabled: permissionHealth.snapshot.screenRecording
-                            )
-                        }
-                        Button(permissionHealth.snapshot.screenRecording ? "Screen settings" : "Enable screen access") {
-                            Task {
-                                await permissionHealth.requestPermission(.screenCapture)
-                            }
-                        }
-                    }
-                    .help("Nexus attaches the current screen to every prompt for a vision-capable model. Screen Recording permission is required.")
+                    Toggle("Share with vision models", isOn: $settings.shareScreenWithVisionModels)
+                        .toggleStyle(.switch)
+                        .help("Screen Recording is requested through Nexus setup and live-verified with ScreenCaptureKit.")
                 }
                 NexusHairline(axis: .horizontal)
                 NexusSettingsLine(label: "Duplex") {
@@ -576,17 +537,11 @@ private struct NexusExperienceSettingsPage: View {
         }
         .onAppear {
             refreshPiperVoices()
-            permissionHealth.refresh()
+            Task { await permissionCoordinator.resumeAtLaunch() }
         }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
-            permissionHealth.refresh()
+            Task { await permissionCoordinator.resumeAtLaunch() }
         }
-    }
-
-    private func permissionBadge(_ label: String, enabled: Bool) -> some View {
-        Label(enabled ? "\(label) allowed" : "\(label) denied", systemImage: enabled ? "checkmark.circle.fill" : "exclamationmark.triangle.fill")
-            .foregroundStyle(enabled ? Color.green : Color.orange)
-            .help("This is the permission reported by the running Nexus process, not the visual toggle shown by System Settings.")
     }
 
     private func refreshPiperVoices() {
@@ -626,6 +581,423 @@ private struct NexusConnectorsPage: View {
                 .padding(.top, 18)
         }
     }
+}
+
+private struct NexusAutomationsPage: View {
+    @ObservedObject var controller: NexusAutomationController
+    @ObservedObject var viewModel: ModelDownloadViewModel
+    let theme: NexusGlassTheme
+
+    @State private var prompt = ""
+    @State private var frequency: NexusAutomationFrequency = .daily
+    @State private var hour = 7
+    @State private var minute = 0
+    @State private var weekdays: Set<Int> = [2, 3, 4, 5, 6]
+    @State private var oneTimeDate = Date().addingTimeInterval(3600)
+    @State private var selectedModelID = ""
+    @State private var approvedActions: Set<String> = []
+    @State private var error = ""
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 18) {
+                HStack {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Automations").font(.title2.weight(.semibold))
+                        Text("Reviewed, multi-step workflows that run through the signed Nexus host.")
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
+                    Spacer()
+                    Button("Open Nexus browser") {
+                        Task { await controller.openNexusBrowserForSignIn() }
+                    }
+                    .controlSize(.small)
+                    Button("Set up OS wake") { controller.installPowerHelper() }
+                        .controlSize(.small)
+                }
+                if !controller.browserSetupStatus.isEmpty {
+                    Label(controller.browserSetupStatus, systemImage: "lock.shield")
+                        .font(.caption)
+                        .foregroundStyle(controller.browserSetupStatus.hasPrefix("Could not") ? .red : .secondary)
+                }
+
+                HStack(spacing: 10) {
+                    Text("Model").font(.caption.weight(.medium)).foregroundStyle(.secondary)
+                    Picker("Automation model", selection: $selectedModelID) {
+                        Text(activeModelLabel).tag("")
+                        if viewModel.apiProvider.enabled {
+                            Text("Configured API · \(viewModel.apiProvider.model)")
+                                .tag(NexusAutomation.activeAPIModelID)
+                        }
+                        ForEach(viewModel.installedModels) { model in
+                            Text("\(model.name) · \(model.backend.title)").tag(model.id)
+                        }
+                    }
+                    .labelsHidden()
+                    .frame(maxWidth: 340)
+                    Spacer()
+                    Text("\(TimeZone.current.identifier) · \(controller.powerStatus)")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
+
+                TextEditor(text: $prompt)
+                    .font(.body)
+                    .frame(minHeight: 120)
+                    .padding(10)
+                    .background(.black.opacity(0.18), in: RoundedRectangle(cornerRadius: 12))
+                    .overlay(alignment: .topLeading) {
+                        if prompt.isEmpty {
+                            Text("Describe an automation — for example, every weekday at 7 AM, prepare my Gmail, calendar, weather, and portfolio briefing.")
+                                .foregroundStyle(.secondary).padding(16).allowsHitTesting(false)
+                        }
+                    }
+
+                HStack(spacing: 12) {
+                    Picker("Schedule", selection: $frequency) {
+                        ForEach(NexusAutomationFrequency.allCases) { Text($0.title).tag($0) }
+                    }
+                    .frame(width: 140)
+                    Stepper("Hour \(hour)", value: $hour, in: 0...23).frame(width: 120)
+                    Stepper("Minute \(minute)", value: $minute, in: 0...59).frame(width: 140)
+                    Spacer()
+                    Button(controller.isBuildingDraft ? "Building…" : "Build automation") { build() }
+                        .buttonStyle(.borderedProminent)
+                        .disabled(controller.isBuildingDraft || prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                }
+                if frequency == .weekly {
+                    HStack(spacing: 6) {
+                        ForEach(Array(1...7), id: \.self) { day in
+                            Button(Self.weekdaySymbol(day)) {
+                                if weekdays.contains(day) { weekdays.remove(day) } else { weekdays.insert(day) }
+                            }
+                            .buttonStyle(.bordered)
+                            .tint(weekdays.contains(day) ? theme.mainLight : .gray)
+                            .controlSize(.small)
+                        }
+                        Text("Runs on the selected days.").font(.caption).foregroundStyle(.secondary)
+                    }
+                } else if frequency == .once {
+                    DatePicker("Run once", selection: $oneTimeDate, in: Date()..., displayedComponents: [.date, .hourAndMinute])
+                        .datePickerStyle(.compact)
+                }
+                Text("Schedule preview: \(selectedSchedule.summary)").font(.caption).foregroundStyle(.secondary)
+                if !error.isEmpty { Text(error).font(.caption).foregroundStyle(.red) }
+                if !controller.buildError.isEmpty { Text(controller.buildError).font(.caption).foregroundStyle(.red) }
+
+                if !controller.runEvents.isEmpty {
+                    VStack(alignment: .leading, spacing: 9) {
+                        HStack {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(controller.isRunning ? "Live automation run" : "Latest automation run")
+                                    .font(.headline)
+                                Text(controller.activeAutomationTitle.isEmpty ? "Progress is redacted; source data stays private." : controller.activeAutomationTitle)
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                            Spacer()
+                            if controller.isRunning {
+                                ProgressView().controlSize(.small)
+                                Text("Running").font(.caption.weight(.medium)).foregroundStyle(theme.mainLight)
+                            }
+                        }
+                        ForEach(Array(controller.runEvents.suffix(12))) { event in
+                            HStack(alignment: .top, spacing: 10) {
+                                Image(systemName: event.phase.icon)
+                                    .foregroundStyle(runEventColor(event.phase))
+                                    .frame(width: 18, height: 18)
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(event.title).font(.subheadline.weight(.medium))
+                                    Text(event.detail).font(.caption).foregroundStyle(.secondary)
+                                }
+                                Spacer(minLength: 8)
+                                Text(Self.runEventTimeFormatter.string(from: event.occurredAt))
+                                    .font(.caption2.monospacedDigit())
+                                    .foregroundStyle(.tertiary)
+                            }
+                        }
+                    }
+                    .padding(14)
+                    .background(.white.opacity(0.055), in: RoundedRectangle(cornerRadius: 14))
+                }
+
+                if !controller.buildEvents.isEmpty {
+                    VStack(alignment: .leading, spacing: 9) {
+                        HStack {
+                            Text("Live automation canvas").font(.headline)
+                            Spacer()
+                            if controller.isBuildingDraft { ProgressView().controlSize(.small) }
+                        }
+                        ForEach(controller.buildEvents) { event in
+                            HStack(alignment: .top, spacing: 10) {
+                                VStack(spacing: 0) {
+                                    Image(systemName: canvasIcon(for: event.stage))
+                                        .foregroundStyle(event.stage == .ready ? .green : theme.mainLight)
+                                        .frame(width: 22, height: 22)
+                                    if event.id != controller.buildEvents.last?.id {
+                                        Rectangle().fill(.white.opacity(0.16)).frame(width: 1, height: 20)
+                                    }
+                                }
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(event.title).font(.subheadline.weight(.medium))
+                                    Text(event.detail).font(.caption).foregroundStyle(.secondary)
+                                }
+                            }
+                        }
+                    }
+                    .padding(14)
+                    .background(.white.opacity(0.055), in: RoundedRectangle(cornerRadius: 14))
+                }
+
+                if let draft = controller.draft {
+                    VStack(alignment: .leading, spacing: 12) {
+                        HStack {
+                            VStack(alignment: .leading, spacing: 3) {
+                                Text(draft.title).font(.headline)
+                                Text("\(draft.schedule.summary) · \(modelLabel(draft.modelID))")
+                                    .font(.caption).foregroundStyle(.secondary)
+                            }
+                            Spacer()
+                            Text("Review before enabling").font(.caption.weight(.medium)).foregroundStyle(.green)
+                        }
+                        ForEach(draft.blueprint.steps) { step in
+                            HStack(spacing: 10) {
+                                Image(systemName: step.requiresApproval ? "exclamationmark.shield" : "checkmark.circle")
+                                    .foregroundStyle(step.requiresApproval ? .orange : .green)
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(step.tool).font(.subheadline.monospaced())
+                                    Text(step.purpose).font(.caption).foregroundStyle(.secondary)
+                                    Text(step.arguments.isEmpty ? "No inputs" : "Inputs: \(step.arguments.keys.sorted().joined(separator: ", "))")
+                                        .font(.caption2).foregroundStyle(.secondary)
+                                }
+                                Spacer()
+                                if step.requiresApproval {
+                                    Toggle("Approve", isOn: approvalBinding(for: step.tool)).toggleStyle(.switch).labelsHidden()
+                                }
+                            }
+                        }
+                        ForEach(draft.blueprint.setupNotes, id: \.self) { note in
+                            Label(note, systemImage: "info.circle").font(.caption).foregroundStyle(.secondary)
+                        }
+                        HStack {
+                            Button("Discard") { controller.discardDraft() }
+                            Spacer()
+                            Button("Save & enable") { saveReviewedDraft() }
+                                .buttonStyle(.borderedProminent)
+                            Button("Save & test now") { saveAndTestDraft() }
+                                .buttonStyle(.bordered)
+                        }
+                    }
+                    .padding(15)
+                    .background(.white.opacity(0.08), in: RoundedRectangle(cornerRadius: 16))
+                }
+
+                Divider()
+                if controller.automations.isEmpty {
+                    ContentUnavailableView("No automations yet", systemImage: "clock.badge.questionmark", description: Text("Create one above or ask Nexus to build one from a prompt."))
+                        .frame(maxWidth: .infinity, minHeight: 180)
+                } else {
+                    ForEach(controller.automations) { automation in
+                        VStack(alignment: .leading, spacing: 8) {
+                            HStack {
+                                Text(automation.title).font(.headline)
+                                Spacer()
+                                Text(automation.enabled ? "Enabled" : "Paused")
+                                    .foregroundStyle(automation.enabled ? .green : .secondary)
+                                Button(controller.activeAutomationID == automation.id ? "Running…" : "Test now") {
+                                    Task { await controller.testNow(automation) }
+                                }
+                                .disabled(controller.isRunning)
+                                Button(automation.enabled ? "Pause" : "Resume") {
+                                    Task { try? await controller.setEnabled(automation, enabled: !automation.enabled) }
+                                }
+                                Button(role: .destructive) { Task { try? await controller.delete(automation) } } label: { Image(systemName: "trash") }
+                            }
+                            Text(automation.prompt).lineLimit(2).foregroundStyle(.secondary)
+                            HStack(spacing: 8) {
+                                Text("Run model").font(.caption).foregroundStyle(.secondary)
+                                Picker("Run model", selection: savedModelBinding(for: automation)) {
+                                    Text("Use current active model").tag("")
+                                    if viewModel.apiProvider.enabled {
+                                        Text("Configured API · \(viewModel.apiProvider.model)")
+                                            .tag(NexusAutomation.activeAPIModelID)
+                                    }
+                                    ForEach(viewModel.installedModels) { model in
+                                        Text("\(model.name) · \(model.backend.title)").tag(model.id)
+                                    }
+                                }
+                                .labelsHidden()
+                                .frame(maxWidth: 300)
+                            }
+                            HStack(spacing: 8) {
+                                Text("Briefing voice").font(.caption).foregroundStyle(.secondary)
+                                Picker("Briefing voice", selection: savedVoiceBinding(for: automation)) {
+                                    Text("Nexus default voice").tag("")
+                                    ForEach(controller.availableVoices) { voice in
+                                        Text(voice.displayName).tag(voice.model.path)
+                                    }
+                                }
+                                .labelsHidden()
+                                .frame(maxWidth: 300)
+                            }
+                            Text("\(automation.schedule.summary)  ·  \(modelLabel(automation.modelID))  ·  Next: \(automation.nextRun.map { Self.dateFormatter.string(from: $0) } ?? "not scheduled")")
+                                .font(.caption).foregroundStyle(.secondary)
+                            if let blueprint = automation.blueprint {
+                                Text("Plan: \(blueprint.steps.map(\.tool).joined(separator: " → "))")
+                                    .font(.caption2).foregroundStyle(.secondary).lineLimit(1)
+                            }
+                        }
+                        .padding(14)
+                        .background(.white.opacity(0.05), in: RoundedRectangle(cornerRadius: 14))
+                    }
+                }
+            }
+            .padding(22)
+            .nexusGlassPanel(theme: theme, role: .content, radius: 20)
+            .padding(.top, 18)
+        }
+        .onAppear {
+            controller.start()
+            if selectedModelID.isEmpty, !viewModel.apiProvider.enabled { selectedModelID = viewModel.activeModel?.id ?? "" }
+            Task { await controller.reload() }
+        }
+        .onChange(of: controller.draft?.id) { _, _ in
+            approvedActions = []
+        }
+    }
+
+    private var selectedSchedule: NexusSchedule {
+        .init(
+            frequency: frequency,
+            hour: hour,
+            minute: minute,
+            weekdays: weekdays,
+            oneTimeDate: frequency == .once ? oneTimeDate : nil
+        )
+    }
+
+    private var activeModelLabel: String {
+        if viewModel.apiProvider.enabled { return "Active API · \(viewModel.apiProvider.model)" }
+        return viewModel.activeModel.map { "Active · \($0.name)" } ?? "Select a model"
+    }
+
+    private func build() {
+        error = ""
+        Task {
+            do {
+                _ = try await controller.buildDraft(
+                    prompt: prompt,
+                    modelID: selectedModelID,
+                    fallbackSchedule: selectedSchedule
+                )
+            } catch let saveError { error = saveError.localizedDescription }
+        }
+    }
+
+    private func saveReviewedDraft() {
+        error = ""
+        Task {
+            do {
+                _ = try await controller.saveReviewedDraft(approvedActionIDs: approvedActions)
+                prompt = ""
+            } catch let failure { error = failure.localizedDescription }
+        }
+    }
+
+    private func saveAndTestDraft() {
+        error = ""
+        Task {
+            do {
+                if let automation = try await controller.saveReviewedDraft(approvedActionIDs: approvedActions) {
+                    prompt = ""
+                    await controller.testNow(automation)
+                }
+            } catch let failure { error = failure.localizedDescription }
+        }
+    }
+
+    private func approvalBinding(for action: String) -> Binding<Bool> {
+        Binding(
+            get: { approvedActions.contains(action) },
+            set: { enabled in
+                if enabled { approvedActions.insert(action) } else { approvedActions.remove(action) }
+            }
+        )
+    }
+
+    private func savedModelBinding(for automation: NexusAutomation) -> Binding<String> {
+        Binding(
+            get: { automation.modelID },
+            set: { modelID in
+                Task {
+                    do {
+                        try await controller.setModel(automation, modelID: modelID)
+                    } catch let failure {
+                        error = failure.localizedDescription
+                    }
+                }
+            }
+        )
+    }
+
+    private func savedVoiceBinding(for automation: NexusAutomation) -> Binding<String> {
+        Binding(
+            get: { automation.voiceModelPath ?? "" },
+            set: { voicePath in
+                Task {
+                    do {
+                        try await controller.setVoice(automation, voiceModelPath: voicePath)
+                    } catch let failure {
+                        error = failure.localizedDescription
+                    }
+                }
+            }
+        )
+    }
+
+    private func modelLabel(_ modelID: String) -> String {
+        if modelID == NexusAutomation.activeAPIModelID {
+            return viewModel.apiProvider.enabled
+                ? "API · \(viewModel.apiProvider.model)"
+                : "Configured API (not enabled)"
+        }
+        if modelID.isEmpty { return activeModelLabel }
+        return viewModel.installedModels.first(where: { $0.id == modelID })?.name ?? modelID
+    }
+
+    private func canvasIcon(for stage: NexusAutomationBuildStage) -> String {
+        switch stage {
+        case .interpreting: "text.magnifyingglass"
+        case .selectingTools: "shippingbox"
+        case .designing: "point.3.connected.trianglepath.dotted"
+        case .ready: "checkmark.seal.fill"
+        case .failed: "exclamationmark.triangle"
+        }
+    }
+
+    private func runEventColor(_ phase: NexusAutomationRunEventPhase) -> Color {
+        switch phase {
+        case .evidence, .delivery: .green
+        case .failed: .red
+        case .retry: .orange
+        case .started, .tool, .progress, .composing: theme.mainLight
+        }
+    }
+
+    private static func weekdaySymbol(_ day: Int) -> String {
+        let symbols = Calendar.current.veryShortWeekdaySymbols
+        guard symbols.indices.contains(day - 1) else { return "?" }
+        return symbols[day - 1]
+    }
+
+    private static let dateFormatter: DateFormatter = {
+        let formatter = DateFormatter(); formatter.dateStyle = .medium; formatter.timeStyle = .short; return formatter
+    }()
+
+    private static let runEventTimeFormatter: DateFormatter = {
+        let formatter = DateFormatter(); formatter.timeStyle = .medium; formatter.dateStyle = .none; return formatter
+    }()
 }
 
 private struct NexusAppRail: View {

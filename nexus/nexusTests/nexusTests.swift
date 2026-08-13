@@ -309,11 +309,13 @@ final class NexusGeometryTests: XCTestCase {
     }
 
     @MainActor
-    func testWakePhraseListenerMatchesOnlyIntentionalMultiWordPhrases() {
+    func testWakePhraseListenerMatchesConfiguredNexusVariants() {
         XCTAssertEqual(WakePhraseListener.match(in: "Hey, next!"), .heyNext)
         XCTAssertEqual(WakePhraseListener.match(in: "Wake up next"), .wakeUpNext)
-        XCTAssertNil(WakePhraseListener.match(in: "What should I do next?"))
-        XCTAssertNil(WakePhraseListener.match(in: "Nex, open the overlay"))
+        XCTAssertEqual(WakePhraseListener.match(in: "Next"), .next)
+        XCTAssertEqual(WakePhraseListener.match(in: "Hey Nexus"), .heyNexus)
+        XCTAssertEqual(WakePhraseListener.match(in: "Wake up, Nexus"), .wakeUpNexus)
+        XCTAssertEqual(WakePhraseListener.match(in: "Nex, open the overlay"), .nex)
     }
 
     @MainActor

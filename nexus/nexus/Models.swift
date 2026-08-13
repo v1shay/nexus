@@ -158,8 +158,6 @@ enum ModelProviderResolver {
 /// available on this Mac, uses a system fallback so a provider selection never
 /// renders as an empty image.
 enum ModelBrandArtwork {
-    private static let downloadsDirectory = URL(fileURLWithPath: "/Users/vishayagarwal/Downloads", isDirectory: true)
-
     static let fallbackSystemName = "cpu"
 
     private static let chatGPTPNGBase64 = "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"
@@ -190,7 +188,11 @@ enum ModelBrandArtwork {
     }
 
     static func assetURL(for model: LocalModel?) -> URL {
-        downloadsDirectory.appendingPathComponent(assetName(for: ModelProviderResolver.identity(for: model)))
+        Bundle.main.url(
+            forResource: assetName(for: ModelProviderResolver.identity(for: model)),
+            withExtension: nil,
+            subdirectory: "Pets/BrandAssets"
+        ) ?? URL(fileURLWithPath: "/dev/null")
     }
 
     static func image(for model: LocalModel?) -> NSImage? {
@@ -198,7 +200,11 @@ enum ModelBrandArtwork {
     }
 
     static func image(for identity: ModelProviderIdentity) -> NSImage? {
-        if let suppliedArtwork = NSImage(contentsOf: downloadsDirectory.appendingPathComponent(assetName(for: identity))) {
+        if let artworkURL = Bundle.main.url(
+            forResource: assetName(for: identity),
+            withExtension: nil,
+            subdirectory: "Pets/BrandAssets"
+        ), let suppliedArtwork = NSImage(contentsOf: artworkURL) {
             return suppliedArtwork
         }
         if identity == .openAI, let data = embeddedChatGPTPNGData {

@@ -174,10 +174,11 @@ struct ToolActivity: Equatable, Sendable {
 }
 
 enum CodexProgressAssets {
-    private static let downloadsURL = FileManager.default.homeDirectoryForCurrentUser
-        .appendingPathComponent("Downloads", isDirectory: true)
-
-    static let avatarURL = downloadsURL.appendingPathComponent("codex-removebg-preview.png")
+    static let avatarURL = Bundle.main.url(
+        forResource: "codex-removebg-preview",
+        withExtension: "png",
+        subdirectory: "Pets/codex"
+    )
 
     static func icon(for kind: CodexProgressKind) -> ToolIconSource {
         // Codex session updates arrive on the main UI actor. Do not synchronously

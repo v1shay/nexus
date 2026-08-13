@@ -161,12 +161,30 @@ enum NexToolPermission: String, Codable, Sendable {
 enum NexToolInvocationSource: String, Codable, Sendable {
     case app
     case model
+    /// A durable user-approved automation. This is distinct from a model turn
+    /// so scheduled work can be constrained to its saved approval boundary.
+    case automation
 }
 
 struct NexToolInvocation: Sendable {
     let source: NexToolInvocationSource
     let userAuthorizedWrite: Bool
     let reportsActivity: Bool
+    /// Exact computer-action IDs that the user approved while saving an
+    /// automation. An empty set never bypasses normal confirmation.
+    let automationApprovedActions: Set<String>
+
+    init(
+        source: NexToolInvocationSource,
+        userAuthorizedWrite: Bool,
+        reportsActivity: Bool,
+        automationApprovedActions: Set<String> = []
+    ) {
+        self.source = source
+        self.userAuthorizedWrite = userAuthorizedWrite
+        self.reportsActivity = reportsActivity
+        self.automationApprovedActions = automationApprovedActions
+    }
 
     static let app = NexToolInvocation(source: .app, userAuthorizedWrite: true, reportsActivity: true)
     static let modelReadOnly = NexToolInvocation(source: .model, userAuthorizedWrite: false, reportsActivity: true)
@@ -179,6 +197,15 @@ struct NexToolInvocation: Sendable {
         userAuthorizedWrite: true,
         reportsActivity: false
     )
+
+    static func automation(approvedActions: Set<String>, reportsActivity: Bool = false) -> Self {
+        .init(
+            source: .automation,
+            userAuthorizedWrite: true,
+            reportsActivity: reportsActivity,
+            automationApprovedActions: approvedActions
+        )
+    }
 }
 
 enum NexToolLifecyclePhase: String, Codable, Equatable, Sendable {
@@ -273,6 +300,7 @@ actor NexToolEventBus {
 
 struct NexToolExecutionContext: Sendable {
     let executionID: UUID
+    let invocation: NexToolInvocation
     let reportProgress: @Sendable (String, Double?) async -> Void
 }
 
@@ -419,7 +447,7 @@ actor NexToolRegistry {
         }
         let eventBus = events
         let reportsActivity = invocation.reportsActivity
-        let context = NexToolExecutionContext(executionID: executionID) { message, progress in
+        let context = NexToolExecutionContext(executionID: executionID, invocation: invocation) { message, progress in
             guard reportsActivity else { return }
             await eventBus.emit(.init(
                 executionID: executionID,
