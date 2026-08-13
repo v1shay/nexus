@@ -637,7 +637,8 @@ private struct CodexUsagePopover: View {
 private struct CodexLogoMask: View {
     var body: some View {
         Group {
-            if let image = NSImage(contentsOf: CodexProgressAssets.avatarURL) {
+            if let avatarURL = CodexProgressAssets.avatarURL,
+               let image = NSImage(contentsOf: avatarURL) {
                 Image(nsImage: image).resizable().interpolation(.high).scaledToFit()
             } else {
                 Image(systemName: "chevron.left.forwardslash.chevron.right").resizable().scaledToFit()

@@ -34,21 +34,28 @@ actor NexManagedBrowserProvider {
     /// Starts a managed browser task without waiting for its final browser
     /// result. The returned UUID is usable immediately by `status` and
     /// `cancel`, while the collector continues to persist the final evidence.
-    func start(goal: String, stepsJSON: String, progress: @escaping @Sendable (String) async -> Void) async throws -> NexBrowserTaskResult {
-        let task = try await launch(goal: goal, stepsJSON: stepsJSON)
+    func start(goal: String, stepsJSON: String, visible: Bool = false, progress: @escaping @Sendable (String) async -> Void) async throws -> NexBrowserTaskResult {
+        let task = try await launch(goal: goal, stepsJSON: stepsJSON, visible: visible)
         Task { _ = await self.collect(task, progress: progress) }
         return .init(taskID: task.taskID, status: "running", text: "", tabs: [], downloads: [], screenshots: [], error: "")
     }
 
-    func run(goal: String, stepsJSON: String, progress: @escaping @Sendable (String) async -> Void) async throws -> NexBrowserTaskResult {
-        let task = try await launch(goal: goal, stepsJSON: stepsJSON)
+    func run(goal: String, stepsJSON: String, visible: Bool = false, progress: @escaping @Sendable (String) async -> Void) async throws -> NexBrowserTaskResult {
+        let task = try await launch(goal: goal, stepsJSON: stepsJSON, visible: visible)
         return await collect(task, progress: progress)
     }
 
-    private func launch(goal: String, stepsJSON: String) async throws -> TaskRun {
+    private func launch(goal: String, stepsJSON: String, visible: Bool) async throws -> TaskRun {
         guard let stepsData = stepsJSON.data(using: .utf8), (try? JSONSerialization.jsonObject(with: stepsData)) is [Any] else { throw NexToolError.executionFailed(code: "invalid_browser_steps", message: "Browser steps must be a JSON array.") }
+        let profileIsOpen = FileManager.default.fileExists(atPath: root.appendingPathComponent("Profile/SingletonLock").path)
+        guard !profileIsOpen else {
+            throw NexToolError.executionFailed(
+                code: "nexus_browser_profile_in_use",
+                message: "Nexus browser is still open. Quit only the separate Nexus browser window, then run again. Your signed-in session is saved and will be reused automatically."
+            )
+        }
         let taskID = UUID().uuidString.lowercased(), runtime = try await ensureRuntime(), taskRoot = root.appendingPathComponent("tasks/\(taskID)", isDirectory: true); try FileManager.default.createDirectory(at: taskRoot, withIntermediateDirectories: true)
-        let request: [String: Any] = ["taskID": taskID, "goal": goal, "steps": try JSONSerialization.jsonObject(with: stepsData), "profile": root.appendingPathComponent("Profile").path, "taskRoot": taskRoot.path, "chrome": "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"]
+        let request: [String: Any] = ["taskID": taskID, "goal": goal, "steps": try JSONSerialization.jsonObject(with: stepsData), "profile": root.appendingPathComponent("Profile").path, "taskRoot": taskRoot.path, "chrome": "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome", "visible": visible]
         let input = try JSONSerialization.data(withJSONObject: request)
         let process = Process(), stdin = Pipe(), stdout = Pipe(); process.executableURL = URL(fileURLWithPath: "/opt/homebrew/bin/node"); process.arguments = [runtime.appendingPathComponent("agent.mjs").path]; process.standardInput = stdin; process.standardOutput = stdout; process.standardError = stdout; processes[taskID] = process; try process.run(); try stdin.fileHandleForWriting.write(contentsOf: input); try stdin.fileHandleForWriting.close()
         let running = NexBrowserTaskResult(taskID: taskID, status: "running", text: "", tabs: [], downloads: [], screenshots: [], error: "")
@@ -92,7 +99,19 @@ actor NexManagedBrowserProvider {
         try FileManager.default.createDirectory(at: profile, withIntermediateDirectories: true)
         let process = Process()
         process.executableURL = chrome
-        process.arguments = ["--user-data-dir=\(profile.path)", "--new-window", "about:blank"]
+        // Pin the launch to the exact profile the runner owns.  Starting on
+        // Gmail (rather than a blank tab) makes it unambiguous which Chrome
+        // window must be signed into, and avoids a successful sign-in being
+        // performed in the user's normal Chrome profile by mistake.
+        process.arguments = [
+            "--user-data-dir=\(profile.path)",
+            "--profile-directory=Default",
+            "--no-first-run",
+            "--no-default-browser-check",
+            "--disable-background-mode",
+            "--new-window",
+            "https://mail.google.com/mail/u/0/#inbox"
+        ]
         try process.run()
     }
     func reset() throws { cancelledTaskIDs.formUnion(processes.keys); for process in processes.values { process.terminate() }; processes.removeAll(); try? FileManager.default.removeItem(at: root.appendingPathComponent("Profile")); try FileManager.default.createDirectory(at: root.appendingPathComponent("Profile"), withIntermediateDirectories: true) }
@@ -151,7 +170,21 @@ const emit = value => process.stdout.write(JSON.stringify(value) + '\n');
 let context; const downloads = [], screenshots = [], extracted = [];
 try {
   emit({event:'started',message:'Starting secure browser…'});
-  context = await chromium.launchPersistentContext(request.profile,{headless:true,executablePath:request.chrome,acceptDownloads:true});
+  // The sign-in window and an automation run deliberately share this one
+  // Nexus-owned user-data directory.  Playwright normally adds
+  // `--password-store=basic` and `--use-mock-keychain` to Chrome.  Those
+  // flags prevent the automation process from reading the real macOS
+  // Keychain-encrypted cookies which Chrome saved during interactive sign-in,
+  // making Gmail appear logged out after the window is quit.  Let Chrome use
+  // its normal Keychain integration for this persistent, local-only profile.
+  context = await chromium.launchPersistentContext(request.profile,{
+    headless:request.visible !== true,
+    executablePath:request.chrome,
+    acceptDownloads:true,
+    args:['--disable-background-mode'],
+    ignoreDefaultArgs:['--password-store=basic','--use-mock-keychain']
+  });
+  emit({event:'progress',message:'Using saved Nexus browser session…'});
   let page = context.pages()[0] || await context.newPage();
   page.on('download', async download => { const target=`${request.taskRoot}/${download.suggestedFilename()}`; await download.saveAs(target); downloads.push(target); emit({event:'download',message:`Downloaded ${download.suggestedFilename()}`}); });
   for (const [index,step] of request.steps.entries()) {
@@ -162,10 +195,30 @@ try {
       case 'activate_tab': { const pages=context.pages(); if(!pages[step.index]) throw new Error('Tab index unavailable'); page=pages[step.index]; await page.bringToFront(); break; }
       case 'close_tab': await page.close(); page=context.pages()[0] || await context.newPage(); break;
       case 'click': await page.locator(step.selector).click(); break;
-      case 'wait_for_element': await page.locator(step.selector).waitFor({state:step.state || 'visible',timeout:step.timeout || 30000}); break;
+      // A wait only establishes that the page has rendered at least one
+      // matching element. `locator.waitFor` is strict, so waiting on Gmail's
+      // many rows or Calendar's many event chips throws before extraction.
+      // Extract still deliberately reads every match below.
+      case 'wait_for_element': await page.locator(step.selector).first().waitFor({state:step.state || 'visible',timeout:step.timeout || 30000}); break;
       case 'type': await page.locator(step.selector).fill(step.text || ''); break;
       case 'form': for(const field of step.fields || []) await page.locator(field.selector).fill(field.value); if(step.submitSelector) await page.locator(step.submitSelector).click(); break;
-      case 'extract': extracted.push(await page.locator(step.selector || 'body').innerText({timeout:15000})); break;
+      case 'extract': {
+        const locator=page.locator(step.selector || 'body');
+        // `innerText` on a multi-match locator only returns one element. That
+        // made Gmail and Calendar look successful while handing the briefing
+        // only an arbitrary first row or page chrome. Preserve every matched
+        // row/event as individually delimited evidence.
+        const count=await locator.count();
+        if(count===0) throw new Error(`No readable elements matched ${step.selector || 'body'}`);
+        const values=[];
+        for(let item=0;item<count;item++) {
+          const text=(await locator.nth(item).innerText({timeout:15000})).trim();
+          if(text) values.push(text);
+        }
+        if(values.length===0) throw new Error(`Matched ${count} elements but none had readable text for ${step.selector || 'body'}`);
+        extracted.push(values.join('\n--- Nexus source item ---\n'));
+        break;
+      }
       case 'upload': await page.locator(step.selector).setInputFiles(step.paths || []); break;
       case 'download': await Promise.all([page.waitForEvent('download'),page.locator(step.selector).click()]); break;
       case 'screenshot': {
@@ -202,7 +255,7 @@ actor NexBrowserActionCatalog {
             let result = try await managed.run(goal: "Visit \(url.host ?? url.absoluteString) and extract its readable page text.", stepsJSON: steps) { await context.reportProgress($0, nil) }
             return Self.result(result)
         }
-        try await registry.register(manifest: Self.manifest("browser.run_task", "Start a bounded Playwright task in Nexus's separate persistent browser profile and return its stable task ID while it runs. Use it for an agentic, multi-step website workflow: navigate pages, wait for elements, click controls, fill forms, extract evidence, download or upload files, or take a full-page screenshot. Supply structured steps, not a JSON string.", ["Take a full-page screenshot of this website", "Research this site and extract the results", "Fill this form but do not submit without confirmation", "Wait for a page element before continuing"], ["goal": .init(.string, required: true), "steps": .init(.array, description: "Structured array of browser step objects. Supported actions: navigate, new_tab, activate_tab, close_tab, click, type, form, extract, upload, download, wait_for_element, screenshot."), "steps_json": .init(.string, description: "Legacy JSON-encoded browser step array. Use steps instead for new calls.", deprecated: true)], risk: .high, confirmation: .always, method: .browserAgent, aliases: ["wait for an element on a page", "watch a webpage condition"], tags: ["wait", "element", "selector", "page condition"])) { args, context in let result = try await managed.start(goal: try Self.required(args, "goal"), stepsJSON: try Self.stepsJSON(args)) { await context.reportProgress($0, nil) }; return Self.result(result) }
+        try await registry.register(manifest: Self.manifest("browser.run_task", "Start a bounded Playwright task in Nexus's separate persistent browser profile and return its stable task ID while it runs. Use it for an agentic, multi-step website workflow: navigate pages, wait for elements, click controls, fill forms, extract evidence, download or upload files, or take a full-page screenshot. Supply structured steps, not a JSON string. Set visible only for a site that cannot be read in background browser mode; it opens the Nexus browser window.", ["Take a full-page screenshot of this website", "Research this site and extract the results", "Fill this form but do not submit without confirmation", "Wait for a page element before continuing"], ["goal": .init(.string, required: true), "steps": .init(.array, description: "Structured array of browser step objects. Supported actions: navigate, new_tab, activate_tab, close_tab, click, type, form, extract, upload, download, wait_for_element, screenshot."), "visible": .init(.boolean, description: "Open the Nexus browser window for compatibility with a site that rejects background browser mode."), "steps_json": .init(.string, description: "Legacy JSON-encoded browser step array. Use steps instead for new calls.", deprecated: true)], risk: .high, confirmation: .always, method: .browserAgent, aliases: ["wait for an element on a page", "watch a webpage condition"], tags: ["wait", "element", "selector", "page condition"])) { args, context in let result = try await managed.start(goal: try Self.required(args, "goal"), stepsJSON: try Self.stepsJSON(args), visible: args["visible"]?.bool ?? false) { await context.reportProgress($0, nil) }; return Self.result(result) }
         try await registry.register(manifest: Self.manifest("browser.get_task", "Read a managed browser task by stable ID.", ["Check that browser task"], ["task_id": .init(.string, required: true)], method: .browserAgent)) { args, _ in guard let result = await managed.status(try Self.required(args, "task_id")) else { throw NexToolError.executionFailed(code: "browser_task_missing", message: "Browser task was not found.") }; return Self.result(result) }
         try await registry.register(manifest: Self.manifest("browser.cancel_task", "Cancel a running managed browser task.", ["Cancel the browser task"], ["task_id": .init(.string, required: true)], risk: .high, confirmation: .always, method: .browserAgent)) { args, _ in let id = try Self.required(args, "task_id"); try await managed.cancel(id); return Self.result(.init(taskID: id, status: "cancelled", text: "", tabs: [], downloads: [], screenshots: [], error: "")) }
         try await registry.register(manifest: Self.manifest("browser.import_chrome_profile", "One-time copy of bookmarks, history, and preferences from the default Chrome profile into Nexus's separate profile while Chrome is closed. Passwords, cookies, and Keychain secrets are never extracted. The source root is optional and defaults to ~/Library/Application Support/Google/Chrome.", ["Import my safe Chrome browser data into Nexus"], ["chrome_profile_root": .init(.string, required: false)], risk: .high, confirmation: .always, method: .nativeAPI)) { args, _ in
@@ -212,7 +265,7 @@ actor NexBrowserActionCatalog {
         }
         try await registry.register(manifest: Self.manifest("browser.open_profile", "Open Nexus's separate persistent Chrome profile so Sir can sign in once to private sites. Its session stays local to Nexus and is reused by future managed-browser tasks.", ["Open the Nexus browser so I can sign in to Notion", "Let me sign in to a website in Nexus browser"], [:], risk: .medium, confirmation: .never, method: .nativeAPI)) { _, _ in
             try await managed.openProfileForSignIn()
-            return Self.result(.init(taskID: "", status: "completed", text: "Opened the separate Nexus browser profile. Sign in there once, then close that Nexus Chrome window before asking Nex to automate the site.", tabs: [], downloads: [], screenshots: [], error: ""))
+            return Self.result(.init(taskID: "", status: "completed", text: "Opened the separate Nexus browser profile directly at Gmail. Sign in there once, open Google Calendar and Fidelity in that same window if needed, then use Command-Q to quit the separate Nexus Chrome app. The saved session is reused automatically; simply closing a window does not quit Chrome on macOS.", tabs: [], downloads: [], screenshots: [], error: ""))
         }
         try await registry.register(manifest: Self.manifest("browser.reset_profile", "Reset only the Nexus-owned browser profile and cancel managed browser tasks.", ["Reset Nexus browser"], [:], risk: .high, confirmation: .always, method: .nativeAPI)) { _, _ in try await managed.reset(); return Self.result(.init(taskID: "", status: "completed", text: "Nexus browser profile reset.", tabs: [], downloads: [], screenshots: [], error: "")) }
         registered = true

@@ -796,6 +796,170 @@ actor NexWebSearchController {
     }
 }
 
+/// A narrow, read-only weather capability for automations.  Weather is not
+/// inferred from search snippets: the provider returns the current observation
+/// and today's forecast values in one structured response.
+actor NexWeatherController {
+    private let registry: NexToolRegistry
+    private var isRegistered = false
+
+    init(registry: NexToolRegistry) {
+        self.registry = registry
+    }
+
+    func registerIfNeeded() async throws {
+        guard !isRegistered else { return }
+        do {
+            try await registry.register(.init(
+                name: "weather.current",
+                description: "Retrieve a live current weather observation and today's forecast high and low for a named location.",
+                statusLabel: "Checking live weather…",
+                completionLabel: "Checked live weather",
+                spokenStatus: "Checking the weather.",
+                iconSystemName: "cloud.sun",
+                permission: .network,
+                schema: .init(fields: [
+                    "location": .init(.string, required: true, description: "City and region, for example San Jose, California.")
+                ]),
+                application: "Weather",
+                provider: "Open-Meteo",
+                examples: ["Current weather in San Jose, California", "Today's high and low in Palo Alto"],
+                aliases: ["weather now", "current weather", "weather forecast"],
+                tags: ["weather", "current", "forecast", "temperature"],
+                supportedWorkflows: ["morning briefing", "current conditions"],
+                handler: { arguments, context in
+                    guard let location = arguments["location"]?.string,
+                          !location.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                        throw NexToolError.missingField("location")
+                    }
+                    await context.reportProgress("Locating \(location)…", 0.15)
+                    let observation = try await Self.fetch(location: location)
+                    await context.reportProgress("Retrieved live observation and today's high and low.", 0.95)
+                    return observation
+                }
+            ))
+        } catch NexToolError.duplicateRegistration("weather.current") {
+            // The foreground panel and automation host use the same registry.
+        }
+        isRegistered = true
+    }
+
+    private static func fetch(location: String) async throws -> NexJSONValue {
+        let session = NexWebHTTPClient.session(timeout: 12)
+        var geocode = URLComponents(string: "https://geocoding-api.open-meteo.com/v1/search")!
+        geocode.queryItems = [
+            .init(name: "name", value: location),
+            .init(name: "count", value: "1"),
+            .init(name: "language", value: "en"),
+            .init(name: "format", value: "json")
+        ]
+        let geocodePayload: (Data, URLResponse)
+        do {
+            geocodePayload = try await session.data(from: geocode.url!)
+        } catch {
+            throw NexToolError.executionFailed(code: "weather_geocode_failed", message: "The live weather location lookup could not be reached: \(error.localizedDescription)")
+        }
+        let (geocodeData, geocodeResponse) = geocodePayload
+        guard let geocodeHTTP = geocodeResponse as? HTTPURLResponse,
+              (200...299).contains(geocodeHTTP.statusCode) else {
+            throw NexToolError.executionFailed(code: "weather_geocode_failed", message: "The live weather location lookup failed.")
+        }
+        let place = try JSONDecoder().decode(GeocodeResponse.self, from: geocodeData).results?.first
+        guard let place else {
+            throw NexToolError.executionFailed(code: "weather_location_not_found", message: "Nexus could not find a weather location matching \(location).")
+        }
+
+        var forecast = URLComponents(string: "https://api.open-meteo.com/v1/forecast")!
+        forecast.queryItems = [
+            .init(name: "latitude", value: String(place.latitude)),
+            .init(name: "longitude", value: String(place.longitude)),
+            .init(name: "current", value: "temperature_2m,weather_code"),
+            .init(name: "daily", value: "temperature_2m_max,temperature_2m_min"),
+            .init(name: "temperature_unit", value: "fahrenheit"),
+            .init(name: "timezone", value: "auto")
+        ]
+        let forecastPayload: (Data, URLResponse)
+        do {
+            forecastPayload = try await session.data(from: forecast.url!)
+        } catch {
+            throw NexToolError.executionFailed(code: "weather_forecast_failed", message: "The live weather provider could not be reached: \(error.localizedDescription)")
+        }
+        let (forecastData, forecastResponse) = forecastPayload
+        guard let forecastHTTP = forecastResponse as? HTTPURLResponse,
+              (200...299).contains(forecastHTTP.statusCode) else {
+            throw NexToolError.executionFailed(code: "weather_forecast_failed", message: "The live weather provider did not return a current observation.")
+        }
+        let weather = try JSONDecoder().decode(ForecastResponse.self, from: forecastData)
+        guard let current = weather.current,
+              let high = weather.daily?.temperatureMax?.first,
+              let low = weather.daily?.temperatureMin?.first else {
+            throw NexToolError.executionFailed(code: "weather_incomplete", message: "The live weather provider returned incomplete current or daily forecast data.")
+        }
+        return .object([
+            "source": .string("Open-Meteo live forecast API"),
+            "location": .string([place.name, place.admin1, place.country].compactMap { $0 }.joined(separator: ", ")),
+            "observed_at": .string(current.time),
+            "timezone": .string(weather.timezone ?? "local"),
+            "temperature_f": .number(current.temperature),
+            "condition": .string(condition(for: current.weatherCode)),
+            "today_high_f": .number(high),
+            "today_low_f": .number(low)
+        ])
+    }
+
+    private static func condition(for code: Int) -> String {
+        switch code {
+        case 0: return "clear sky"
+        case 1...3: return "partly cloudy"
+        case 45, 48: return "foggy"
+        case 51...57: return "drizzle"
+        case 61...67: return "rain"
+        case 71...77: return "snow"
+        case 80...82: return "rain showers"
+        case 85, 86: return "snow showers"
+        case 95...99: return "thunderstorms"
+        default: return "weather code \(code)"
+        }
+    }
+
+    private struct GeocodeResponse: Decodable {
+        struct Place: Decodable {
+            let name: String
+            let latitude: Double
+            let longitude: Double
+            let admin1: String?
+            let country: String?
+        }
+        let results: [Place]?
+    }
+
+    private struct ForecastResponse: Decodable {
+        struct Current: Decodable {
+            let time: String
+            let temperature: Double
+            let weatherCode: Int
+
+            enum CodingKeys: String, CodingKey {
+                case time
+                case temperature = "temperature_2m"
+                case weatherCode = "weather_code"
+            }
+        }
+        struct Daily: Decodable {
+            let temperatureMax: [Double]?
+            let temperatureMin: [Double]?
+
+            enum CodingKeys: String, CodingKey {
+                case temperatureMax = "temperature_2m_max"
+                case temperatureMin = "temperature_2m_min"
+            }
+        }
+        let timezone: String?
+        let current: Current?
+        let daily: Daily?
+    }
+}
+
 struct NexSearXNGProvider: NexWebSearchProviding {
     let name = "SearXNG"
     let baseURL: URL

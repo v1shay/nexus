@@ -872,6 +872,7 @@ final class NotchController: ObservableObject {
     private lazy var connectorAuth = NexConnectorAuthController.shared
     private lazy var connectorManager = NexConnectorManager()
     private lazy var webSearch = NexWebSearchController(registry: memory.registry)
+    private lazy var weatherTools = NexWeatherController(registry: memory.registry)
     private lazy var youtubeTools = NexYouTubeToolController(registry: memory.registry) { [weak self] tab, fullscreen in
         self?.requestYouTubePlayback(tab, fullscreen: fullscreen) ?? false
     }
@@ -883,7 +884,8 @@ final class NotchController: ObservableObject {
     private lazy var toolSearch = NexToolSearchService(registry: memory.registry, computerRegistry: computerRegistry)
     private lazy var automationController = NexusAutomationController(
         registry: memory.registry,
-        models: modelDownloadViewModel
+        models: modelDownloadViewModel,
+        settings: settings
     )
     private lazy var automationTool = NexusAutomationToolController(controller: automationController)
     private var memoryObservation: AnyCancellable?
@@ -1004,6 +1006,7 @@ final class NotchController: ObservableObject {
                 )
                 await memory.prepareToolRegistry()
                 try? await webSearch.registerIfNeeded()
+                try? await weatherTools.registerIfNeeded()
                 try? await youtubeTools.registerIfNeeded()
                 try? await terminalActions.register(on: computerRegistry)
                 try? await finderActions.register(on: computerRegistry)
@@ -1919,6 +1922,7 @@ final class NotchController: ObservableObject {
                 defer { presentationTask.cancel() }
                 await memory.prepareToolRegistry()
                 try? await webSearch.registerIfNeeded()
+                try? await weatherTools.registerIfNeeded()
                 try? await youtubeTools.registerIfNeeded()
                 try? await terminalActions.register(on: computerRegistry)
                 try? await finderActions.register(on: computerRegistry)
@@ -2572,6 +2576,7 @@ final class NotchController: ObservableObject {
         await modelDownloadViewModel.prepareLowLatencyModels(statusModelID: settings.secondaryStatusModelID)
         await memory.prepareToolRegistry()
         try? await webSearch.registerIfNeeded()
+        try? await weatherTools.registerIfNeeded()
         try? await youtubeTools.registerIfNeeded()
         try? await terminalActions.register(on: computerRegistry)
         try? await finderActions.register(on: computerRegistry)

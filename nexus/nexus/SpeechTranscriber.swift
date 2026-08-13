@@ -361,15 +361,22 @@ private struct LocalizedErrorMessage: LocalizedError {
 }
 
 /// A small local wake-phrase listener used until Nex has a trained
-/// openWakeWord model. It intentionally listens only for multi-word phrases:
-/// bare “Nex”/“next” would produce far too many false activations in normal
-/// conversation. The listener gives up the microphone before the existing
-/// dictation transcriber starts, so the two AVAudioEngines never compete.
+/// openWakeWord model. Speech recognition commonly transcribes “Nexus” as
+/// “next” or “Nex”, so the matcher accepts the useful natural variants. The
+/// listener gives up the microphone before the existing dictation transcriber
+/// starts, so the two AVAudioEngines never compete.
 @MainActor
 final class WakePhraseListener: NSObject {
     enum Phrase: String, CaseIterable {
         case heyNext = "hey next"
         case wakeUpNext = "wake up next"
+        case next = "next"
+        case heyNex = "hey nex"
+        case wakeUpNex = "wake up nex"
+        case nex = "nex"
+        case heyNexus = "hey nexus"
+        case wakeUpNexus = "wake up nexus"
+        case nexus = "nexus"
     }
 
     private let audioEngine = AVAudioEngine()
@@ -475,6 +482,16 @@ final class WakePhraseListener: NSObject {
             .map { CharacterSet.alphanumerics.contains($0) ? Character($0) : " " }
         let normalized = String(words).split(whereSeparator: \.isWhitespace)
         let text = normalized.joined(separator: " ")
-        return Phrase.allCases.first { text.contains($0.rawValue) }
+        // Prefer longer activation phrases before the bare names, so “Hey
+        // Nexus” is reported as that phrase rather than just “Nexus”.
+        return Phrase.allCases
+            .sorted { $0.rawValue.count > $1.rawValue.count }
+            .first { phrase in
+                let words = phrase.rawValue.split(separator: " ")
+                guard words.count > 1 else {
+                    return normalized.contains { $0 == words[0] }
+                }
+                return text.contains(phrase.rawValue)
+            }
     }
 }

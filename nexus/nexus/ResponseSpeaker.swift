@@ -56,8 +56,12 @@ final class ResponseSpeaker {
     }
 
     /// Bypasses phrase buffering for acknowledgements and tool-status speech.
-    func speakImmediately(_ text: String) {
+    func speakImmediately(_ text: String, voiceModelPath: String? = nil) {
         guard !isMuted else { return }
+        if let voiceModelPath, !voiceModelPath.isEmpty {
+            speakWithConfiguredVoice(text, modelPath: voiceModelPath)
+            return
+        }
         enqueue(text)
     }
 
@@ -202,6 +206,31 @@ final class ResponseSpeaker {
                 speakWithSystemVoice(cleaned)
             }
         } else {
+            speakWithSystemVoice(cleaned)
+        }
+    }
+
+    /// An automation may pin an installed Piper voice while interactive Nexus
+    /// continues using the global response-voice preference. This temporary
+    /// speaker is isolated so it cannot disrupt an active streamed reply.
+    private func speakWithConfiguredVoice(_ text: String, modelPath: String) {
+        let cleaned = SpeechSanitizer.forSpeech(text, suppressCitations: suppressCitationSpeech)
+        guard !cleaned.isEmpty else { return }
+        guard let configuration = PiperVoiceConfiguration.detect(
+            preferredModelPath: modelPath,
+            additionalVoiceDirectories: settings?.piperVoiceDirectories ?? []
+        ) else {
+            speakWithSystemVoice(cleaned)
+            return
+        }
+        do {
+            piperConfiguration = configuration
+            try startPiperStream(configuration)
+            try piperInput?.write(contentsOf: Data((cleaned + "\n").utf8))
+            try piperInput?.close()
+            piperInput = nil
+        } catch {
+            piperConfiguration = nil
             speakWithSystemVoice(cleaned)
         }
     }

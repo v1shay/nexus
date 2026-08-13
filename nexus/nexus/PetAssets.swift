@@ -89,9 +89,13 @@ enum NexusPetCatalog {
         NexusPet(
             id: "linux",
             displayName: "Linux",
-            description: "The animated Linux companion from your Downloads folder.",
+            description: "An animated Linux companion bundled with Nexus.",
             artwork: .animatedGIF(
-                URL(fileURLWithPath: "/Users/vishayagarwal/Downloads/icons8-linux.gif")
+                Bundle.main.url(
+                    forResource: "icons8-linux",
+                    withExtension: "gif",
+                    subdirectory: "Pets/linux"
+                ) ?? URL(fileURLWithPath: "/dev/null")
             )
         )
     ]

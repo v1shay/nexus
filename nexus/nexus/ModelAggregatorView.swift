@@ -608,14 +608,27 @@ private struct NexusAutomationsPage: View {
                             .font(.caption).foregroundStyle(.secondary)
                     }
                     Spacer()
+                    Button("Open Nexus browser") {
+                        Task { await controller.openNexusBrowserForSignIn() }
+                    }
+                    .controlSize(.small)
                     Button("Set up OS wake") { controller.installPowerHelper() }
                         .controlSize(.small)
+                }
+                if !controller.browserSetupStatus.isEmpty {
+                    Label(controller.browserSetupStatus, systemImage: "lock.shield")
+                        .font(.caption)
+                        .foregroundStyle(controller.browserSetupStatus.hasPrefix("Could not") ? .red : .secondary)
                 }
 
                 HStack(spacing: 10) {
                     Text("Model").font(.caption.weight(.medium)).foregroundStyle(.secondary)
                     Picker("Automation model", selection: $selectedModelID) {
                         Text(activeModelLabel).tag("")
+                        if viewModel.apiProvider.enabled {
+                            Text("Configured API · \(viewModel.apiProvider.model)")
+                                .tag(NexusAutomation.activeAPIModelID)
+                        }
                         ForEach(viewModel.installedModels) { model in
                             Text("\(model.name) · \(model.backend.title)").tag(model.id)
                         }
@@ -623,7 +636,7 @@ private struct NexusAutomationsPage: View {
                     .labelsHidden()
                     .frame(maxWidth: 340)
                     Spacer()
-                    Text("\(TimeZone.current.identifier) · (controller.powerStatus)")
+                    Text("\(TimeZone.current.identifier) · \(controller.powerStatus)")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
@@ -672,6 +685,42 @@ private struct NexusAutomationsPage: View {
                 Text("Schedule preview: \(selectedSchedule.summary)").font(.caption).foregroundStyle(.secondary)
                 if !error.isEmpty { Text(error).font(.caption).foregroundStyle(.red) }
                 if !controller.buildError.isEmpty { Text(controller.buildError).font(.caption).foregroundStyle(.red) }
+
+                if !controller.runEvents.isEmpty {
+                    VStack(alignment: .leading, spacing: 9) {
+                        HStack {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(controller.isRunning ? "Live automation run" : "Latest automation run")
+                                    .font(.headline)
+                                Text(controller.activeAutomationTitle.isEmpty ? "Progress is redacted; source data stays private." : controller.activeAutomationTitle)
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                            Spacer()
+                            if controller.isRunning {
+                                ProgressView().controlSize(.small)
+                                Text("Running").font(.caption.weight(.medium)).foregroundStyle(theme.mainLight)
+                            }
+                        }
+                        ForEach(Array(controller.runEvents.suffix(12))) { event in
+                            HStack(alignment: .top, spacing: 10) {
+                                Image(systemName: event.phase.icon)
+                                    .foregroundStyle(runEventColor(event.phase))
+                                    .frame(width: 18, height: 18)
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(event.title).font(.subheadline.weight(.medium))
+                                    Text(event.detail).font(.caption).foregroundStyle(.secondary)
+                                }
+                                Spacer(minLength: 8)
+                                Text(Self.runEventTimeFormatter.string(from: event.occurredAt))
+                                    .font(.caption2.monospacedDigit())
+                                    .foregroundStyle(.tertiary)
+                            }
+                        }
+                    }
+                    .padding(14)
+                    .background(.white.opacity(0.055), in: RoundedRectangle(cornerRadius: 14))
+                }
 
                 if !controller.buildEvents.isEmpty {
                     VStack(alignment: .leading, spacing: 9) {
@@ -756,7 +805,10 @@ private struct NexusAutomationsPage: View {
                                 Spacer()
                                 Text(automation.enabled ? "Enabled" : "Paused")
                                     .foregroundStyle(automation.enabled ? .green : .secondary)
-                                Button("Test now") { Task { await controller.testNow(automation) } }
+                                Button(controller.activeAutomationID == automation.id ? "Running…" : "Test now") {
+                                    Task { await controller.testNow(automation) }
+                                }
+                                .disabled(controller.isRunning)
                                 Button(automation.enabled ? "Pause" : "Resume") {
                                     Task { try? await controller.setEnabled(automation, enabled: !automation.enabled) }
                                 }
@@ -767,8 +819,23 @@ private struct NexusAutomationsPage: View {
                                 Text("Run model").font(.caption).foregroundStyle(.secondary)
                                 Picker("Run model", selection: savedModelBinding(for: automation)) {
                                     Text("Use current active model").tag("")
+                                    if viewModel.apiProvider.enabled {
+                                        Text("Configured API · \(viewModel.apiProvider.model)")
+                                            .tag(NexusAutomation.activeAPIModelID)
+                                    }
                                     ForEach(viewModel.installedModels) { model in
                                         Text("\(model.name) · \(model.backend.title)").tag(model.id)
+                                    }
+                                }
+                                .labelsHidden()
+                                .frame(maxWidth: 300)
+                            }
+                            HStack(spacing: 8) {
+                                Text("Briefing voice").font(.caption).foregroundStyle(.secondary)
+                                Picker("Briefing voice", selection: savedVoiceBinding(for: automation)) {
+                                    Text("Nexus default voice").tag("")
+                                    ForEach(controller.availableVoices) { voice in
+                                        Text(voice.displayName).tag(voice.model.path)
                                     }
                                 }
                                 .labelsHidden()
@@ -874,7 +941,27 @@ private struct NexusAutomationsPage: View {
         )
     }
 
+    private func savedVoiceBinding(for automation: NexusAutomation) -> Binding<String> {
+        Binding(
+            get: { automation.voiceModelPath ?? "" },
+            set: { voicePath in
+                Task {
+                    do {
+                        try await controller.setVoice(automation, voiceModelPath: voicePath)
+                    } catch let failure {
+                        error = failure.localizedDescription
+                    }
+                }
+            }
+        )
+    }
+
     private func modelLabel(_ modelID: String) -> String {
+        if modelID == NexusAutomation.activeAPIModelID {
+            return viewModel.apiProvider.enabled
+                ? "API · \(viewModel.apiProvider.model)"
+                : "Configured API (not enabled)"
+        }
         if modelID.isEmpty { return activeModelLabel }
         return viewModel.installedModels.first(where: { $0.id == modelID })?.name ?? modelID
     }
@@ -889,6 +976,15 @@ private struct NexusAutomationsPage: View {
         }
     }
 
+    private func runEventColor(_ phase: NexusAutomationRunEventPhase) -> Color {
+        switch phase {
+        case .evidence, .delivery: .green
+        case .failed: .red
+        case .retry: .orange
+        case .started, .tool, .progress, .composing: theme.mainLight
+        }
+    }
+
     private static func weekdaySymbol(_ day: Int) -> String {
         let symbols = Calendar.current.veryShortWeekdaySymbols
         guard symbols.indices.contains(day - 1) else { return "?" }
@@ -897,6 +993,10 @@ private struct NexusAutomationsPage: View {
 
     private static let dateFormatter: DateFormatter = {
         let formatter = DateFormatter(); formatter.dateStyle = .medium; formatter.timeStyle = .short; return formatter
+    }()
+
+    private static let runEventTimeFormatter: DateFormatter = {
+        let formatter = DateFormatter(); formatter.timeStyle = .medium; formatter.dateStyle = .none; return formatter
     }()
 }
 
