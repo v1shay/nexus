@@ -444,7 +444,7 @@ final class NexusGeometryTests: XCTestCase {
 
     @MainActor
     func testUploadedProviderMarksArePackagedInTheAppAndNeverResolvedFromDownloads() throws {
-        for identity in [ModelProviderIdentity.openAI, .groq, .github, .gemini] {
+        for identity in [ModelProviderIdentity.openAI, .groq, .github, .gemini, .nvidia] {
             let url = try XCTUnwrap(ModelBrandArtwork.assetURL(for: identity))
             XCTAssertTrue(url.path.contains("/Pets/BrandAssets/"), identity.rawValue)
             XCTAssertFalse(url.path.contains("/Downloads/"), identity.rawValue)

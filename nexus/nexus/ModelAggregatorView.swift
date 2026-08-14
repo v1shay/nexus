@@ -1338,18 +1338,30 @@ private struct NexusAPIProviderView: View {
 private struct APIProviderPickerLabel: View {
     let provider: NexusAPIProviderKind
 
+    private var identity: ModelProviderIdentity {
+        ModelProviderResolver.identity(
+            for: provider,
+            modelID: provider.defaultModel,
+            baseURL: provider.defaultBaseURL
+        )
+    }
+
     var body: some View {
         HStack(spacing: 6) {
-            ModelProviderIcon(
-                identity: ModelProviderResolver.identity(
-                    for: provider,
-                    modelID: provider.defaultModel,
-                    baseURL: provider.defaultBaseURL
-                ),
-                size: 14
-            )
+            if let icon = ModelBrandArtwork.icon(for: identity, size: 14) {
+                // Keep the exact 14 pt raster image. Marking it resizable can
+                // make an AppKit-backed Picker use the SVG's raw canvas.
+                Image(nsImage: icon)
+                    .interpolation(.high)
+                    .fixedSize()
+                    .frame(width: 14, height: 14)
+            } else {
+                Image(systemName: ModelBrandArtwork.fallbackSystemName)
+                    .frame(width: 14, height: 14)
+            }
             Text(provider.title)
         }
+        .fixedSize(horizontal: true, vertical: false)
     }
 }
 

@@ -177,7 +177,7 @@ enum ModelBrandArtwork {
         // declare their canvas in `em`, which AppKit occasionally rasterizes
         // as a single pixel when they appear in a Picker or a compact row.
         case .gemini: "google-gemini.png"
-        case .nvidia: "pngwing.com.png"
+        case .nvidia: "nvidia-color.svg"
         case .groq: "groq.webp"
         case .github: "github.webp"
         // Use the supplied raster mark here. The SVG's CSS-em canvas caused
@@ -273,20 +273,22 @@ enum ModelBrandArtwork {
     }
 }
 
-/// Raw model-family artwork for model rows and the compact prompt handoff.
-/// It intentionally contains no fallback symbol or decorative container: a
-/// missing user asset simply remains empty instead of being replaced by a tile.
+/// Fixed-size provider artwork for model rows and the compact prompt handoff.
+/// The artwork is rasterized at the requested point size before SwiftUI or an
+/// AppKit picker sees it, avoiding an SVG's intrinsic canvas expanding a row.
 struct ModelBrandIcon: View {
     let model: LocalModel?
     var size: CGFloat = 22
 
     var body: some View {
         Group {
-            if let image = ModelBrandArtwork.image(for: model) {
+            if let image = ModelBrandArtwork.icon(
+                for: ModelProviderResolver.identity(for: model),
+                size: size
+            ) {
                 Image(nsImage: image)
-                    .resizable()
                     .interpolation(.high)
-                    .scaledToFit()
+                    .fixedSize()
             } else {
                 Image(systemName: ModelBrandArtwork.fallbackSystemName)
                     .resizable()
@@ -294,8 +296,6 @@ struct ModelBrandIcon: View {
                     .foregroundStyle(.secondary)
             }
         }
-        .frame(width: size * ModelBrandArtwork.iconContentScale,
-               height: size * ModelBrandArtwork.iconContentScale)
         .frame(width: size, height: size)
         .accessibilityHidden(true)
     }
@@ -307,19 +307,10 @@ struct ModelProviderIcon: View {
 
     var body: some View {
         Group {
-            if (identity == .openAI || identity == .gemini || identity == .nvidia || identity == .groq || identity == .github || identity == .openRouter),
-               let image = ModelBrandArtwork.image(for: identity) {
-                // These marks are supplied as real PNGs. Draw them directly
-                // rather than routing them through AppKit's SVG path.
+            if let image = ModelBrandArtwork.icon(for: identity, size: size) {
                 Image(nsImage: image)
-                    .resizable()
                     .interpolation(.high)
-                    .scaledToFit()
-            } else if let image = ModelBrandArtwork.icon(for: identity, size: size) {
-                Image(nsImage: image)
-                    .resizable()
-                    .interpolation(.high)
-                    .scaledToFit()
+                    .fixedSize()
             } else {
                 Image(systemName: ModelBrandArtwork.fallbackSystemName)
                     .resizable()
@@ -327,8 +318,6 @@ struct ModelProviderIcon: View {
                     .foregroundStyle(.secondary)
             }
         }
-        .frame(width: size * ModelBrandArtwork.iconContentScale,
-               height: size * ModelBrandArtwork.iconContentScale)
         .frame(width: size, height: size)
         .accessibilityHidden(true)
     }
