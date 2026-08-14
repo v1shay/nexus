@@ -273,22 +273,20 @@ enum ModelBrandArtwork {
     }
 }
 
-/// Fixed-size provider artwork for model rows and the compact prompt handoff.
-/// The artwork is rasterized at the requested point size before SwiftUI or an
-/// AppKit picker sees it, avoiding an SVG's intrinsic canvas expanding a row.
+/// Raw model-family artwork for model rows and the compact prompt handoff.
+/// The API-provider picker uses its own fixed-size renderer; the rest of the
+/// app retains the normal, proportional provider presentation.
 struct ModelBrandIcon: View {
     let model: LocalModel?
     var size: CGFloat = 22
 
     var body: some View {
         Group {
-            if let image = ModelBrandArtwork.icon(
-                for: ModelProviderResolver.identity(for: model),
-                size: size
-            ) {
+            if let image = ModelBrandArtwork.image(for: model) {
                 Image(nsImage: image)
+                    .resizable()
                     .interpolation(.high)
-                    .fixedSize()
+                    .scaledToFit()
             } else {
                 Image(systemName: ModelBrandArtwork.fallbackSystemName)
                     .resizable()
@@ -296,6 +294,8 @@ struct ModelBrandIcon: View {
                     .foregroundStyle(.secondary)
             }
         }
+        .frame(width: size * ModelBrandArtwork.iconContentScale,
+               height: size * ModelBrandArtwork.iconContentScale)
         .frame(width: size, height: size)
         .accessibilityHidden(true)
     }
@@ -307,10 +307,17 @@ struct ModelProviderIcon: View {
 
     var body: some View {
         Group {
-            if let image = ModelBrandArtwork.icon(for: identity, size: size) {
+            if (identity == .openAI || identity == .gemini || identity == .nvidia || identity == .groq || identity == .github || identity == .openRouter),
+               let image = ModelBrandArtwork.image(for: identity) {
                 Image(nsImage: image)
+                    .resizable()
                     .interpolation(.high)
-                    .fixedSize()
+                    .scaledToFit()
+            } else if let image = ModelBrandArtwork.icon(for: identity, size: size) {
+                Image(nsImage: image)
+                    .resizable()
+                    .interpolation(.high)
+                    .scaledToFit()
             } else {
                 Image(systemName: ModelBrandArtwork.fallbackSystemName)
                     .resizable()
@@ -318,6 +325,8 @@ struct ModelProviderIcon: View {
                     .foregroundStyle(.secondary)
             }
         }
+        .frame(width: size * ModelBrandArtwork.iconContentScale,
+               height: size * ModelBrandArtwork.iconContentScale)
         .frame(width: size, height: size)
         .accessibilityHidden(true)
     }
