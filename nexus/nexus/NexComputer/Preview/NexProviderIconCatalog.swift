@@ -21,6 +21,7 @@ enum NexProviderIconCatalog {
     static func icon(for action: String) -> ToolIconSource {
         if action == "nex_cli_task" { return .systemSymbol("terminal") }
         if action.hasPrefix("memory_") || action == "conversation_recall" { return .asset(name: "Obsidian", fallbackSystemName: "diamond.fill") }
+        if action == "browser.play_youtube" { return .asset(name: "YouTube", fallbackSystemName: "play.rectangle.fill") }
         if action == "web_search" || action.hasPrefix("chrome.") || action.hasPrefix("browser.") { return .asset(name: "Chrome", fallbackSystemName: "globe") }
         if action.hasPrefix("youtube_") { return .asset(name: "YouTube", fallbackSystemName: "play.rectangle.fill") }
         if action.hasPrefix("github.") || action.hasPrefix("git.") {

@@ -34,18 +34,18 @@ actor NexManagedBrowserProvider {
     /// Starts a managed browser task without waiting for its final browser
     /// result. The returned UUID is usable immediately by `status` and
     /// `cancel`, while the collector continues to persist the final evidence.
-    func start(goal: String, stepsJSON: String, visible: Bool = false, progress: @escaping @Sendable (String) async -> Void) async throws -> NexBrowserTaskResult {
-        let task = try await launch(goal: goal, stepsJSON: stepsJSON, visible: visible)
+    func start(goal: String, stepsJSON: String, visible: Bool = false, keepOpen: Bool = false, progress: @escaping @Sendable (String) async -> Void) async throws -> NexBrowserTaskResult {
+        let task = try await launch(goal: goal, stepsJSON: stepsJSON, visible: visible, keepOpen: keepOpen)
         Task { _ = await self.collect(task, progress: progress) }
         return .init(taskID: task.taskID, status: "running", text: "", tabs: [], downloads: [], screenshots: [], error: "")
     }
 
     func run(goal: String, stepsJSON: String, visible: Bool = false, progress: @escaping @Sendable (String) async -> Void) async throws -> NexBrowserTaskResult {
-        let task = try await launch(goal: goal, stepsJSON: stepsJSON, visible: visible)
+        let task = try await launch(goal: goal, stepsJSON: stepsJSON, visible: visible, keepOpen: false)
         return await collect(task, progress: progress)
     }
 
-    private func launch(goal: String, stepsJSON: String, visible: Bool) async throws -> TaskRun {
+    private func launch(goal: String, stepsJSON: String, visible: Bool, keepOpen: Bool) async throws -> TaskRun {
         guard let stepsData = stepsJSON.data(using: .utf8), (try? JSONSerialization.jsonObject(with: stepsData)) is [Any] else { throw NexToolError.executionFailed(code: "invalid_browser_steps", message: "Browser steps must be a JSON array.") }
         let profileIsOpen = FileManager.default.fileExists(atPath: root.appendingPathComponent("Profile/SingletonLock").path)
         guard !profileIsOpen else {
@@ -55,7 +55,7 @@ actor NexManagedBrowserProvider {
             )
         }
         let taskID = UUID().uuidString.lowercased(), runtime = try await ensureRuntime(), taskRoot = root.appendingPathComponent("tasks/\(taskID)", isDirectory: true); try FileManager.default.createDirectory(at: taskRoot, withIntermediateDirectories: true)
-        let request: [String: Any] = ["taskID": taskID, "goal": goal, "steps": try JSONSerialization.jsonObject(with: stepsData), "profile": root.appendingPathComponent("Profile").path, "taskRoot": taskRoot.path, "chrome": "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome", "visible": visible]
+        let request: [String: Any] = ["taskID": taskID, "goal": goal, "steps": try JSONSerialization.jsonObject(with: stepsData), "profile": root.appendingPathComponent("Profile").path, "taskRoot": taskRoot.path, "chrome": "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome", "visible": visible, "keepOpen": keepOpen]
         let input = try JSONSerialization.data(withJSONObject: request)
         let process = Process(), stdin = Pipe(), stdout = Pipe(); process.executableURL = URL(fileURLWithPath: "/opt/homebrew/bin/node"); process.arguments = [runtime.appendingPathComponent("agent.mjs").path]; process.standardInput = stdin; process.standardOutput = stdout; process.standardError = stdout; processes[taskID] = process; try process.run(); try stdin.fileHandleForWriting.write(contentsOf: input); try stdin.fileHandleForWriting.close()
         let running = NexBrowserTaskResult(taskID: taskID, status: "running", text: "", tabs: [], downloads: [], screenshots: [], error: "")
@@ -67,13 +67,13 @@ actor NexManagedBrowserProvider {
         let taskID = task.taskID
         var final = NexBrowserTaskResult(taskID: taskID, status: "running", text: "", tabs: [], downloads: [], screenshots: [], error: "")
         do {
-            for try await line in task.stdout.fileHandleForReading.bytes.lines { guard let data = line.data(using: .utf8), let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { continue }; if let event = json["event"] as? String, event != "completed" { await progress((json["message"] as? String) ?? event) }; if json["event"] as? String == "completed" { final = .init(taskID: taskID, status: json["status"] as? String ?? "completed", text: json["text"] as? String ?? "", tabs: json["tabs"] as? [String] ?? [], downloads: json["downloads"] as? [String] ?? [], screenshots: json["screenshots"] as? [String] ?? [], error: json["error"] as? String ?? "") } }
+            for try await line in task.stdout.fileHandleForReading.bytes.lines { guard let data = line.data(using: .utf8), let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { continue }; let event = json["event"] as? String; if event == "media_ready" { final = .init(taskID: taskID, status: "playing", text: json["text"] as? String ?? "", tabs: json["tabs"] as? [String] ?? [], downloads: [], screenshots: [], error: ""); results[taskID] = final; try? persist(final) }; if let event, event != "completed" { await progress((json["message"] as? String) ?? event) }; if event == "completed" { final = .init(taskID: taskID, status: json["status"] as? String ?? "completed", text: json["text"] as? String ?? "", tabs: json["tabs"] as? [String] ?? [], downloads: json["downloads"] as? [String] ?? [], screenshots: json["screenshots"] as? [String] ?? [], error: json["error"] as? String ?? "") } }
         } catch { task.process.terminate() }
         task.process.waitUntilExit(); processes[taskID] = nil
         let cancelled = cancelledTaskIDs.remove(taskID) != nil
         if cancelled {
             final = .init(taskID: taskID, status: "cancelled", text: "", tabs: [], downloads: [], screenshots: [], error: "")
-        } else if task.process.terminationStatus != 0, final.status == "running" {
+        } else if task.process.terminationStatus != 0, ["running", "playing"].contains(final.status) {
             final = .init(taskID: taskID, status: "failed", text: "", tabs: [], downloads: [], screenshots: [], error: "Managed browser process exited \(task.process.terminationStatus).")
         }
         results[taskID] = final; try? persist(final); return final
@@ -194,7 +194,12 @@ try {
       case 'new_tab': page=await context.newPage(); if(step.url) await page.goto(step.url,{waitUntil:'domcontentloaded'}); break;
       case 'activate_tab': { const pages=context.pages(); if(!pages[step.index]) throw new Error('Tab index unavailable'); page=pages[step.index]; await page.bringToFront(); break; }
       case 'close_tab': await page.close(); page=context.pages()[0] || await context.newPage(); break;
-      case 'click': await page.locator(step.selector).click(); break;
+      case 'click': {
+        const locator=page.locator(step.selector);
+        await (step.first === true ? locator.first() : locator).click();
+        break;
+      }
+      case 'bring_to_front': await page.bringToFront(); break;
       // A wait only establishes that the page has rendered at least one
       // matching element. `locator.waitFor` is strict, so waiting on Gmail's
       // many rows or Calendar's many event chips throws before extraction.
@@ -235,6 +240,94 @@ try {
         screenshots.push(target);
         break;
       }
+      case 'skip_youtube_ad': {
+        // This only presses YouTube's own, visibly rendered Skip control. It
+        // never blocks, mutes, fast-forwards, or otherwise bypasses an ad.
+        const minimumWait=Math.max(0,Number(step.minimumWaitMs || 5000));
+        const deadline=Date.now()+Math.max(minimumWait,Number(step.timeout || 90000));
+        await page.waitForTimeout(minimumWait);
+        while(Date.now()<deadline) {
+          const skip=page.locator('button.ytp-ad-skip-button, .ytp-ad-skip-button-modern, .ytp-ad-skip-button-slot button').first();
+          if(await skip.isVisible().catch(()=>false)) {
+            await skip.click();
+            emit({event:'progress',message:'Pressed YouTube’s visible Skip button.'});
+            break;
+          }
+          const adShowing=await page.locator('.ad-showing').count().catch(()=>0);
+          if(!adShowing) break;
+          await page.waitForTimeout(500);
+        }
+        break;
+      }
+      case 'schoology_check': {
+        const schoologyURL=step.url || 'https://fuhsd.schoology.com/';
+        await page.goto(schoologyURL,{waitUntil:'domcontentloaded',timeout:30000});
+        const beginSchoologySSO=async()=>{
+          const controls=page.locator('button:has-text("Google"), a:has-text("Google"), button:has-text("Log in"), a:has-text("Log in"), button:has-text("Sign in"), a:has-text("Sign in")');
+          const count=await controls.count();
+          for(let i=0;i<count;i++) {
+            const control=controls.nth(i);
+            if(await control.isVisible().catch(()=>false)) {
+              await control.click();
+              await page.waitForTimeout(800);
+              return true;
+            }
+          }
+          return false;
+        };
+        const chooseAccount=async()=>{
+          const accounts=page.locator('[data-identifier]');
+          const count=await accounts.count();
+          if(count===0) return false;
+          const requested=String(step.schoolEmail || '').trim().toLowerCase();
+          const matches=[];
+          for(let i=0;i<count;i++) {
+            const account=accounts.nth(i);
+            const email=(await account.getAttribute('data-identifier').catch(()=>'' ) || '').trim().toLowerCase();
+            if(email && (requested ? email===requested : /@(?:[a-z0-9-]+\\.)*fuhsd\\.org$/.test(email))) matches.push(account);
+          }
+          if(matches.length===1) { await matches[0].click(); return true; }
+          if(requested) throw new Error(`The saved Google account ${requested} is not available in the Nexus browser profile. Open Nexus browser and sign in to that exact school account once.`);
+          if(matches.length>1) throw new Error('More than one FUHSD Google account is signed in. Set the exact school email for this request so Nexus can choose safely.');
+          throw new Error('Nexus could not identify a signed-in FUHSD school account. Open Nexus browser, sign in to the school Google account once, then try again.');
+        };
+        let initialText=(await page.locator('body').innerText({timeout:15000})).trim();
+        if(!new URL(page.url()).hostname.includes('google.com') && /(?:^|\\n)\s*(sign in|log in)\b/i.test(initialText)) {
+          emit({event:'progress',message:'Following Schoology’s existing sign-in path…'});
+          await beginSchoologySSO();
+        }
+        if(new URL(page.url()).hostname.includes('google.com')) {
+          await chooseAccount();
+          await page.waitForLoadState('domcontentloaded',{timeout:30000}).catch(()=>{});
+        }
+        const text=(await page.locator('body').innerText({timeout:15000})).trim();
+        const url=page.url();
+        if(new URL(url).hostname.includes('google.com') || /(?:^|\\n)\s*(sign in|log in)\b/i.test(text)) {
+          throw new Error('Schoology still requires sign-in. Nexus will not enter a password or MFA code; open the Nexus browser profile, complete the sign-in once, then retry.');
+        }
+        const upcoming=page.locator('[class*="upcoming" i], [id*="upcoming" i], [data-testid*="upcoming" i]');
+        const count=await upcoming.count();
+        const items=[];
+        for(let item=0;item<count;item++) {
+          const value=(await upcoming.nth(item).innerText().catch(()=>'' )).trim();
+          if(value) items.push(value);
+        }
+        const evidence=items.length>0 ? items.join('\\n--- Nexus Schoology item ---\\n') : text;
+        if(!/upcoming|assignment|course|grade/i.test(evidence)) {
+          throw new Error('Schoology opened, but Nexus could not locate a readable upcoming-assignments area. It will not report that there are no assignments without live page evidence.');
+        }
+        extracted.push(`Live Schoology evidence from ${url}:\\n${evidence}`);
+        break;
+      }
+      case 'hold_open': {
+        await page.bringToFront();
+        emit({event:'media_ready',message:'YouTube is playing in the frontmost Nexus browser window.',text:'YouTube is playing in the frontmost Nexus browser window.',tabs:context.pages().map(p=>p.url())});
+        // Keep this one media session alive so the visible, Nexus-owned
+        // browser remains on screen and continues playback. Cancellation or
+        // closing the browser ends it; ordinary browser tasks still close.
+        await new Promise(()=>{});
+        break;
+      }
       default: throw new Error(`Unsupported browser step: ${step.action}`);
     }
   }
@@ -256,6 +349,45 @@ actor NexBrowserActionCatalog {
             return Self.result(result)
         }
         try await registry.register(manifest: Self.manifest("browser.run_task", "Start a bounded Playwright task in Nexus's separate persistent browser profile and return its stable task ID while it runs. Use it for an agentic, multi-step website workflow: navigate pages, wait for elements, click controls, fill forms, extract evidence, download or upload files, or take a full-page screenshot. Supply structured steps, not a JSON string. Set visible only for a site that cannot be read in background browser mode; it opens the Nexus browser window.", ["Take a full-page screenshot of this website", "Research this site and extract the results", "Fill this form but do not submit without confirmation", "Wait for a page element before continuing"], ["goal": .init(.string, required: true), "steps": .init(.array, description: "Structured array of browser step objects. Supported actions: navigate, new_tab, activate_tab, close_tab, click, type, form, extract, upload, download, wait_for_element, screenshot."), "visible": .init(.boolean, description: "Open the Nexus browser window for compatibility with a site that rejects background browser mode."), "steps_json": .init(.string, description: "Legacy JSON-encoded browser step array. Use steps instead for new calls.", deprecated: true)], risk: .high, confirmation: .always, method: .browserAgent, aliases: ["wait for an element on a page", "watch a webpage condition"], tags: ["wait", "element", "selector", "page condition"])) { args, context in let result = try await managed.start(goal: try Self.required(args, "goal"), stepsJSON: try Self.stepsJSON(args), visible: args["visible"]?.bool ?? false) { await context.reportProgress($0, nil) }; return Self.result(result) }
+        try await registry.register(manifest: Self.manifest(
+            "browser.play_youtube",
+            "Play a requested YouTube video through Nexus's signed-in managed browser. This is the one browser action that intentionally brings the Nexus browser to the foreground and keeps it open while media plays. It opens YouTube, clicks the first visible video result, then only uses YouTube's own visible Skip button after five seconds when one is offered; it never bypasses ads.",
+            ["Play something for me on YouTube", "Play lo-fi beats in Nexus browser", "Open YouTube and play a video"],
+            ["query": .init(.string, required: false, description: "Optional music, video, or search request. Omit only when the user asks for any first video from YouTube home.")],
+            risk: .medium,
+            confirmation: .never,
+            method: .browserAgent,
+            aliases: ["play something for me", "play this on youtube", "open youtube and play", "play music in nexus browser"],
+            tags: ["youtube", "play", "video", "music", "visible browser"]
+        )) { args, context in
+            let query = args["query"]?.string?.trimmingCharacters(in: .whitespacesAndNewlines)
+            let result = try await managed.start(
+                goal: query?.isEmpty == false ? "Play the first YouTube result for \(query!)." : "Play the first visible YouTube video.",
+                stepsJSON: try Self.youtubePlaybackSteps(query: query),
+                visible: true,
+                keepOpen: true
+            ) { await context.reportProgress($0, nil) }
+            return Self.result(result)
+        }
+        try await registry.register(manifest: Self.manifest(
+            "browser.check_schoology",
+            "Read live upcoming Schoology assignments through Nexus's managed browser. It uses an already signed-in school Google session only; it never enters passwords or MFA. When no school_email is supplied, it safely chooses exactly one signed-in @fuhsd.org account and otherwise fails with a specific sign-in/account-selection message rather than inventing assignments.",
+            ["Check Schoology", "What upcoming assignments do I have in Schoology?", "Check my school homework"],
+            ["school_email": .init(.string, required: false, description: "Optional exact FUHSD Google address. Omit only when exactly one signed-in @fuhsd.org account exists in the Nexus browser profile.")],
+            risk: .medium,
+            confirmation: .never,
+            method: .browserAgent,
+            aliases: ["check schoology", "check my schoology", "school homework", "upcoming school assignments"],
+            tags: ["schoology", "school", "assignments", "homework", "fuhsd"]
+        )) { args, context in
+            let schoolEmail = args["school_email"]?.string?.trimmingCharacters(in: .whitespacesAndNewlines)
+            let result = try await managed.run(
+                goal: "Read live upcoming assignments from the user's signed-in Schoology dashboard.",
+                stepsJSON: try Self.schoologyCheckSteps(schoolEmail: schoolEmail),
+                visible: false
+            ) { await context.reportProgress($0, nil) }
+            return Self.result(result)
+        }
         try await registry.register(manifest: Self.manifest("browser.get_task", "Read a managed browser task by stable ID.", ["Check that browser task"], ["task_id": .init(.string, required: true)], method: .browserAgent)) { args, _ in guard let result = await managed.status(try Self.required(args, "task_id")) else { throw NexToolError.executionFailed(code: "browser_task_missing", message: "Browser task was not found.") }; return Self.result(result) }
         try await registry.register(manifest: Self.manifest("browser.cancel_task", "Cancel a running managed browser task.", ["Cancel the browser task"], ["task_id": .init(.string, required: true)], risk: .high, confirmation: .always, method: .browserAgent)) { args, _ in let id = try Self.required(args, "task_id"); try await managed.cancel(id); return Self.result(.init(taskID: id, status: "cancelled", text: "", tabs: [], downloads: [], screenshots: [], error: "")) }
         try await registry.register(manifest: Self.manifest("browser.import_chrome_profile", "One-time copy of bookmarks, history, and preferences from the default Chrome profile into Nexus's separate profile while Chrome is closed. Passwords, cookies, and Keychain secrets are never extracted. The source root is optional and defaults to ~/Library/Application Support/Google/Chrome.", ["Import my safe Chrome browser data into Nexus"], ["chrome_profile_root": .init(.string, required: false)], risk: .high, confirmation: .always, method: .nativeAPI)) { args, _ in
@@ -294,6 +426,36 @@ actor NexBrowserActionCatalog {
             ["action": "navigate", "url": url.absoluteString, "label": "Opening \(url.host ?? url.absoluteString)"],
             ["action": "extract", "selector": "body", "label": "Reading the page"]
         ]
+        return String(data: try JSONSerialization.data(withJSONObject: steps), encoding: .utf8) ?? "[]"
+    }
+    nonisolated static func youtubePlaybackSteps(query: String?) throws -> String {
+        let trimmed = query?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let destination: String
+        if trimmed.isEmpty {
+            destination = "https://www.youtube.com/"
+        } else {
+            var components = URLComponents(string: "https://www.youtube.com/results")!
+            components.queryItems = [.init(name: "search_query", value: trimmed)]
+            destination = components.url!.absoluteString
+        }
+        let steps: [[String: Any]] = [
+            ["action": "navigate", "url": destination, "label": "Opening YouTube in the Nexus browser"],
+            ["action": "bring_to_front", "label": "Bringing Nexus browser forward"],
+            ["action": "wait_for_element", "selector": "ytd-video-renderer a#thumbnail, ytd-rich-item-renderer a#thumbnail", "timeout": 30_000, "label": "Finding the first visible video"],
+            ["action": "click", "selector": "ytd-video-renderer a#thumbnail, ytd-rich-item-renderer a#thumbnail", "first": true, "label": "Starting the first visible video"],
+            ["action": "skip_youtube_ad", "minimumWaitMs": 5_000, "timeout": 90_000, "label": "Waiting for YouTube playback"],
+            ["action": "hold_open", "label": "Keeping YouTube open and playing"]
+        ]
+        return String(data: try JSONSerialization.data(withJSONObject: steps), encoding: .utf8) ?? "[]"
+    }
+    nonisolated static func schoologyCheckSteps(schoolEmail: String?) throws -> String {
+        let email = schoolEmail?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let steps: [[String: Any]] = [[
+            "action": "schoology_check",
+            "url": "https://fuhsd.schoology.com/",
+            "schoolEmail": email,
+            "label": "Checking live upcoming Schoology assignments"
+        ]]
         return String(data: try JSONSerialization.data(withJSONObject: steps), encoding: .utf8) ?? "[]"
     }
     private static func result(_ r: NexBrowserTaskResult) -> NexJSONValue { .object(["display": .string(r.error.isEmpty ? "Browser task \(r.status)." : r.error), "status": .string(r.status), "task_id": .string(r.taskID), "text": .string(r.text), "tabs": .array(r.tabs.map(NexJSONValue.string)), "downloads": .array(r.downloads.map(NexJSONValue.string)), "screenshots": .array(r.screenshots.map(NexJSONValue.string)), "error": .string(r.error)]) }
