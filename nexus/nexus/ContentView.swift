@@ -11,15 +11,18 @@ struct ContentView: View {
 
     var body: some View {
         ZStack(alignment: .top) {
-            if notch.isShowingMusic {
+            // Voice always wins the visual surface.  A live browser/music
+            // source may own the resting notch, but it must not hide the
+            // listening or thinking transition after the user starts Nexus.
+            if notch.isListening || notch.isThinking {
+                ListeningWings(isThinking: notch.isThinking)
+                    .transition(.opacity.combined(with: .scale(scale: 0.92, anchor: .top)))
+            } else if notch.isShowingMusic {
                 MusicPlaybackIndicator()
                     .transition(.opacity.combined(with: .scale(scale: 0.94, anchor: .top)))
             } else if notch.isUsingTool, let activity = notch.toolActivity {
                 ToolActivityIndicator(activity: activity)
                     .transition(.opacity.combined(with: .scale(scale: 0.94, anchor: .top)))
-            } else if notch.isListening || notch.isThinking {
-                ListeningWings(isThinking: notch.isThinking)
-                    .transition(.opacity.combined(with: .scale(scale: 0.92, anchor: .top)))
             } else {
                 AdaptiveNotchGlass(isExpanded: notch.isExpanded)
 
@@ -767,6 +770,13 @@ struct ToolIconView: View {
             case .asset(let name, let fallback):
                 if let image = NSImage(named: NSImage.Name(name)) {
                     Image(nsImage: image).resizable().scaledToFit()
+                } else {
+                    Image(systemName: fallback).resizable().scaledToFit()
+                }
+            case .bundleResource(let name, let subdirectory, let fallback):
+                if let url = Bundle.main.url(forResource: name, withExtension: nil, subdirectory: subdirectory),
+                   let image = NSImage(contentsOf: url) {
+                    Image(nsImage: image).resizable().interpolation(.high).scaledToFit()
                 } else {
                     Image(systemName: fallback).resizable().scaledToFit()
                 }

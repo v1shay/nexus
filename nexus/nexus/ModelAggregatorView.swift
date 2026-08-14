@@ -63,6 +63,12 @@ struct ModelAggregatorView: View {
                 secondaryButton: .cancel()
             )
         }
+        .onChange(of: viewModel.activeModel?.id) { _, _ in
+            NexusOnScreenCompanion.shared.reconcile(
+                enabled: settings.onScreenNexusEnabled && viewModel.activeModelSupportsImageInput,
+                tint: settings.onScreenNexusTint
+            )
+        }
     }
 }
 
@@ -427,9 +433,38 @@ private struct NexusExperienceSettingsPage: View {
                 }
                 NexusHairline(axis: .horizontal)
                 NexusSettingsLine(label: "Screen context") {
-                    Toggle("Share with vision models", isOn: $settings.shareScreenWithVisionModels)
-                        .toggleStyle(.switch)
-                        .help("Screen Recording is requested through Nexus setup and live-verified with ScreenCaptureKit.")
+                    VStack(alignment: .trailing, spacing: 8) {
+                        Toggle("Share with vision models", isOn: $settings.shareScreenWithVisionModels)
+                            .toggleStyle(.switch)
+                            .help("Screen Recording is requested through Nexus setup and live-verified with ScreenCaptureKit.")
+                        Toggle("On-screen Nexus", isOn: $settings.onScreenNexusEnabled)
+                            .toggleStyle(.switch)
+                            .disabled(!viewModel.activeModelSupportsImageInput)
+                            .help("A click-through companion that can point to visible interface elements. It requires Screen Recording and a vision-capable selected model.")
+                            .onChange(of: settings.onScreenNexusEnabled) { _, enabled in
+                                NexusOnScreenCompanion.shared.reconcile(
+                                    enabled: enabled && viewModel.activeModelSupportsImageInput,
+                                    tint: settings.onScreenNexusTint
+                                )
+                            }
+                        Picker("On-screen tint", selection: $settings.onScreenNexusTint) {
+                            ForEach(NexusOnScreenTint.allCases) { tint in
+                                Text(tint.title).tag(tint)
+                            }
+                        }
+                        .labelsHidden()
+                        .frame(width: 120)
+                        .disabled(!settings.onScreenNexusEnabled)
+                        .onChange(of: settings.onScreenNexusTint) { _, tint in
+                            NexusOnScreenCompanion.shared.reconcile(
+                                enabled: settings.onScreenNexusEnabled && viewModel.activeModelSupportsImageInput,
+                                tint: tint
+                            )
+                        }
+                        Toggle("Concise spoken responses", isOn: $settings.conciseSpokenResponses)
+                            .toggleStyle(.switch)
+                            .help("Nexus keeps the complete answer in chat and speaks a concise version after it finishes.")
+                    }
                 }
                 NexusHairline(axis: .horizontal)
                 NexusSettingsLine(label: "Duplex") {

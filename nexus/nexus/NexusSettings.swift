@@ -42,6 +42,39 @@ enum NexusGlassTheme: String, CaseIterable, Identifiable, Codable {
     }
 }
 
+/// A restrained accent for the on-screen companion's informational label.
+/// This is deliberately stored as a named palette rather than an archived
+/// platform colour so it remains stable across launches and app updates.
+enum NexusOnScreenTint: String, CaseIterable, Identifiable, Codable {
+    case cyan
+    case violet
+    case mint
+    case amber
+    case rose
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .cyan: "Cyan"
+        case .violet: "Violet"
+        case .mint: "Mint"
+        case .amber: "Amber"
+        case .rose: "Rose"
+        }
+    }
+
+    var color: Color {
+        switch self {
+        case .cyan: .cyan
+        case .violet: .purple
+        case .mint: .mint
+        case .amber: .orange
+        case .rose: .pink
+        }
+    }
+}
+
 enum NexusStatusGenerationMode: String, CaseIterable, Identifiable, Codable {
     case deterministic
     case primaryModel
@@ -138,6 +171,14 @@ final class NexusAppSettings: ObservableObject {
     /// When the selected local model advertises vision support, attach one
     /// current-screen image to each new user request.
     @Published var shareScreenWithVisionModels: Bool { didSet { persist() } }
+    /// Enables the click-through visual companion. It is intentionally useful
+    /// only with a selected image-capable model and never posts mouse events.
+    @Published var onScreenNexusEnabled: Bool { didSet { persist() } }
+    /// Accent used for the companion's translucent target label.
+    @Published var onScreenNexusTint: NexusOnScreenTint { didSet { persist() } }
+    /// Keep the full answer in the transcript while speaking a short,
+    /// information-dense version after generation completes.
+    @Published var conciseSpokenResponses: Bool { didSet { persist() } }
     /// Global, focused-field dictation. Accessibility permission is requested
     /// only when the user actually invokes the Option-Command shortcut.
     @Published var globalPasteDictationEnabled: Bool { didSet { persist() } }
@@ -173,6 +214,9 @@ final class NexusAppSettings: ObservableObject {
         shareScreenWithVisionModels = screenContextVersion >= 2
             ? (saved["shareScreenWithVisionModels"] as? Bool ?? true)
             : true
+        onScreenNexusEnabled = saved["onScreenNexusEnabled"] as? Bool ?? false
+        onScreenNexusTint = NexusOnScreenTint(rawValue: saved["onScreenNexusTint"] as? String ?? "") ?? .cyan
+        conciseSpokenResponses = saved["conciseSpokenResponses"] as? Bool ?? true
         globalPasteDictationEnabled = saved["globalPasteDictationEnabled"] as? Bool ?? true
         codexTaskMarkStyle = NexusCodexTaskMarkStyle(rawValue: saved["codexTaskMarkStyle"] as? String ?? "") ?? .codexMarks
         piperVoiceModelPath = saved["piperVoiceModelPath"] as? String ?? ""
@@ -193,6 +237,9 @@ final class NexusAppSettings: ObservableObject {
             "alwaysOnVoiceMode": alwaysOnVoiceMode,
             "shareScreenWithVisionModels": shareScreenWithVisionModels,
             "screenContextVersion": 2,
+            "onScreenNexusEnabled": onScreenNexusEnabled,
+            "onScreenNexusTint": onScreenNexusTint.rawValue,
+            "conciseSpokenResponses": conciseSpokenResponses,
             "globalPasteDictationEnabled": globalPasteDictationEnabled,
             "codexTaskMarkStyle": codexTaskMarkStyle.rawValue,
             "piperVoiceModelPath": piperVoiceModelPath,

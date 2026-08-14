@@ -11,6 +11,7 @@ enum NotchPresentation: Equatable {
 enum ToolIconSource: Equatable, Sendable {
     case systemSymbol(String)
     case asset(name: String, fallbackSystemName: String)
+    case bundleResource(name: String, subdirectory: String, fallbackSystemName: String)
     case svg(data: Data, fallbackSystemName: String)
     case image(data: Data, fallbackSystemName: String)
 }

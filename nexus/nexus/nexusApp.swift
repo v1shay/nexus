@@ -959,6 +959,10 @@ final class NotchController: ObservableObject {
 
     func install(startServices: Bool = true) {
         guard panel == nil else { return }
+        NexusOnScreenCompanion.shared.reconcile(
+            enabled: settings.onScreenNexusEnabled && modelDownloadViewModel.activeModelSupportsImageInput,
+            tint: settings.onScreenNexusTint
+        )
         if startServices { connectController.start() }
         // Permission prompts must be initiated deliberately from Settings.
         // Starting Nexus must never turn a hotkey attempt into a repeating
@@ -1180,6 +1184,7 @@ final class NotchController: ObservableObject {
         hideThinkingModelMark()
         suppressAutomaticResponseReveal = false
         interaction.beginDictation()
+        updateOnScreenCompanionActivity(.dictating)
         if let screen {
             resize(to: listeningSize(for: screen), animated: true)
         }
@@ -1243,6 +1248,7 @@ final class NotchController: ObservableObject {
                 return
             }
             interaction.beginDictation()
+            updateOnScreenCompanionActivity(.dictating)
             if let screen { resize(to: listeningSize(for: screen), animated: true) }
             return
         }
@@ -1306,6 +1312,7 @@ final class NotchController: ObservableObject {
         responseSpeaker.stop()
         hideThinkingModelMark()
         interaction.dismiss()
+        updateOnScreenCompanionActivity(.idle)
         if let screen { resize(to: idleSize(for: screen), animated: true) }
         armWakePhraseListener()
     }
@@ -1329,6 +1336,8 @@ final class NotchController: ObservableObject {
                 beginAlwaysOnListening()
             } else {
                 interaction.dismiss()
+                updateOnScreenCompanionActivity(.idle)
+                if let screen { resize(to: idleSize(for: screen), animated: true) }
                 armWakePhraseListener()
             }
             return
@@ -1363,6 +1372,7 @@ final class NotchController: ObservableObject {
         // session. Show the compact notch and its shaping/listening orb while
         // keeping its final result separate from the agent conversation.
         interaction.beginDictation()
+        updateOnScreenCompanionActivity(.dictating)
         if let screen { resize(to: listeningSize(for: screen), animated: true) }
         globalPasteSpeculationTask?.cancel()
         globalPasteSpeculationTask = nil
@@ -1835,6 +1845,28 @@ final class NotchController: ObservableObject {
         return nil
     }
 
+    /// Visual guidance deliberately happens after the answer has completed.
+    /// It therefore cannot delay, alter, or leak coordinate protocol into the
+    /// user-visible streamed answer. The companion only draws a target ring.
+    private func scheduleOnScreenGuidanceIfRequested(for prompt: String) {
+        guard settings.onScreenNexusEnabled,
+              modelDownloadViewModel.activeModelSupportsImageInput,
+              NexusOnScreenLocator.requestNeedsVisualPointing(prompt) else { return }
+        let generation = responseGeneration
+        let models = modelDownloadViewModel
+        Task { @MainActor in
+            guard generation == self.responseGeneration,
+                  self.settings.onScreenNexusEnabled,
+                  models.activeModelSupportsImageInput,
+                  let target = await NexusOnScreenLocator.locate(for: prompt, models: models) else { return }
+            NexusOnScreenCompanion.shared.point(
+                at: target.point,
+                on: target.frame,
+                label: target.label
+            )
+        }
+    }
+
     private func applyingCurrentScreenAttachment(to messages: [NexusChatMessage]) -> [NexusChatMessage] {
         guard let attachment = currentRequestScreenAttachment,
               let userIndex = messages.lastIndex(where: { $0.role == "user" }) else { return messages }
@@ -1896,7 +1928,9 @@ final class NotchController: ObservableObject {
         responseTask = Task { [weak self] in
             guard let self else { return }
             guard !Task.isCancelled, responseGeneration == generation else { return }
-            responseSpeaker.beginStreaming()
+            if !settings.conciseSpokenResponses {
+                responseSpeaker.beginStreaming()
+            }
             responseIsStreaming = true
             do {
                 // Do not make a vision model inspect the desktop just to plan
@@ -2063,6 +2097,7 @@ final class NotchController: ObservableObject {
                     }
                     responseSpeaker.setWebEvidenceActive(!result.webResponses.isEmpty)
                     interaction.beginThinking()
+                    updateOnScreenCompanionActivity(.thinking)
                     if let screen { resize(to: listeningSize(for: screen), animated: true) }
                     let messages = applyingCurrentScreenAttachment(
                         to: await conversationSession.contextMessages(
@@ -2087,7 +2122,18 @@ final class NotchController: ObservableObject {
                 responseIsStreaming = false
                 automaticRevealIsWaitingForNotchVisit = reveal
                 if reveal, let screen { resize(to: expandedSize(for: screen), animated: true) }
-                await responseSpeaker.finishStreamingAndWait()
+                scheduleOnScreenGuidanceIfRequested(for: prompt)
+                if settings.conciseSpokenResponses {
+                    let spoken = NexusSpokenResponseSummary.make(from: completedAnswer)
+                    updateOnScreenCompanionActivity(.speaking)
+                    responseSpeaker.beginStreaming()
+                    await responseSpeaker.speakImmediatelyAndWait(spoken)
+                    responseSpeaker.finishStreaming()
+                } else {
+                    updateOnScreenCompanionActivity(.speaking)
+                    await responseSpeaker.finishStreamingAndWait()
+                }
+                updateOnScreenCompanionActivity(.idle)
                 if alwaysOnVoiceSessionActive {
                     beginAlwaysOnListening()
                 } else {
@@ -2103,6 +2149,7 @@ final class NotchController: ObservableObject {
                 guard !Task.isCancelled, responseGeneration == generation else { return }
                 responseSpeaker.stop()
                 responseIsStreaming = false
+                updateOnScreenCompanionActivity(.idle)
                 let reveal = !suppressAutomaticResponseReveal
                 interaction.failResponse(
                     "Nexus couldn’t get a response. \(error.localizedDescription)",
@@ -2378,6 +2425,7 @@ final class NotchController: ObservableObject {
         automaticRevealIsWaitingForNotchVisit = false
         suppressAutomaticResponseReveal = false
         interaction.dismiss()
+        updateOnScreenCompanionActivity(.idle)
         if let screen { resize(to: idleSize(for: screen), animated: true) }
         armWakePhraseListener()
     }
@@ -2396,12 +2444,14 @@ final class NotchController: ObservableObject {
         if isListening {
             speechTranscriber.stop()
             interaction.dismiss()
+            updateOnScreenCompanionActivity(.idle)
             if let screen { resize(to: idleSize(for: screen), animated: true) }
             armWakePhraseListener()
         } else if isExpanded {
             collapse()
         } else {
             interaction.dismiss()
+            updateOnScreenCompanionActivity(.idle)
             if let screen { resize(to: idleSize(for: screen), animated: true) }
             armWakePhraseListener()
         }
@@ -2413,12 +2463,14 @@ final class NotchController: ObservableObject {
     func beginToolActivity(_ activity: ToolActivity) {
         hideThinkingModelMark()
         interaction.beginToolActivity(activity)
+        updateOnScreenCompanionActivity(.tool)
         if let screen { resize(to: toolActivitySize(for: screen), animated: true) }
         responseSpeaker.speakImmediately(activity.spokenStatus)
     }
 
     func finishToolActivity() {
         interaction.beginThinking()
+        updateOnScreenCompanionActivity(.thinking)
         if let screen { resize(to: listeningSize(for: screen), animated: true) }
     }
 
@@ -2432,6 +2484,7 @@ final class NotchController: ObservableObject {
     func cancelTaskPreview(_ id: UUID?) {
         if let id { Task { _ = try? await memory.registry.execute(name: "cancel_action", arguments: ["actionId": .string(id.uuidString)], invocation: .app) } }
         interaction.dismiss()
+        updateOnScreenCompanionActivity(.idle)
         if let screen { resize(to: idleSize(for: screen), animated: true) }
     }
 
@@ -2457,6 +2510,7 @@ final class NotchController: ObservableObject {
     /// each request an honest visual handoff without increasing notch height.
     private func beginThinkingPresentation() {
         interaction.beginThinking()
+        updateOnScreenCompanionActivity(.thinking)
         guard modelDownloadViewModel.activeModel != nil else { return }
         thinkingModelMarkTask?.cancel()
         isShowingThinkingModelMark = true
@@ -2473,6 +2527,14 @@ final class NotchController: ObservableObject {
         thinkingModelMarkTask?.cancel()
         thinkingModelMarkTask = nil
         isShowingThinkingModelMark = false
+    }
+
+    /// Keep the click-through companion in the same visible phase as the
+    /// notch. It intentionally has no authority over dictation or generation.
+    private func updateOnScreenCompanionActivity(_ activity: NexusPetActivity) {
+        guard settings.onScreenNexusEnabled,
+              modelDownloadViewModel.activeModelSupportsImageInput else { return }
+        NexusOnScreenCompanion.shared.setActivity(activity)
     }
 
     func saveConversation() {

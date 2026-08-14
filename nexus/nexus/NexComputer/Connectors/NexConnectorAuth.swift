@@ -763,7 +763,12 @@ private struct NexConnectorBrandMark: View {
 
     var body: some View {
         Group {
-            if let name = provider.bundledLogoName {
+            if provider == .github, let image = ModelBrandArtwork.image(for: .github) {
+                Image(nsImage: image)
+                    .resizable()
+                    .interpolation(.high)
+                    .scaledToFit()
+            } else if let name = provider.bundledLogoName {
                 Image(name)
                     .resizable()
                     .scaledToFit()
@@ -773,6 +778,7 @@ private struct NexConnectorBrandMark: View {
                     .foregroundStyle(.primary)
             }
         }
+        .frame(width: 19, height: 19)
         .frame(width: 22, height: 22)
         .accessibilityLabel(provider.title)
     }

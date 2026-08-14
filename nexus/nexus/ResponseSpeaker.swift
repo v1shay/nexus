@@ -1,6 +1,38 @@
 import AVFoundation
 import Foundation
 
+/// The visible answer remains the source of truth. This only chooses a
+/// listenable subset after the full answer exists, avoiding a second model
+/// pass that could omit or fabricate details.
+enum NexusSpokenResponseSummary {
+    static func make(from answer: String, maximumWords: Int = 95) -> String {
+        let normalized = answer
+            .replacingOccurrences(of: "```", with: "")
+            .replacingOccurrences(of: "*", with: "")
+            .replacingOccurrences(of: "#", with: "")
+            .replacingOccurrences(of: "\n", with: " ")
+            .replacingOccurrences(of: #"\s+"#, with: " ", options: .regularExpression)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !normalized.isEmpty else { return "" }
+
+        let sentences = normalized.split(whereSeparator: { ".!?".contains($0) })
+        var selected: [String] = []
+        var wordCount = 0
+        for sentence in sentences {
+            let cleaned = sentence.trimmingCharacters(in: .whitespacesAndNewlines)
+            let words = cleaned.split(whereSeparator: \.isWhitespace)
+            guard words.count >= 3 else { continue }
+            if !selected.isEmpty, wordCount + words.count > maximumWords { break }
+            selected.append(cleaned)
+            wordCount += words.count
+            if selected.count == 3 { break }
+        }
+        let result = selected.isEmpty ? normalized : selected.joined(separator: ". ") + "."
+        let boundedWords = result.split(whereSeparator: \.isWhitespace).prefix(maximumWords)
+        return boundedWords.joined(separator: " ") + (result.split(whereSeparator: \.isWhitespace).count > maximumWords ? "." : "")
+    }
+}
+
 /// Owns one Piper process for an entire answer and schedules its raw PCM
 /// output directly into AVAudioEngine. This removes the per-sentence model-load
 /// delay and lets speech follow the model's token stream.

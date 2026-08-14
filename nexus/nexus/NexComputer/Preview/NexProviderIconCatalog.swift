@@ -23,6 +23,13 @@ enum NexProviderIconCatalog {
         if action.hasPrefix("memory_") || action == "conversation_recall" { return .asset(name: "Obsidian", fallbackSystemName: "diamond.fill") }
         if action == "web_search" || action.hasPrefix("chrome.") || action.hasPrefix("browser.") { return .asset(name: "Chrome", fallbackSystemName: "globe") }
         if action.hasPrefix("youtube_") { return .asset(name: "YouTube", fallbackSystemName: "play.rectangle.fill") }
+        if action.hasPrefix("github.") || action.hasPrefix("git.") {
+            return .bundleResource(
+                name: "github.webp",
+                subdirectory: "Pets/BrandAssets",
+                fallbackSystemName: "chevron.left.forwardslash.chevron.right"
+            )
+        }
         let key: String
         switch action.split(separator: ".").first.map(String.init) ?? action {
         case "terminal": key = "terminal"
@@ -36,7 +43,6 @@ enum NexProviderIconCatalog {
         case "vscode": key = "vscode"
         case "xcode": key = "xcode"
         case "gmail", "google", "contacts": key = "google"
-        case "github", "git": key = "github"
         default: return .systemSymbol(fallback(for: action))
         }
         guard let value = encoded[key], let data = Data(base64Encoded: value.0) else { return .systemSymbol(fallback(for: action)) }
@@ -51,4 +57,3 @@ enum NexProviderIconCatalog {
         return "wrench.and.screwdriver"
     }
 }
-
