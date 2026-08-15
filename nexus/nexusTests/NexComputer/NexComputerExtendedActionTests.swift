@@ -365,7 +365,7 @@ final class NexComputerExtendedActionTests: XCTestCase {
         XCTAssertEqual(steps.first?["action"] as? String, "navigate")
         XCTAssertTrue((steps.first?["url"] as? String)?.contains("search_query=lofi") == true)
         XCTAssertTrue(steps.contains { ($0["action"] as? String) == "bring_to_front" })
-        XCTAssertTrue(steps.contains { ($0["action"] as? String) == "click" && ($0["first"] as? Bool) == true })
+        XCTAssertTrue(steps.contains { ($0["action"] as? String) == "youtube_start_first_visible" })
         let skip = try XCTUnwrap(steps.first { ($0["action"] as? String) == "skip_youtube_ad" })
         XCTAssertEqual(skip["minimumWaitMs"] as? Int, 5_000)
         XCTAssertTrue(steps.contains { ($0["action"] as? String) == "youtube_fullscreen" })

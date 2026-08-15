@@ -69,6 +69,30 @@ actor NexManagedBrowserProvider {
         return .init(taskID: task.taskID, status: "running", text: "", tabs: [], downloads: [], screenshots: [], error: "")
     }
 
+    /// Playback has a visible completion point. Do not report success until
+    /// the browser has actually selected a video and entered full screen.
+    func startPlayback(goal: String, stepsJSON: String, progress: @escaping @Sendable (String) async -> Void) async throws -> NexBrowserTaskResult {
+        let task = try await launch(goal: goal, stepsJSON: stepsJSON, visible: true, keepOpen: true)
+        Task { _ = await self.collect(task, progress: progress) }
+        for _ in 0..<1_200 { // two minutes, sampled every 100 ms
+            if let result = results[task.taskID] {
+                if result.status == "playing" { return result }
+                if result.status == "failed" || result.status == "cancelled" {
+                    throw NexToolError.executionFailed(
+                        code: "youtube_playback_failed",
+                        message: result.error.isEmpty ? "YouTube did not begin playback." : result.error
+                    )
+                }
+            }
+            try await Task.sleep(for: .milliseconds(100))
+        }
+        try? cancel(task.taskID)
+        throw NexToolError.executionFailed(
+            code: "youtube_playback_timeout",
+            message: "YouTube did not reach visible playback within two minutes. Nexus left the browser task stopped rather than claiming it played."
+        )
+    }
+
     func run(goal: String, stepsJSON: String, visible: Bool = false, progress: @escaping @Sendable (String) async -> Void) async throws -> NexBrowserTaskResult {
         let task = try await launch(goal: goal, stepsJSON: stepsJSON, visible: visible, keepOpen: false)
         return await collect(task, progress: progress)
@@ -288,6 +312,37 @@ try {
         }
         break;
       }
+      case 'youtube_start_first_visible': {
+        // A fresh YouTube profile can show consent before its feed. Only use
+        // the site's visible control, then select a real watch link from its
+        // current home/search layouts.
+        const consent=page.locator('button:has-text("Accept all"), button:has-text("Accept the use"), button:has-text("I agree")').first();
+        if(await consent.isVisible().catch(()=>false)) {
+          await consent.click();
+          emit({event:'progress',message:'Accepted YouTube’s visible consent screen.'});
+          await page.waitForTimeout(800);
+        }
+        const selectors=[
+          'ytd-rich-grid-media a#thumbnail[href*="/watch"]',
+          'ytd-rich-item-renderer a#thumbnail[href*="/watch"]',
+          'ytd-video-renderer a#thumbnail[href*="/watch"]',
+          'a#thumbnail[href*="/watch"]',
+          'a[href^="/watch?v="]'
+        ];
+        let selected;
+        for(const selector of selectors) {
+          const candidate=page.locator(selector).first();
+          if(await candidate.isVisible({timeout:9000}).catch(()=>false)) { selected=candidate; break; }
+        }
+        if(!selected) throw new Error('YouTube loaded but no visible playable video was found. Nexus did not claim playback.');
+        await selected.click();
+        await page.waitForURL(/(?:youtube\.com)?\/watch\?/, {timeout:30000}).catch(async()=>{
+          const player=page.locator('#movie_player, video.html5-main-video').first();
+          if(!await player.isVisible().catch(()=>false)) throw new Error('The first YouTube item did not open a playable watch page.');
+        });
+        emit({event:'progress',message:'Started the first visible YouTube video.'});
+        break;
+      }
       case 'youtube_fullscreen': {
         const fullscreen=page.locator('button.ytp-fullscreen-button').first();
         await fullscreen.waitFor({state:'visible',timeout:30000});
@@ -397,11 +452,9 @@ actor NexBrowserActionCatalog {
             tags: ["youtube", "play", "video", "music", "visible browser"]
         )) { args, context in
             let query = args["query"]?.string?.trimmingCharacters(in: .whitespacesAndNewlines)
-            let result = try await managed.start(
+            let result = try await managed.startPlayback(
                 goal: query?.isEmpty == false ? "Play the first YouTube result for \(query!)." : "Play the first visible YouTube video.",
-                stepsJSON: try Self.youtubePlaybackSteps(query: query),
-                visible: true,
-                keepOpen: true
+                stepsJSON: try Self.youtubePlaybackSteps(query: query)
             ) { await context.reportProgress($0, nil) }
             return Self.result(result)
         }
@@ -477,8 +530,7 @@ actor NexBrowserActionCatalog {
         let steps: [[String: Any]] = [
             ["action": "navigate", "url": destination, "label": "Opening YouTube in the Nexus browser"],
             ["action": "bring_to_front", "label": "Bringing Nexus browser forward"],
-            ["action": "wait_for_element", "selector": "ytd-video-renderer a#thumbnail, ytd-rich-item-renderer a#thumbnail", "timeout": 30_000, "label": "Finding the first visible video"],
-            ["action": "click", "selector": "ytd-video-renderer a#thumbnail, ytd-rich-item-renderer a#thumbnail", "first": true, "label": "Starting the first visible video"],
+            ["action": "youtube_start_first_visible", "label": "Starting the first visible video"],
             ["action": "skip_youtube_ad", "minimumWaitMs": 5_000, "timeout": 90_000, "label": "Waiting for YouTube playback"],
             ["action": "youtube_fullscreen", "label": "Entering YouTube full screen"],
             ["action": "hold_open", "label": "Keeping YouTube open and playing"]
