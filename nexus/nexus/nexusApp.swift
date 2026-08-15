@@ -900,6 +900,15 @@ final class NotchController: ObservableObject {
     /// lifecycle that the Notch renders—not from a second direct-execution
     /// path. This trace is reset per CLI prompt and returned with its answer.
     private var headlessToolTrace: [ToolActivity] = []
+    /// Lifecycle events are asynchronous. Keep the exact execution IDs that
+    /// began during the active headless request so a cancelled prior task
+    /// cannot append a late failure to the next request's receipt.
+    private var headlessTraceExecutionIDs: Set<UUID> = []
+    private var isCapturingHeadlessToolTrace = false
+    /// A headless request needs the same model and tool orchestration as the
+    /// notch, but it must not let an unavailable CoreAudio device stall that
+    /// automation before planning starts.
+    private var suppressResponseSpeechForHeadlessControl = false
     private var hoverSession = NotchHoverSession()
     private var suppressAutomaticResponseReveal = false
     private let music = NexusAudioReactiveMusic()
@@ -1548,6 +1557,7 @@ final class NotchController: ObservableObject {
             ], error: isReady ? nil : (status.detail ?? "The managed NexCLI worker is not live."))
         case "cancel":
             responseTask?.cancel()
+            await browserActions.cancelAll()
             responseGeneration = UUID()
             responseIsStreaming = false
             responseSpeaker.stop()
@@ -1649,10 +1659,10 @@ final class NotchController: ObservableObject {
             guard await waitForHeadlessTools(action: action) else {
                 return .init(ok: false, result: [:], error: "Nexus did not register \(action).")
             }
-            let envelope = await computerRuntime.execute(
-                actionID: action,
+            let envelope = await executeHeadlessTool(
+                action: action,
                 arguments: arguments,
-                options: .init(dryRun: request.command == "tool-dry-run", invocation: .app)
+                dryRun: request.command == "tool-dry-run"
             )
             return .init(
                 ok: envelope.ok,
@@ -1711,6 +1721,14 @@ final class NotchController: ObservableObject {
             }
             let priorAnswer = answer
             headlessToolTrace.removeAll()
+            headlessTraceExecutionIDs.removeAll()
+            isCapturingHeadlessToolTrace = true
+            suppressResponseSpeechForHeadlessControl = true
+            defer {
+                suppressResponseSpeechForHeadlessControl = false
+                isCapturingHeadlessToolTrace = false
+                headlessTraceExecutionIDs.removeAll()
+            }
             await submitTypedPrompt(text)
             let requestGeneration = responseGeneration
             for _ in 0..<1_500 {
@@ -1733,6 +1751,24 @@ final class NotchController: ObservableObject {
                         "transcript": transcript,
                         "tool_trace": headlessToolTraceJSON()
                     ], error: nil)
+                }
+                if !responseIsStreaming,
+                   let playback = headlessToolTrace.last(where: {
+                       $0.actionID == "browser.play_youtube"
+                           && ($0.phase == .completed || $0.phase == .failed)
+                   }) {
+                    if playback.phase == .completed {
+                        return .init(ok: true, result: [
+                            "state": "media_playing",
+                            "transcript": transcript,
+                            "tool_trace": headlessToolTraceJSON()
+                        ], error: nil)
+                    }
+                    return .init(
+                        ok: false,
+                        result: ["transcript": transcript, "tool_trace": headlessToolTraceJSON()],
+                        error: playback.detail ?? playback.status
+                    )
                 }
                 if !responseIsStreaming, !answer.isEmpty, answer != priorAnswer {
                     // Tool lifecycle events travel through the same async bus
@@ -1757,13 +1793,109 @@ final class NotchController: ObservableObject {
     private func waitForHeadlessTools(action: String? = nil) async -> Bool {
         for _ in 0..<250 {
             let manifests = await computerRegistry.manifests()
-            if !manifests.isEmpty,
-               (action == nil || manifests.contains(where: { $0.actionID == action })) {
+            let registeredTools = await memory.registry.definitions()
+            guard !manifests.isEmpty || !registeredTools.isEmpty else {
+                try? await Task.sleep(for: .milliseconds(120))
+                continue
+            }
+            if action == nil
+                || manifests.contains(where: { $0.actionID == action })
+                || registeredTools.contains(where: { $0.name == action }) {
                 return true
             }
             try? await Task.sleep(for: .milliseconds(120))
         }
         return false
+    }
+
+    /// Headless control lists both computer manifests and registry-owned
+    /// tools. Execute that same union instead of sending every action to the
+    /// computer runtime, which cannot resolve registry-only capabilities.
+    private func executeHeadlessTool(
+        action: String,
+        arguments: [String: NexJSONValue],
+        dryRun: Bool
+    ) async -> NexComputerResultEnvelope {
+        if await computerRegistry.contains(actionID: action) {
+            return await computerRuntime.execute(
+                actionID: action,
+                arguments: arguments,
+                options: .init(dryRun: dryRun, invocation: .app)
+            )
+        }
+
+        let startedAt = Date()
+        let executionID = UUID()
+        guard let tool = await memory.registry.definitions().first(where: { $0.name == action }) else {
+            return headlessRegistryFailure(
+                action: action, executionID: executionID, startedAt: startedAt,
+                code: "TOOL_NOT_FOUND", message: "Nexus did not register \(action)."
+            )
+        }
+        guard !dryRun else {
+            return headlessRegistryFailure(
+                action: action, executionID: executionID, startedAt: startedAt,
+                code: "DRY_RUN_UNSUPPORTED", message: "\(action) does not declare a standalone dry-run contract."
+            )
+        }
+        do {
+            let result = try await memory.registry.execute(name: action, arguments: arguments, invocation: .app)
+            return .init(
+                schemaVersion: NexComputerResultEnvelope.currentSchemaVersion,
+                executionID: executionID,
+                ok: true,
+                action: action,
+                status: .completed,
+                data: result,
+                display: result.object?["display"]?.string ?? tool.completionLabel,
+                warnings: [],
+                durationMs: Int(Date().timeIntervalSince(startedAt) * 1_000),
+                error: nil
+            )
+        } catch {
+            let actionFailure = error as? NexComputerActionFailure
+            let toolError = error as? NexToolError
+            return headlessRegistryFailure(
+                action: action,
+                executionID: executionID,
+                startedAt: startedAt,
+                code: actionFailure?.code ?? toolError?.code ?? "EXECUTION_FAILED",
+                message: actionFailure?.message ?? error.localizedDescription,
+                permission: actionFailure?.permission,
+                recovery: actionFailure?.recovery,
+                retryable: actionFailure?.retryable ?? false
+            )
+        }
+    }
+
+    private func headlessRegistryFailure(
+        action: String,
+        executionID: UUID,
+        startedAt: Date,
+        code: String,
+        message: String,
+        permission: String? = nil,
+        recovery: String? = nil,
+        retryable: Bool = false
+    ) -> NexComputerResultEnvelope {
+        .init(
+            schemaVersion: NexComputerResultEnvelope.currentSchemaVersion,
+            executionID: executionID,
+            ok: false,
+            action: action,
+            status: .failed,
+            data: .object([:]),
+            display: message,
+            warnings: [],
+            durationMs: Int(Date().timeIntervalSince(startedAt) * 1_000),
+            error: .init(
+                code: code,
+                message: message,
+                permission: permission,
+                recovery: recovery,
+                retryable: retryable
+            )
+        )
     }
 
     private func headlessToolTraceJSON() -> String {
@@ -1929,7 +2061,7 @@ final class NotchController: ObservableObject {
             interaction.acknowledge(immediateStatus)
         }
         if let screen { resize(to: expandedSize(for: screen), animated: true) }
-        if let immediateStatus {
+        if let immediateStatus, !suppressResponseSpeechForHeadlessControl {
             responseSpeaker.speakImmediately(immediateStatus)
         }
         responseTask = Task { [weak self] in
@@ -1938,7 +2070,9 @@ final class NotchController: ObservableObject {
             // Audio must begin on the first completed sentence, not after a
             // complete text answer. Concise mode guides the answer's wording;
             // it must never become a post-generation TTS delay.
-            responseSpeaker.beginStreaming()
+            if !suppressResponseSpeechForHeadlessControl {
+                responseSpeaker.beginStreaming()
+            }
             responseIsStreaming = true
             do {
                 // Do not make a vision model inspect the desktop just to plan
@@ -2048,7 +2182,9 @@ final class NotchController: ObservableObject {
                     let answer = try await streamModelResponse(messages: baseMessages, generation: generation)
                     guard !responseTransportBlocked else { throw NexusToolTransportLeakError() }
                     let finalDelta = responseSpeechCursor.consume(delta: "", accumulated: answer)
-                    if !finalDelta.isEmpty { responseSpeaker.append(finalDelta) }
+                    if !suppressResponseSpeechForHeadlessControl, !finalDelta.isEmpty {
+                        responseSpeaker.append(finalDelta)
+                    }
                     toolResult = nil
                 } else {
                     var result = NexToolOrchestrationResult(context: nil, webResponses: [], failures: [])
@@ -2117,8 +2253,12 @@ final class NotchController: ObservableObject {
                     let requestedNexusBrowserPlayback = executedActions.contains { $0.tool == "browser.play_youtube" }
                     if requestedNexusBrowserPlayback {
                         responseIsStreaming = false
-                        await responseSpeaker.finishStreamingAndWait()
-                        armWakePhraseListener()
+                        if suppressResponseSpeechForHeadlessControl {
+                            responseSpeaker.stop()
+                        } else {
+                            await responseSpeaker.finishStreamingAndWait()
+                            armWakePhraseListener()
+                        }
                         return
                     }
                     let requestedPlayback = executedActions.contains {
@@ -2153,7 +2293,9 @@ final class NotchController: ObservableObject {
                     let answer = try await streamModelResponse(messages: responseMessages, generation: generation)
                     guard !responseTransportBlocked else { throw NexusToolTransportLeakError() }
                     let finalSpeechDelta = responseSpeechCursor.consume(delta: "", accumulated: answer)
-                    if !deferResponseSpeechForCurrentResponse, !finalSpeechDelta.isEmpty {
+                    if !suppressResponseSpeechForHeadlessControl,
+                       !deferResponseSpeechForCurrentResponse,
+                       !finalSpeechDelta.isEmpty {
                         responseSpeaker.append(finalSpeechDelta)
                     }
                     toolResult = result
@@ -2162,7 +2304,7 @@ final class NotchController: ObservableObject {
                 let reveal = !suppressAutomaticResponseReveal
                 let completedAnswer = toolResult?.appendingWebSources(to: responseSpeechCursor.text)
                     ?? responseSpeechCursor.text
-                if deferResponseSpeechForCurrentResponse {
+                if deferResponseSpeechForCurrentResponse, !suppressResponseSpeechForHeadlessControl {
                     let spokenAnswer = await messageHandlePatchedSpeech(for: completedAnswer)
                     if !spokenAnswer.isEmpty { responseSpeaker.append(spokenAnswer) }
                 }
@@ -2302,13 +2444,17 @@ final class NotchController: ObservableObject {
                 // Status models run after the Piper stream is warm. Speak the
                 // generated line through that configured voice so it remains
                 // useful even when the compact UI moves on immediately.
-                responseSpeaker.speakImmediately(status)
+                if !suppressResponseSpeechForHeadlessControl {
+                    responseSpeaker.speakImmediately(status)
+                }
             } catch {
                 guard responseGeneration == generation, responseIsStreaming else { return }
                 let fallback = NexusStatusLineGenerator.status(for: prompt)
                 interaction.updateWorkingStatus(fallback)
                 updateOnScreenCompanionBubble(fallback)
-                responseSpeaker.speakImmediately(fallback)
+                if !suppressResponseSpeechForHeadlessControl {
+                    responseSpeaker.speakImmediately(fallback)
+                }
             }
         }
     }
@@ -2429,7 +2575,11 @@ final class NotchController: ObservableObject {
         updateOnScreenCompanionBubble(responseSpeechCursor.text)
         automaticRevealIsWaitingForNotchVisit = reveal
         if reveal, let screen { resize(to: expandedSize(for: screen), animated: true) }
-        if !deferResponseSpeechForCurrentResponse, !speechDelta.isEmpty { responseSpeaker.append(speechDelta) }
+        if !suppressResponseSpeechForHeadlessControl,
+           !deferResponseSpeechForCurrentResponse,
+           !speechDelta.isEmpty {
+            responseSpeaker.append(speechDelta)
+        }
     }
 
     private func messageHandlePatchedSpeech(for text: String) async -> String {
@@ -2879,7 +3029,20 @@ final class NotchController: ObservableObject {
             return
         }
         let activity = ToolActivity.lifecycle(event)
-        headlessToolTrace.append(activity)
+        var captureForHeadlessReply = false
+        if isCapturingHeadlessToolTrace {
+            switch event.phase {
+            case .started:
+                headlessTraceExecutionIDs.insert(event.executionID)
+                captureForHeadlessReply = true
+            case .progress, .completed, .failed:
+                captureForHeadlessReply = headlessTraceExecutionIDs.contains(event.executionID)
+                if event.phase == .completed || event.phase == .failed {
+                    headlessTraceExecutionIDs.remove(event.executionID)
+                }
+            }
+        }
+        if captureForHeadlessReply { headlessToolTrace.append(activity) }
         switch event.phase {
         case .started, .progress:
             interaction.beginToolActivity(activity)

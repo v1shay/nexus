@@ -28,14 +28,35 @@ enum NexusYouTubeVoiceIntent {
         if genericPhrases.contains(where: normalized.contains) {
             return .init(query: nil)
         }
-        guard normalized.hasPrefix("play "), normalized.count > "play ".count else { return nil }
-        var query = String(trimmed.dropFirst(5))
-        for suffix in [" on youtube", " in youtube", " in the nexus browser", " on the nexus browser", " for me"] {
+        let requestPrefix: String
+        if normalized.hasPrefix("play "), normalized.count > "play ".count {
+            requestPrefix = "play "
+        } else if normalized.hasPrefix("put on "), normalized.count > "put on ".count {
+            requestPrefix = "put on "
+        } else {
+            return nil
+        }
+        var query = String(trimmed.dropFirst(requestPrefix.count))
+            .trimmingCharacters(in: .whitespacesAndNewlines.union(.punctuationCharacters))
+        for suffix in [
+            " on youtube",
+            " in youtube",
+            " in the nexus browser",
+            " on the nexus browser",
+            " for me",
+            " and make it fill the screen",
+            " and make it fullscreen",
+            " and show it full screen",
+            " and show it fullscreen",
+            " and go full screen",
+            " in full screen",
+            " full screen"
+        ] {
             if query.lowercased().hasSuffix(suffix) {
                 query = String(query.dropLast(suffix.count))
             }
         }
-        query = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        query = query.trimmingCharacters(in: .whitespacesAndNewlines.union(.punctuationCharacters))
         guard !query.isEmpty, !["it", "that", "this", "current video"].contains(query.lowercased()) else { return nil }
         return .init(query: query)
     }
@@ -120,7 +141,7 @@ actor NexManagedBrowserProvider {
         let taskID = task.taskID
         var final = NexBrowserTaskResult(taskID: taskID, status: "running", text: "", tabs: [], downloads: [], screenshots: [], error: "")
         do {
-            for try await line in task.stdout.fileHandleForReading.bytes.lines { guard let data = line.data(using: .utf8), let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { continue }; let event = json["event"] as? String; if event == "media_ready" { final = .init(taskID: taskID, status: "playing", text: json["text"] as? String ?? "", tabs: json["tabs"] as? [String] ?? [], downloads: [], screenshots: [], error: ""); results[taskID] = final; try? persist(final) }; if let event, event != "completed" { await progress((json["message"] as? String) ?? event) }; if event == "completed" { final = .init(taskID: taskID, status: json["status"] as? String ?? "completed", text: json["text"] as? String ?? "", tabs: json["tabs"] as? [String] ?? [], downloads: json["downloads"] as? [String] ?? [], screenshots: json["screenshots"] as? [String] ?? [], error: json["error"] as? String ?? "") } }
+            for try await line in task.stdout.fileHandleForReading.bytes.lines { guard let data = line.data(using: .utf8), let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { continue }; let event = json["event"] as? String; if event == "browser_foreground_request", let pid = json["pid"] as? Int32, pid > 0 { await MainActor.run { NSRunningApplication(processIdentifier: pid)?.activate(options: [.activateIgnoringOtherApps]) } }; if event == "media_ready" { final = .init(taskID: taskID, status: "playing", text: json["text"] as? String ?? "", tabs: json["tabs"] as? [String] ?? [], downloads: [], screenshots: [], error: ""); results[taskID] = final; try? persist(final) }; if let event, event != "completed" { await progress((json["message"] as? String) ?? event) }; if event == "completed" { final = .init(taskID: taskID, status: json["status"] as? String ?? "completed", text: json["text"] as? String ?? "", tabs: json["tabs"] as? [String] ?? [], downloads: json["downloads"] as? [String] ?? [], screenshots: json["screenshots"] as? [String] ?? [], error: json["error"] as? String ?? "") } }
         } catch { task.process.terminate() }
         task.process.waitUntilExit(); processes[taskID] = nil
         let cancelled = cancelledTaskIDs.remove(taskID) != nil
@@ -133,6 +154,17 @@ actor NexManagedBrowserProvider {
     }
     func status(_ id: String) -> NexBrowserTaskResult? { results[id] ?? (processes[id] != nil ? .init(taskID: id, status: "running", text: "", tabs: [], downloads: [], screenshots: [], error: "") : persistedResult(id)) }
     func cancel(_ id: String) throws { guard let process = processes[id], process.isRunning else { throw NexToolError.executionFailed(code: "browser_task_missing", message: "Browser task is not running.") }; cancelledTaskIDs.insert(id); process.terminate(); processes[id] = nil; let cancelled = NexBrowserTaskResult(taskID: id, status: "cancelled", text: "", tabs: [], downloads: [], screenshots: [], error: ""); results[id] = cancelled; try persist(cancelled) }
+    func cancelAll() {
+        let activeProcesses = processes
+        for (id, process) in activeProcesses where process.isRunning {
+            cancelledTaskIDs.insert(id)
+            process.terminate()
+            processes[id] = nil
+            let cancelled = NexBrowserTaskResult(taskID: id, status: "cancelled", text: "", tabs: [], downloads: [], screenshots: [], error: "")
+            results[id] = cancelled
+            try? persist(cancelled)
+        }
+    }
     func importProfile(chromeRoot: URL) throws -> [String] {
         guard !chromeIsRunning() else { throw NexToolError.executionFailed(code: "chrome_must_close", message: "Quit Chrome before importing browser state.") }
         let source = chromeRoot.appendingPathComponent("Default"), destination = root.appendingPathComponent("Profile/Default"); try FileManager.default.createDirectory(at: destination, withIntermediateDirectories: true); var copied: [String] = []
@@ -217,6 +249,7 @@ actor NexManagedBrowserProvider {
 
     private static let script = #"""
 import fs from 'node:fs';
+import { execFileSync } from 'node:child_process';
 import { chromium } from 'playwright-core';
 const request = JSON.parse(fs.readFileSync(0, 'utf8'));
 const emit = value => process.stdout.write(JSON.stringify(value) + '\n');
@@ -252,7 +285,15 @@ try {
         await (step.first === true ? locator.first() : locator).click();
         break;
       }
-      case 'bring_to_front': await page.bringToFront(); break;
+      case 'bring_to_front': {
+        await page.bringToFront();
+        const pid=Number((execFileSync('/bin/ps',['-axo','pid=,command='],{encoding:'utf8'})
+          .split('\n')
+          .find(line=>line.includes(`--user-data-dir=${request.profile}`) && line.includes('/Applications/Google Chrome.app/Contents/MacOS/Google Chrome')) || '')
+          .trim().split(/\s+/,1)[0]) || 0;
+        emit({event:'browser_foreground_request',pid,message:'Bringing the Nexus browser window forward'});
+        break;
+      }
       // A wait only establishes that the page has rendered at least one
       // matching element. `locator.waitFor` is strict, so waiting on Gmail's
       // many rows or Calendar's many event chips throws before extraction.
@@ -431,6 +472,7 @@ finally { await context?.close(); }
 actor NexBrowserActionCatalog {
     private let managed: NexManagedBrowserProvider; private var registered = false
     init(managed: NexManagedBrowserProvider = NexManagedBrowserProvider()) { self.managed = managed }
+    func cancelAll() async { await managed.cancelAll() }
     func register(on registry: NexComputerRegistry) async throws {
         guard !registered else { return }; let managed = managed
         try await registry.register(manifest: Self.manifest("browser.visit_url", "Visit one HTTP(S) page in Nexus's separate managed browser profile and return readable page evidence so Nex can answer Sir's request from the page. Use this for a simple explicit request to open, visit, or inspect one URL. For clicks, forms, uploads, downloads, or multiple pages use browser.run_task.", ["Use Nexus browser to inspect https://example.com", "Visit this page and tell me what it says"], ["url": .init(.string, required: true)], risk: .medium, confirmation: .never, method: .browserAgent)) { args, context in

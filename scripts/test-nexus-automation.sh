@@ -38,6 +38,7 @@ export NEXUS_APP="$APP"
   -scheme nexus \
   -destination 'platform=macOS' \
   -derivedDataPath "$ROOT/.build" \
+  CODE_SIGN_IDENTITY=- \
   -only-testing:nexusTests/NexusGeometryTests/testAutomationSecretStoreNeverTouchesLoginKeychain \
   test > "$RESULTS_DIR/keychain-store-test.log"
 

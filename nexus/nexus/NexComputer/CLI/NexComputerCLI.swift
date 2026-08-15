@@ -50,16 +50,15 @@ enum NexusHeadlessControlPaths {
     }
 }
 
+@MainActor
 final class NexusHeadlessControlHost {
     private weak var controller: NotchController?
-    private let controllerLock = NSLock()
+    private var promptInFlight = false
     private var task: Task<Void, Never>?
     init() {}
 
     func attach(controller: NotchController) {
-        controllerLock.lock()
         self.controller = controller
-        controllerLock.unlock()
     }
     func start() {
         guard task == nil, (try? NexusHeadlessControlPaths.prepare()) != nil else { return }
@@ -69,11 +68,7 @@ final class NexusHeadlessControlHost {
     }
     func stop() { task?.cancel(); task = nil }
 
-    private func currentController() -> NotchController? {
-        controllerLock.lock()
-        defer { controllerLock.unlock() }
-        return controller
-    }
+    private func currentController() -> NotchController? { controller }
 
     private func drain() async {
         let manager = FileManager.default
@@ -81,10 +76,30 @@ final class NexusHeadlessControlHost {
         for url in urls.sorted(by: { $0.lastPathComponent < $1.lastPathComponent }) {
             guard let data = try? Data(contentsOf: url), let request = try? JSONDecoder().decode(NexusHeadlessControlRequest.self, from: data) else { try? manager.removeItem(at: url); continue }
             try? manager.removeItem(at: url)
+            let ownsPromptSlot: Bool
+            if request.command == "prompt" {
+                ownsPromptSlot = !promptInFlight
+                if ownsPromptSlot { promptInFlight = true }
+                if !ownsPromptSlot {
+                    let reply = NexusHeadlessControlReply(
+                        ok: false,
+                        result: ["state": "busy"],
+                        error: "A Nexus prompt is already running. Wait for it to finish or cancel it before starting another request."
+                    )
+                    let destination = NexusHeadlessControlPaths.replies.appendingPathComponent("\(request.id.uuidString).json")
+                    if let replyData = try? JSONEncoder().encode(reply) { try? replyData.write(to: destination, options: .atomic) }
+                    continue
+                }
+            } else {
+                ownsPromptSlot = false
+            }
             // A model request can legitimately take minutes.  Do not make it
             // block status, settings, or cancellation requests in the same
             // live control plane; the GUI remains the single executor.
-            Task { [weak self] in
+            Task { @MainActor [weak self] in
+                defer {
+                    if ownsPromptSlot { self?.promptInFlight = false }
+                }
                 let reply: NexusHeadlessControlReply
                 if let controller = self?.currentController() {
                     reply = await controller.performHeadlessControl(request)

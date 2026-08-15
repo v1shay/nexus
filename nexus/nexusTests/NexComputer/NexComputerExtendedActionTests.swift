@@ -347,6 +347,14 @@ final class NexComputerExtendedActionTests: XCTestCase {
     func testDirectYouTubeVoiceIntentAvoidsModelRouting() {
         XCTAssertEqual(NexusYouTubeVoiceIntent.request(in: "Play something for me"), .init(query: nil))
         XCTAssertEqual(NexusYouTubeVoiceIntent.request(in: "Play lo-fi beats on YouTube"), .init(query: "lo-fi beats"))
+        XCTAssertEqual(
+            NexusYouTubeVoiceIntent.request(in: "Put on a short lo-fi coding mix and make it fill the screen."),
+            .init(query: "a short lo-fi coding mix")
+        )
+        XCTAssertEqual(
+            NexusYouTubeVoiceIntent.request(in: "Play a calm instrumental playlist and show it full screen."),
+            .init(query: "a calm instrumental playlist")
+        )
         XCTAssertNil(NexusYouTubeVoiceIntent.request(in: "Explain YouTube recommendations"))
     }
 
