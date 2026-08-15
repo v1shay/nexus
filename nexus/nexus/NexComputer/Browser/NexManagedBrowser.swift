@@ -12,6 +12,35 @@ struct NexBrowserTaskResult: Codable, Sendable {
     let error: String
 }
 
+/// This action is intentionally routed without model inference. “Play
+/// something” has a complete interaction contract: use the visible Nexus
+/// browser, play the first result, and keep it playing.
+enum NexusYouTubeVoiceIntent {
+    struct Request: Equatable, Sendable {
+        let query: String?
+    }
+
+    static func request(in prompt: String) -> Request? {
+        let trimmed = prompt.trimmingCharacters(in: .whitespacesAndNewlines)
+        let normalized = trimmed.lowercased()
+        guard !trimmed.isEmpty else { return nil }
+        let genericPhrases = ["play something", "play a video", "play youtube", "open youtube", "start youtube", "put on youtube"]
+        if genericPhrases.contains(where: normalized.contains) {
+            return .init(query: nil)
+        }
+        guard normalized.hasPrefix("play "), normalized.count > "play ".count else { return nil }
+        var query = String(trimmed.dropFirst(5))
+        for suffix in [" on youtube", " in youtube", " in the nexus browser", " on the nexus browser", " for me"] {
+            if query.lowercased().hasSuffix(suffix) {
+                query = String(query.dropLast(suffix.count))
+            }
+        }
+        query = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !query.isEmpty, !["it", "that", "this", "current video"].contains(query.lowercased()) else { return nil }
+        return .init(query: query)
+    }
+}
+
 actor NexManagedBrowserProvider {
     private struct TaskRun {
         let taskID: String
@@ -259,6 +288,13 @@ try {
         }
         break;
       }
+      case 'youtube_fullscreen': {
+        const fullscreen=page.locator('button.ytp-fullscreen-button').first();
+        await fullscreen.waitFor({state:'visible',timeout:30000});
+        await fullscreen.click();
+        emit({event:'progress',message:'Entering YouTube full screen.'});
+        break;
+      }
       case 'schoology_check': {
         const schoologyURL=step.url || 'https://fuhsd.schoology.com/';
         await page.goto(schoologyURL,{waitUntil:'domcontentloaded',timeout:30000});
@@ -351,7 +387,7 @@ actor NexBrowserActionCatalog {
         try await registry.register(manifest: Self.manifest("browser.run_task", "Start a bounded Playwright task in Nexus's separate persistent browser profile and return its stable task ID while it runs. Use it for an agentic, multi-step website workflow: navigate pages, wait for elements, click controls, fill forms, extract evidence, download or upload files, or take a full-page screenshot. Supply structured steps, not a JSON string. Set visible only for a site that cannot be read in background browser mode; it opens the Nexus browser window.", ["Take a full-page screenshot of this website", "Research this site and extract the results", "Fill this form but do not submit without confirmation", "Wait for a page element before continuing"], ["goal": .init(.string, required: true), "steps": .init(.array, description: "Structured array of browser step objects. Supported actions: navigate, new_tab, activate_tab, close_tab, click, type, form, extract, upload, download, wait_for_element, screenshot."), "visible": .init(.boolean, description: "Open the Nexus browser window for compatibility with a site that rejects background browser mode."), "steps_json": .init(.string, description: "Legacy JSON-encoded browser step array. Use steps instead for new calls.", deprecated: true)], risk: .high, confirmation: .always, method: .browserAgent, aliases: ["wait for an element on a page", "watch a webpage condition"], tags: ["wait", "element", "selector", "page condition"])) { args, context in let result = try await managed.start(goal: try Self.required(args, "goal"), stepsJSON: try Self.stepsJSON(args), visible: args["visible"]?.bool ?? false) { await context.reportProgress($0, nil) }; return Self.result(result) }
         try await registry.register(manifest: Self.manifest(
             "browser.play_youtube",
-            "Play a requested YouTube video through Nexus's signed-in managed browser. This is the one browser action that intentionally brings the Nexus browser to the foreground and keeps it open while media plays. It opens YouTube, clicks the first visible video result, then only uses YouTube's own visible Skip button after five seconds when one is offered; it never bypasses ads.",
+            "Play a requested YouTube video through Nexus's signed-in managed browser. This is the one browser action that intentionally brings the Nexus browser to the foreground and keeps it open while media plays. It opens YouTube, clicks the first visible video result, uses only YouTube's own visible Skip button after five seconds when one is offered, then presses YouTube's normal full-screen control; it never bypasses ads.",
             ["Play something for me on YouTube", "Play lo-fi beats in Nexus browser", "Open YouTube and play a video"],
             ["query": .init(.string, required: false, description: "Optional music, video, or search request. Omit only when the user asks for any first video from YouTube home.")],
             risk: .medium,
@@ -444,6 +480,7 @@ actor NexBrowserActionCatalog {
             ["action": "wait_for_element", "selector": "ytd-video-renderer a#thumbnail, ytd-rich-item-renderer a#thumbnail", "timeout": 30_000, "label": "Finding the first visible video"],
             ["action": "click", "selector": "ytd-video-renderer a#thumbnail, ytd-rich-item-renderer a#thumbnail", "first": true, "label": "Starting the first visible video"],
             ["action": "skip_youtube_ad", "minimumWaitMs": 5_000, "timeout": 90_000, "label": "Waiting for YouTube playback"],
+            ["action": "youtube_fullscreen", "label": "Entering YouTube full screen"],
             ["action": "hold_open", "label": "Keeping YouTube open and playing"]
         ]
         return String(data: try JSONSerialization.data(withJSONObject: steps), encoding: .utf8) ?? "[]"

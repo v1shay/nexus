@@ -16,6 +16,8 @@ final class NexusGeometryTests: XCTestCase {
         XCTAssertTrue(NexusOnScreenLocator.requestNeedsVisualPointing("Which button should I press on my screen?"))
         XCTAssertTrue(NexusOnScreenLocator.requestNeedsVisualPointing("Point to the save icon"))
         XCTAssertFalse(NexusOnScreenLocator.requestNeedsVisualPointing("Explain how OAuth works"))
+        XCTAssertTrue(NexusOnScreenLocator.requestNeedsVisualContext("What is on my screen?"))
+        XCTAssertFalse(NexusOnScreenLocator.requestNeedsVisualContext("Explain how OAuth works"))
     }
 
     func testOnScreenCompanionBubbleNormalizesAndBoundsVisibleCaption() {

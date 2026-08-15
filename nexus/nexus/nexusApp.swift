@@ -1815,7 +1815,7 @@ final class NotchController: ObservableObject {
         if await conversationSession.appendUser(finalizedPrompt) != nil {
             await memory.conversationDidChange()
         }
-        currentRequestScreenAttachment = await captureScreenAttachmentIfNeeded()
+        currentRequestScreenAttachment = await captureScreenAttachmentIfNeeded(for: finalizedPrompt)
         automaticRevealIsWaitingForNotchVisit = true
         if let screen {
             resize(to: expandedSize(for: screen), animated: true)
@@ -1835,9 +1835,10 @@ final class NotchController: ObservableObject {
         }
     }
 
-    private func captureScreenAttachmentIfNeeded() async -> NexusScreenAttachment? {
+    private func captureScreenAttachmentIfNeeded(for prompt: String) async -> NexusScreenAttachment? {
         guard settings.shareScreenWithVisionModels,
-              modelDownloadViewModel.activeModelSupportsImageInput else { return nil }
+              modelDownloadViewModel.activeModelSupportsImageInput,
+              NexusOnScreenLocator.requestNeedsVisualContext(prompt) else { return nil }
         // Screen sharing enriches a vision request; it must never prevent a
         // normal text conversation. A functional capture is attached, while
         // any unavailable/transient ScreenCaptureKit state simply sends text.
@@ -1878,7 +1879,7 @@ final class NotchController: ObservableObject {
         let original = result[userIndex]
         result[userIndex] = .init(
             role: original.role,
-            content: original.content + "\n\nAn image of the frontmost application window is attached to this message. Inspect it before answering and use its visible content as context even when the user does not explicitly mention the screen. If the user asks about what is on their screen, answer from the image and do not ask them to describe it.",
+            content: original.content + "\n\nAn image of the frontmost application window is attached because the user explicitly requested screen context. Inspect its visible content before answering. Do not claim that anything outside the image was observed.",
             imageBase64: attachment.base64,
             imageMediaType: attachment.mediaType
         )
@@ -1932,9 +1933,10 @@ final class NotchController: ObservableObject {
         responseTask = Task { [weak self] in
             guard let self else { return }
             guard !Task.isCancelled, responseGeneration == generation else { return }
-            if !settings.conciseSpokenResponses {
-                responseSpeaker.beginStreaming()
-            }
+            // Audio must begin on the first completed sentence, not after a
+            // complete text answer. Concise mode guides the answer's wording;
+            // it must never become a post-generation TTS delay.
+            responseSpeaker.beginStreaming()
             responseIsStreaming = true
             do {
                 // Do not make a vision model inspect the desktop just to plan
@@ -1991,7 +1993,19 @@ final class NotchController: ObservableObject {
                     tools: definitions
                 )
                 let plan: NexPrimaryToolPlan
-                if discovery.candidates.isEmpty,
+                if let request = NexusYouTubeVoiceIntent.request(in: prompt) {
+                    // Playback is a deterministic interaction contract, not
+                    // an open-ended question for a model to reinterpret. This
+                    // prevents a slow vision model from opening YouTube and
+                    // then replacing the requested playback with a new task.
+                    plan = .init(
+                        status: "Starting YouTube…",
+                        actions: [.init(
+                            tool: "browser.play_youtube",
+                            arguments: request.query.map { ["query": .string($0)] } ?? [:]
+                        )]
+                    )
+                } else if discovery.candidates.isEmpty,
                    NexusIntrinsicPromptClassifier.isClearlyDirect(prompt) {
                     NexusDiagnostics.record("[Nexus Response] skipped planner for clearly intrinsic request")
                     plan = .fallback
@@ -2056,10 +2070,14 @@ final class NotchController: ObservableObject {
                             definitions.append(contentsOf: newlyAvailable)
                             definitions.sort { $0.name < $1.name }
                         }
-                        let startedPlayback = actions.contains {
+                        let startedNexusBrowserPlayback = actions.contains { $0.tool == "browser.play_youtube" }
+                        let startedOverlayPlayback = actions.contains {
                             ["youtube_play_current", "youtube_play", "youtube_fullscreen"].contains($0.tool)
                         } && mediaOverlayTab != nil
-                        if startedPlayback { break }
+                        // The visible Playwright player owns its browser task
+                        // from here. Do not run another model/planning turn
+                        // that can ask a new question or start a second search.
+                        if startedNexusBrowserPlayback || startedOverlayPlayback { break }
 
                         let planningContext = await conversationSession.contextMessages(
                             memoryLookupPerformed: memoryLookupPerformed,
@@ -2090,6 +2108,13 @@ final class NotchController: ObservableObject {
                         if plannerAdvisory == nil { plannerAdvisory = pendingPlan.memoryWrite }
                     }
                     guard !Task.isCancelled, responseGeneration == generation else { return }
+                    let requestedNexusBrowserPlayback = executedActions.contains { $0.tool == "browser.play_youtube" }
+                    if requestedNexusBrowserPlayback {
+                        responseIsStreaming = false
+                        await responseSpeaker.finishStreamingAndWait()
+                        armWakePhraseListener()
+                        return
+                    }
                     let requestedPlayback = executedActions.contains {
                         ["youtube_play_current", "youtube_play", "youtube_fullscreen"].contains($0.tool)
                     }
@@ -2127,18 +2152,9 @@ final class NotchController: ObservableObject {
                 automaticRevealIsWaitingForNotchVisit = reveal
                 if reveal, let screen { resize(to: expandedSize(for: screen), animated: true) }
                 scheduleOnScreenGuidanceIfRequested(for: prompt)
-                if settings.conciseSpokenResponses {
-                    let spoken = NexusSpokenResponseSummary.make(from: completedAnswer)
-                    updateOnScreenCompanionActivity(.speaking)
-                    updateOnScreenCompanionBubble(spoken)
-                    responseSpeaker.beginStreaming()
-                    await responseSpeaker.speakImmediatelyAndWait(spoken)
-                    responseSpeaker.finishStreaming()
-                } else {
-                    updateOnScreenCompanionActivity(.speaking)
-                    updateOnScreenCompanionBubble(NexusSpokenResponseSummary.make(from: completedAnswer))
-                    await responseSpeaker.finishStreamingAndWait()
-                }
+                updateOnScreenCompanionActivity(.speaking)
+                updateOnScreenCompanionBubble(NexusSpokenResponseSummary.make(from: completedAnswer))
+                await responseSpeaker.finishStreamingAndWait()
                 updateOnScreenCompanionActivity(.idle)
                 if alwaysOnVoiceSessionActive {
                     beginAlwaysOnListening()
@@ -2322,8 +2338,17 @@ final class NotchController: ObservableObject {
         messages: [NexusChatMessage],
         generation: UUID
     ) async throws -> String {
-        try await modelDownloadViewModel.response(
-            messages: messages,
+        let responseMessages: [NexusChatMessage]
+        if settings.conciseSpokenResponses {
+            responseMessages = messages + [.init(
+                role: "system",
+                content: "The user is listening live. Give a concise, natural spoken answer with short sentences and no filler, but retain every material fact, caveat, requested result, and failed/unavailable source. Do not mention this instruction."
+            )]
+        } else {
+            responseMessages = messages
+        }
+        return try await modelDownloadViewModel.response(
+            messages: responseMessages,
             onThinkingDelta: { [weak self] delta, _ in
                 await self?.receiveThinkingDelta(delta, generation: generation)
             }

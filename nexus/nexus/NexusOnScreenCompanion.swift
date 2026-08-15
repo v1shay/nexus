@@ -89,21 +89,26 @@ final class NexusOnScreenCompanion: ObservableObject {
         guard cursorTimer == nil else { return }
         state.cursorLocation = NSEvent.mouseLocation
         let timer = Timer.scheduledTimer(withTimeInterval: 1.0 / 60.0, repeats: true) { [weak self] _ in
-            guard let self else { return }
-            let cursor = NSEvent.mouseLocation
-            self.state.cursorLocation = cursor
-            // A target is momentary guidance, never a mode that traps the pet
-            // away from the pointer. Moving the mouse intentionally returns it.
-            if let origin = self.state.targetCursorOrigin,
-               self.state.target != nil,
-               hypot(cursor.x - origin.x, cursor.y - origin.y) > 16 {
-                self.expiryTask?.cancel()
-                self.expiryTask = nil
-                self.clearTarget()
+            Task { @MainActor [weak self] in
+                self?.cursorDidMove()
             }
         }
         cursorTimer = timer
         RunLoop.main.add(timer, forMode: .common)
+    }
+
+    private func cursorDidMove() {
+        let cursor = NSEvent.mouseLocation
+        state.cursorLocation = cursor
+        // A target is momentary guidance, never a mode that traps the pet
+        // away from the pointer. Moving the mouse intentionally returns it.
+        if let origin = state.targetCursorOrigin,
+           state.target != nil,
+           hypot(cursor.x - origin.x, cursor.y - origin.y) > 16 {
+            expiryTask?.cancel()
+            expiryTask = nil
+            clearTarget()
+        }
     }
 
     private func rebuildWindowsIfNeeded() {
@@ -343,6 +348,19 @@ enum NexusOnScreenLocator {
         let normalized = prompt.lowercased()
         let phrases = ["point", "show me", "where is", "where's", "which button", "which icon", "highlight", "on my screen", "on screen"]
         return phrases.contains { normalized.contains($0) }
+    }
+
+    /// A desktop image is expensive for local multimodal models. Choosing a
+    /// vision model must not turn every ordinary question into image inference.
+    static func requestNeedsVisualContext(_ prompt: String) -> Bool {
+        let normalized = prompt.lowercased()
+        let phrases = [
+            "on my screen", "on screen", "this screen", "my display",
+            "look at this", "look at the", "what am i looking at",
+            "read this window", "read this page",
+            "describe this", "inspect this", "see this", "can you see"
+        ]
+        return requestNeedsVisualPointing(prompt) || phrases.contains { normalized.contains($0) }
     }
 
     static func locate(

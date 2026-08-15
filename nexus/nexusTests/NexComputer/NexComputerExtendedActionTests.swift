@@ -344,6 +344,12 @@ final class NexComputerExtendedActionTests: XCTestCase {
         XCTAssertEqual(result.candidates.first?.tool, "browser.play_youtube")
     }
 
+    func testDirectYouTubeVoiceIntentAvoidsModelRouting() {
+        XCTAssertEqual(NexusYouTubeVoiceIntent.request(in: "Play something for me"), .init(query: nil))
+        XCTAssertEqual(NexusYouTubeVoiceIntent.request(in: "Play lo-fi beats on YouTube"), .init(query: "lo-fi beats"))
+        XCTAssertNil(NexusYouTubeVoiceIntent.request(in: "Explain YouTube recommendations"))
+    }
+
     func testSchoologyRequestDiscoversDedicatedLiveEvidenceTool() async throws {
         let tools = NexToolRegistry()
         let computer = NexComputerRegistry(toolRegistry: tools, permissionManager: NexComputerPermissionManager(backend: AuthorizedPermissions()))
@@ -362,6 +368,7 @@ final class NexComputerExtendedActionTests: XCTestCase {
         XCTAssertTrue(steps.contains { ($0["action"] as? String) == "click" && ($0["first"] as? Bool) == true })
         let skip = try XCTUnwrap(steps.first { ($0["action"] as? String) == "skip_youtube_ad" })
         XCTAssertEqual(skip["minimumWaitMs"] as? Int, 5_000)
+        XCTAssertTrue(steps.contains { ($0["action"] as? String) == "youtube_fullscreen" })
         XCTAssertTrue(steps.contains { ($0["action"] as? String) == "hold_open" })
     }
 
