@@ -961,7 +961,8 @@ final class NotchController: ObservableObject {
         guard panel == nil else { return }
         NexusOnScreenCompanion.shared.reconcile(
             enabled: settings.onScreenNexusEnabled && modelDownloadViewModel.activeModelSupportsImageInput,
-            tint: settings.onScreenNexusTint
+            tint: settings.onScreenNexusTint,
+            bubbleEnabled: settings.onScreenNexusBubbleEnabled
         )
         if startServices { connectController.start() }
         // Permission prompts must be initiated deliberately from Settings.
@@ -1202,6 +1203,7 @@ final class NotchController: ObservableObject {
             Task { @MainActor in
                 self?.currentDictationTranscript = text
                 self?.interaction.updateTranscript(text)
+                self?.updateOnScreenCompanionBubble(text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "Listening…" : "Listening · \(text)")
             }
         }
     }
@@ -1271,6 +1273,7 @@ final class NotchController: ObservableObject {
             Task { @MainActor in
                 self?.currentDictationTranscript = text
                 self?.interaction.updateTranscript(text)
+                self?.updateOnScreenCompanionBubble(text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "Listening…" : "Listening · \(text)")
             }
         }
     }
@@ -1383,6 +1386,7 @@ final class NotchController: ObservableObject {
         speechTranscriber.start(engine: settings.speechEngine) { [weak self] partial in
             Task { @MainActor in
                 self?.interaction.updateTranscript(partial)
+                self?.updateOnScreenCompanionBubble(partial.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "Listening…" : "Listening · \(partial)")
                 self?.speculateGlobalDictation(for: partial)
             }
         }
@@ -2126,11 +2130,13 @@ final class NotchController: ObservableObject {
                 if settings.conciseSpokenResponses {
                     let spoken = NexusSpokenResponseSummary.make(from: completedAnswer)
                     updateOnScreenCompanionActivity(.speaking)
+                    updateOnScreenCompanionBubble(spoken)
                     responseSpeaker.beginStreaming()
                     await responseSpeaker.speakImmediatelyAndWait(spoken)
                     responseSpeaker.finishStreaming()
                 } else {
                     updateOnScreenCompanionActivity(.speaking)
+                    updateOnScreenCompanionBubble(NexusSpokenResponseSummary.make(from: completedAnswer))
                     await responseSpeaker.finishStreamingAndWait()
                 }
                 updateOnScreenCompanionActivity(.idle)
@@ -2255,6 +2261,7 @@ final class NotchController: ObservableObject {
                 // is active. Do not accept a result after the response ended.
                 guard responseIsStreaming else { return }
                 interaction.updateWorkingStatus(status)
+                updateOnScreenCompanionBubble(status)
                 // Status models run after the Piper stream is warm. Speak the
                 // generated line through that configured voice so it remains
                 // useful even when the compact UI moves on immediately.
@@ -2263,6 +2270,7 @@ final class NotchController: ObservableObject {
                 guard responseGeneration == generation, responseIsStreaming else { return }
                 let fallback = NexusStatusLineGenerator.status(for: prompt)
                 interaction.updateWorkingStatus(fallback)
+                updateOnScreenCompanionBubble(fallback)
                 responseSpeaker.speakImmediately(fallback)
             }
         }
@@ -2371,6 +2379,8 @@ final class NotchController: ObservableObject {
         guard !responseSpeechCursor.text.isEmpty else { return }
         let reveal = !suppressAutomaticResponseReveal
         interaction.receivePartialAnswer(responseSpeechCursor.text, reveal: reveal)
+        updateOnScreenCompanionActivity(.speaking)
+        updateOnScreenCompanionBubble(responseSpeechCursor.text)
         automaticRevealIsWaitingForNotchVisit = reveal
         if reveal, let screen { resize(to: expandedSize(for: screen), animated: true) }
         if !speechDelta.isEmpty { responseSpeaker.append(speechDelta) }
@@ -2385,6 +2395,8 @@ final class NotchController: ObservableObject {
         guard let latest = sentences.last else { return }
         interaction.updateThinkingSentence(latest)
         interaction.beginThinking()
+        // Do not show `latest`: it is an internal thinking-channel fragment.
+        updateOnScreenCompanionActivity(.thinking)
         if let screen { resize(to: thinkingActivitySize(for: screen), animated: true) }
     }
 
@@ -2464,6 +2476,7 @@ final class NotchController: ObservableObject {
         hideThinkingModelMark()
         interaction.beginToolActivity(activity)
         updateOnScreenCompanionActivity(.tool)
+        updateOnScreenCompanionBubble(activity.status)
         if let screen { resize(to: toolActivitySize(for: screen), animated: true) }
         responseSpeaker.speakImmediately(activity.spokenStatus)
     }
@@ -2535,6 +2548,28 @@ final class NotchController: ObservableObject {
         guard settings.onScreenNexusEnabled,
               modelDownloadViewModel.activeModelSupportsImageInput else { return }
         NexusOnScreenCompanion.shared.setActivity(activity)
+        // The companion caption is intentionally a presentation affordance,
+        // never a window into hidden model reasoning or tool planning.
+        switch activity {
+        case .idle, .overlay:
+            NexusOnScreenCompanion.shared.setBubble(nil)
+        case .dictating:
+            let transcript = currentDictationTranscript.trimmingCharacters(in: .whitespacesAndNewlines)
+            NexusOnScreenCompanion.shared.setBubble(transcript.isEmpty ? "Listening…" : "Listening · \(transcript)")
+        case .thinking:
+            NexusOnScreenCompanion.shared.setBubble("Thinking…")
+        case .tool:
+            NexusOnScreenCompanion.shared.setBubble("Working…")
+        case .speaking:
+            NexusOnScreenCompanion.shared.setBubble("Speaking…")
+        }
+    }
+
+    private func updateOnScreenCompanionBubble(_ text: String?) {
+        guard settings.onScreenNexusEnabled,
+              settings.onScreenNexusBubbleEnabled,
+              modelDownloadViewModel.activeModelSupportsImageInput else { return }
+        NexusOnScreenCompanion.shared.setBubble(text)
     }
 
     func saveConversation() {
@@ -2725,6 +2760,8 @@ final class NotchController: ObservableObject {
         case .completed, .failed:
             guard codexAlreadyVisible else { return }
             interaction.completeToolActivity(activity)
+            updateOnScreenCompanionActivity(.tool)
+            updateOnScreenCompanionBubble(activity.status)
             if let screen { resize(to: toolActivitySize(for: screen), animated: true) }
             codexProgressDismissTask?.cancel()
             codexProgressDismissTask = Task { [weak self] in
@@ -2740,6 +2777,8 @@ final class NotchController: ObservableObject {
         case .started, .progress:
             codexProgressDismissTask?.cancel()
             interaction.beginToolActivity(activity)
+            updateOnScreenCompanionActivity(.tool)
+            updateOnScreenCompanionBubble(activity.status)
             if let screen { resize(to: toolActivitySize(for: screen), animated: true) }
         }
     }
@@ -2749,6 +2788,8 @@ final class NotchController: ObservableObject {
         selectedCodexSessionID = id
         codexProgressDismissTask?.cancel()
         interaction.beginToolActivity(.codex(session.latestUpdate))
+        updateOnScreenCompanionActivity(.tool)
+        updateOnScreenCompanionBubble(session.latestUpdate.detail)
         if let screen { resize(to: toolActivitySize(for: screen), animated: true) }
     }
 
@@ -2767,12 +2808,18 @@ final class NotchController: ObservableObject {
         switch event.phase {
         case .started, .progress:
             interaction.beginToolActivity(activity)
+            updateOnScreenCompanionActivity(.tool)
+            updateOnScreenCompanionBubble(activity.status)
             if let screen { resize(to: toolActivitySize(for: screen), animated: true) }
         case .completed:
             interaction.completeToolActivity(activity)
+            updateOnScreenCompanionActivity(.tool)
+            updateOnScreenCompanionBubble(activity.status)
             if let screen { resize(to: toolActivitySize(for: screen), animated: true) }
         case .failed:
             interaction.completeToolActivity(activity)
+            updateOnScreenCompanionActivity(.tool)
+            updateOnScreenCompanionBubble(activity.status)
             if let screen { resize(to: toolActivitySize(for: screen), animated: true) }
         }
     }

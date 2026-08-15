@@ -176,6 +176,10 @@ final class NexusAppSettings: ObservableObject {
     @Published var onScreenNexusEnabled: Bool { didSet { persist() } }
     /// Accent used for the companion's translucent target label.
     @Published var onScreenNexusTint: NexusOnScreenTint { didSet { persist() } }
+    /// Optional, local-only live caption beside the click-through companion.
+    /// It may show user dictation, concise tool state, or answer text—never
+    /// model reasoning or hidden tool-planning content.
+    @Published var onScreenNexusBubbleEnabled: Bool { didSet { persist() } }
     /// Keep the full answer in the transcript while speaking a short,
     /// information-dense version after generation completes.
     @Published var conciseSpokenResponses: Bool { didSet { persist() } }
@@ -216,6 +220,7 @@ final class NexusAppSettings: ObservableObject {
             : true
         onScreenNexusEnabled = saved["onScreenNexusEnabled"] as? Bool ?? false
         onScreenNexusTint = NexusOnScreenTint(rawValue: saved["onScreenNexusTint"] as? String ?? "") ?? .cyan
+        onScreenNexusBubbleEnabled = saved["onScreenNexusBubbleEnabled"] as? Bool ?? true
         conciseSpokenResponses = saved["conciseSpokenResponses"] as? Bool ?? true
         globalPasteDictationEnabled = saved["globalPasteDictationEnabled"] as? Bool ?? true
         codexTaskMarkStyle = NexusCodexTaskMarkStyle(rawValue: saved["codexTaskMarkStyle"] as? String ?? "") ?? .codexMarks
@@ -239,6 +244,7 @@ final class NexusAppSettings: ObservableObject {
             "screenContextVersion": 2,
             "onScreenNexusEnabled": onScreenNexusEnabled,
             "onScreenNexusTint": onScreenNexusTint.rawValue,
+            "onScreenNexusBubbleEnabled": onScreenNexusBubbleEnabled,
             "conciseSpokenResponses": conciseSpokenResponses,
             "globalPasteDictationEnabled": globalPasteDictationEnabled,
             "codexTaskMarkStyle": codexTaskMarkStyle.rawValue,

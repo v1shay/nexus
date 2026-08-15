@@ -18,6 +18,16 @@ final class NexusGeometryTests: XCTestCase {
         XCTAssertFalse(NexusOnScreenLocator.requestNeedsVisualPointing("Explain how OAuth works"))
     }
 
+    func testOnScreenCompanionBubbleNormalizesAndBoundsVisibleCaption() {
+        XCTAssertNil(NexusOnScreenCompanion.normalizedBubbleText(" \n\t "))
+        XCTAssertEqual(
+            NexusOnScreenCompanion.normalizedBubbleText("Listening\n\n  to   this"),
+            "Listening to this"
+        )
+        let long = String(repeating: "x", count: 360)
+        XCTAssertEqual(NexusOnScreenCompanion.normalizedBubbleText(long)?.count, 280)
+    }
+
     func testAutomationSecretStoreNeverTouchesLoginKeychain() throws {
         let store = NexusKeychainSecretStore(
             service: "na.nexus.tests.automation",

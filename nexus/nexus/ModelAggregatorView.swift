@@ -66,7 +66,8 @@ struct ModelAggregatorView: View {
         .onChange(of: viewModel.activeModel?.id) { _, _ in
             NexusOnScreenCompanion.shared.reconcile(
                 enabled: settings.onScreenNexusEnabled && viewModel.activeModelSupportsImageInput,
-                tint: settings.onScreenNexusTint
+                tint: settings.onScreenNexusTint,
+                bubbleEnabled: settings.onScreenNexusBubbleEnabled
             )
         }
     }
@@ -444,7 +445,19 @@ private struct NexusExperienceSettingsPage: View {
                             .onChange(of: settings.onScreenNexusEnabled) { _, enabled in
                                 NexusOnScreenCompanion.shared.reconcile(
                                     enabled: enabled && viewModel.activeModelSupportsImageInput,
-                                    tint: settings.onScreenNexusTint
+                                    tint: settings.onScreenNexusTint,
+                                    bubbleEnabled: settings.onScreenNexusBubbleEnabled
+                                )
+                            }
+                        Toggle("Companion bubble", isOn: $settings.onScreenNexusBubbleEnabled)
+                            .toggleStyle(.switch)
+                            .disabled(!settings.onScreenNexusEnabled)
+                            .help("Shows local partial dictation, concise tool status, and answer text beside the on-screen pet. It never shows hidden reasoning.")
+                            .onChange(of: settings.onScreenNexusBubbleEnabled) { _, enabled in
+                                NexusOnScreenCompanion.shared.reconcile(
+                                    enabled: settings.onScreenNexusEnabled && viewModel.activeModelSupportsImageInput,
+                                    tint: settings.onScreenNexusTint,
+                                    bubbleEnabled: enabled
                                 )
                             }
                         Picker("On-screen tint", selection: $settings.onScreenNexusTint) {
@@ -458,7 +471,8 @@ private struct NexusExperienceSettingsPage: View {
                         .onChange(of: settings.onScreenNexusTint) { _, tint in
                             NexusOnScreenCompanion.shared.reconcile(
                                 enabled: settings.onScreenNexusEnabled && viewModel.activeModelSupportsImageInput,
-                                tint: tint
+                                tint: tint,
+                                bubbleEnabled: settings.onScreenNexusBubbleEnabled
                             )
                         }
                         Toggle("Concise spoken responses", isOn: $settings.conciseSpokenResponses)

@@ -18,8 +18,10 @@ final class NexusOnScreenCompanion: ObservableObject {
 
     private init() {}
 
-    func reconcile(enabled: Bool, tint: NexusOnScreenTint = .cyan) {
+    func reconcile(enabled: Bool, tint: NexusOnScreenTint = .cyan, bubbleEnabled: Bool = true) {
         state.tint = tint
+        state.bubbleEnabled = bubbleEnabled
+        if !bubbleEnabled { state.bubbleText = nil }
         guard enabled else {
             hide()
             return
@@ -48,6 +50,23 @@ final class NexusOnScreenCompanion: ObservableObject {
     /// stays visual-only; this never starts recording or speech.
     func setActivity(_ activity: NexusPetActivity) {
         state.activity = activity
+    }
+
+    /// Displays only user-visible, concise text beside the companion. The
+    /// caller must never pass hidden model reasoning or planning content.
+    func setBubble(_ text: String?) {
+        guard state.bubbleEnabled else {
+            state.bubbleText = nil
+            return
+        }
+        state.bubbleText = Self.normalizedBubbleText(text)
+    }
+
+    nonisolated static func normalizedBubbleText(_ text: String?) -> String? {
+        let normalized = (text ?? "")
+            .replacingOccurrences(of: #"\s+"#, with: " ", options: .regularExpression)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return normalized.isEmpty ? nil : String(normalized.suffix(280))
     }
 
     func hide() {
@@ -117,6 +136,8 @@ private final class NexusOnScreenOverlayState: ObservableObject {
     @Published var cursorLocation = NSEvent.mouseLocation
     @Published var activity: NexusPetActivity = .idle
     @Published var tint: NexusOnScreenTint = .cyan
+    @Published var bubbleText: String?
+    @Published var bubbleEnabled = true
     var targetCursorOrigin: CGPoint?
 }
 
@@ -193,6 +214,15 @@ private struct NexusOnScreenOverlayView: View {
                     .position(x: destination.x, y: max(34, destination.y - 54))
                 .transition(.opacity.combined(with: .scale(scale: 0.82)))
             }
+
+            if let bubble = state.bubbleText,
+               state.bubbleEnabled,
+               target != nil || (state.target == nil && screenFrame.contains(state.cursorLocation)) {
+                CompanionBubble(text: bubble, tint: state.tint.color)
+                    .frame(width: min(292, max(188, screenFrame.width * 0.36)))
+                    .position(bubblePosition(near: destination, targeting: target != nil))
+                    .transition(.opacity.combined(with: .scale(scale: 0.88, anchor: .bottomLeading)))
+            }
         }
         .frame(width: screenFrame.width, height: screenFrame.height)
         .allowsHitTesting(false)
@@ -206,8 +236,46 @@ private struct NexusOnScreenOverlayView: View {
         )
     }
 
+    private func bubblePosition(near pet: CGPoint, targeting: Bool) -> CGPoint {
+        let width = min(292, max(188, screenFrame.width * 0.36))
+        let x = min(screenFrame.width - width / 2 - 12, max(width / 2 + 12, pet.x + width / 2 + 24))
+        let y = min(screenFrame.height - 42, max(42, pet.y + (targeting ? 62 : -36)))
+        return .init(x: x, y: y)
+    }
+
     private var selectedPet: NexusPet {
         NexusPetCatalog.pet(withID: UserDefaults.standard.string(forKey: "nexus.selectedPetID"))
+    }
+}
+
+/// A deliberately small, translucent caption rather than a second chat UI.
+/// It inherits the user-selected tint and is always click-through with the
+/// overlay. The visible content is bounded by the companion controller.
+private struct CompanionBubble: View {
+    let text: String
+    let tint: Color
+
+    var body: some View {
+        Text(text)
+            .font(.system(size: 12, weight: .medium, design: .rounded))
+            .foregroundStyle(.white.opacity(0.96))
+            .lineLimit(4)
+            .multilineTextAlignment(.leading)
+            .padding(.horizontal, 11)
+            .padding(.vertical, 8)
+            .background {
+                RoundedRectangle(cornerRadius: 13, style: .continuous)
+                    .fill(.ultraThinMaterial)
+                    .overlay {
+                        RoundedRectangle(cornerRadius: 13, style: .continuous)
+                            .fill(tint.opacity(0.20))
+                    }
+            }
+            .overlay {
+                RoundedRectangle(cornerRadius: 13, style: .continuous)
+                    .stroke(tint.opacity(0.72), lineWidth: 1)
+            }
+            .shadow(color: tint.opacity(0.20), radius: 11, y: 4)
     }
 }
 
