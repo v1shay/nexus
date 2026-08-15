@@ -23,7 +23,16 @@ struct NexMessageRecord: Equatable, Sendable {
     let isRead: Bool
 }
 
-protocol NexContactsSearching: Sendable { func search(name: String, limit: Int) async throws -> [NexContactMatch] }
+protocol NexContactsSearching: Sendable {
+    func search(name: String, limit: Int) async throws -> [NexContactMatch]
+    func displayNames(for handles: Set<String>) async throws -> [String: String]
+}
+
+extension NexContactsSearching {
+    /// Name enrichment is best-effort so message history remains usable when
+    /// Contacts permission is unavailable or a handle is not saved.
+    func displayNames(for handles: Set<String>) async throws -> [String: String] { [:] }
+}
 protocol NexMessageHistoryReading: Sendable { func search(query: String?, sender: String?, conversation: String?, after: Date?, before: Date?, limit: Int) async throws -> [NexMessageRecord] }
 protocol NexMessageSending: Sendable { func open() async throws; func openConversation(recipient: String) async throws; func send(body: String, recipient: String) async throws }
 
@@ -41,6 +50,33 @@ final class NexSystemContactsProvider: NexContactsSearching, @unchecked Sendable
             if matches.count >= min(max(limit, 1), 25) { stop.pointee = true }
         }
         return matches
+    }
+
+    func displayNames(for handles: Set<String>) async throws -> [String: String] {
+        let requested = Set(handles.flatMap { [Self.normalizedHandle($0)] })
+            .filter { !$0.isEmpty && $0 != "me" }
+        guard !requested.isEmpty else { return [:] }
+
+        let keys = [CNContactGivenNameKey, CNContactFamilyNameKey, CNContactPhoneNumbersKey, CNContactEmailAddressesKey] as [CNKeyDescriptor]
+        let request = CNContactFetchRequest(keysToFetch: keys)
+        request.unifyResults = true
+        var names: [String: String] = [:]
+        try CNContactStore().enumerateContacts(with: request) { contact, _ in
+            let display = [contact.givenName, contact.familyName].filter { !$0.isEmpty }.joined(separator: " ")
+            guard !display.isEmpty else { return }
+            let contactHandles = contact.phoneNumbers.map { $0.value.stringValue } + contact.emailAddresses.map { String($0.value) }
+            for handle in contactHandles {
+                let normalized = Self.normalizedHandle(handle)
+                if requested.contains(normalized) { names[normalized] = display }
+            }
+        }
+        return names
+    }
+
+    private static func normalizedHandle(_ handle: String) -> String {
+        let trimmed = handle.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        if trimmed.contains("@") { return trimmed }
+        return trimmed.filter { $0.isNumber }
     }
 }
 
@@ -214,8 +250,14 @@ actor NexMessagesActionCatalog {
         registered = true
     }
 
+    func displayNames(for handles: Set<String>) async -> [String: String] {
+        (try? await contacts.displayNames(for: handles)) ?? [:]
+    }
+
     private static func date(_ raw: String?) -> Date? { raw.flatMap { ISO8601DateFormatter().date(from: $0) } }
-    private static func recordString(_ record: NexMessageRecord) -> NexJSONValue { .string("\(record.stableID)|\(ISO8601DateFormatter().string(from: record.timestamp))|from=\(record.sender)|to=\(record.recipient)|chat=\(record.conversation)|read=\(record.isRead)|attachment=\(record.attachmentPath)|\(record.text)") }
+    private static func recordString(_ record: NexMessageRecord) -> NexJSONValue {
+        .string("record=\(record.stableID); timestamp=\(ISO8601DateFormatter().string(from: record.timestamp)); sender=\(record.sender); recipient=\(record.recipient); conversation=\(record.conversation); read=\(record.isRead); attachment_path=\(record.attachmentPath); attachment_type=\(record.attachmentType); body=\(record.text)")
+    }
     private static func simple(_ display: String) -> NexJSONValue { .object(["display": .string(display), "status": .string("completed")]) }
     private static let simpleOutput = NexToolInputSchema(fields: ["display": .init(.string, required: true), "status": .init(.string, required: true)])
     private static let listOutput = NexToolInputSchema(fields: ["display": .init(.string, required: true), "count": .init(.integer, required: true), "items": .init(.stringArray, required: true)])

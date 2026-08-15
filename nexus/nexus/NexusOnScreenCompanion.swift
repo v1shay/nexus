@@ -223,9 +223,13 @@ private struct NexusOnScreenOverlayView: View {
             if let bubble = state.bubbleText,
                state.bubbleEnabled,
                target != nil || (state.target == nil && screenFrame.contains(state.cursorLocation)) {
+                let bubbleWidth = min(292, max(188, screenFrame.width * 0.36))
                 CompanionBubble(text: bubble, tint: state.tint.color)
-                    .frame(width: min(292, max(188, screenFrame.width * 0.36)))
-                    .position(bubblePosition(near: destination, targeting: target != nil))
+                    // The container's *leading* edge is the pet anchor. Its
+                    // content therefore grows rightward instead of centering
+                    // a short status in a large invisible frame.
+                    .frame(width: bubbleWidth, alignment: .leading)
+                    .position(bubblePosition(near: destination, width: bubbleWidth, targeting: target != nil))
                     .transition(.opacity.combined(with: .scale(scale: 0.88, anchor: .bottomLeading)))
             }
         }
@@ -241,9 +245,11 @@ private struct NexusOnScreenOverlayView: View {
         )
     }
 
-    private func bubblePosition(near pet: CGPoint, targeting: Bool) -> CGPoint {
-        let width = min(292, max(188, screenFrame.width * 0.36))
-        let x = min(screenFrame.width - width / 2 - 12, max(width / 2 + 12, pet.x + width / 2 + 24))
+    private func bubblePosition(near pet: CGPoint, width: CGFloat, targeting: Bool) -> CGPoint {
+        // Anchor the leading edge to the pet, then clamp that edge—not the
+        // text's center—so every status expands naturally toward the right.
+        let leadingX = min(screenFrame.width - width - 12, max(12, pet.x + 8))
+        let x = leadingX + width / 2
         let y = min(screenFrame.height - 42, max(42, pet.y + (targeting ? 62 : -36)))
         return .init(x: x, y: y)
     }

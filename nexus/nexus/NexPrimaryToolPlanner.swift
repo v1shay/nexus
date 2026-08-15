@@ -292,6 +292,21 @@ enum NexPrimaryToolPlanner {
         return .init(status: plan.status, actions: actions, memoryWrite: plan.memoryWrite)
     }
 
+    /// Recent Messages requests are unambiguous and must not depend on a
+    /// small local model successfully selecting a native function. The model
+    /// still writes the final summary after the real triage result is present.
+    static func deterministicMessagesTriage(
+        for prompt: String,
+        registeredTools: [NexRegisteredTool]
+    ) -> NexPrimaryToolPlan? {
+        guard registeredTools.contains(where: { $0.name == "messages.triage" }) else { return nil }
+        let normalized = prompt.lowercased()
+        let refersToMessages = ["message", "text", "chat", "sms", "imessage"].contains { normalized.contains($0) }
+        let requestsRecentHistory = ["recent", "latest", "last", "triage", "unread", "new", "couple"].contains { normalized.contains($0) }
+        guard refersToMessages && requestsRecentHistory else { return nil }
+        return .init(actions: [.init(tool: "messages.triage", arguments: [:])])
+    }
+
     /// Retained for the existing browser-specific call sites and tests. New
     /// production planning paths use `groundingActions` with their discovered
     /// allowlist, so schema cleanup remains scoped to model-originated plans.

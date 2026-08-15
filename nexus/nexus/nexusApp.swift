@@ -122,7 +122,7 @@ enum NexusRelaunchProcessPolicy {
         }
         // Two builds in different folders intentionally share a stable bundle
         // identity for TCC.  During a relaunch they can both enumerate one
-        // another; without this ordering check the previous build may win the
+        // another; without this ordering check the coocooprevious build may win the
         // race and terminate the build that was just launched.
         guard let launchDate, let currentLaunchDate else { return true }
         return launchDate < currentLaunchDate
@@ -844,6 +844,7 @@ final class NotchController: ObservableObject {
     private var responseGeneration = UUID()
     private var responseSpeechCursor = StreamedSpeechCursor()
     private var responseTransportBlocked = false
+    private var deferResponseSpeechForCurrentResponse = false
     private var thinkingSentenceChunker = SpeechSentenceChunker()
     private var thinkingModelMarkTask: Task<Void, Never>?
     private let conversationSession: NexConversationSession
@@ -1910,6 +1911,7 @@ final class NotchController: ObservableObject {
         let generation = UUID()
         responseGeneration = generation
         responseSpeechCursor = StreamedSpeechCursor()
+        deferResponseSpeechForCurrentResponse = false
         thinkingSentenceChunker = SpeechSentenceChunker()
         // This immediate presentation classifier is deliberately independent
         // from tool routing. It gives the user a useful line without delaying
@@ -2014,11 +2016,15 @@ final class NotchController: ObservableObject {
                         messages: planningMessages,
                         registeredTools: definitions
                     )
-                    plan = NexPrimaryToolPlanner.groundingActions(
+                    let groundedPlan = NexPrimaryToolPlanner.groundingActions(
                         in: planned,
                         userPrompt: prompt,
                         registeredTools: definitions
                     )
+                    plan = NexPrimaryToolPlanner.deterministicMessagesTriage(
+                        for: prompt,
+                        registeredTools: definitions
+                    ) ?? groundedPlan
                 }
                 guard !Task.isCancelled, responseGeneration == generation else { return }
                 NSLog(
@@ -2134,17 +2140,32 @@ final class NotchController: ObservableObject {
                             webContext: result.context
                         )
                     )
+                    let isMessagesTriage = executedActions.contains { $0.tool == "messages.triage" }
+                    deferResponseSpeechForCurrentResponse = isMessagesTriage
+                    var responseMessages = messages
+                    if isMessagesTriage {
+                        responseMessages.append(.init(
+                            role: "system",
+                            content: "Messages triage response contract: each returned record is labeled record, timestamp, sender, recipient, conversation, read, attachment_path, attachment_type, and body. The body= field is the actual message text; read it and report it. Report meaningful body content first, grouped or ordered by sender and time when useful. Treat attachment fields as secondary metadata; never replace a non-empty body with a generic statement that someone sent an image or PDF. If body= is empty, say it is an attachment-only message and include the available attachment type or filename. Do not invent content, and do not expose internal record IDs or raw tool formatting."
+                        ))
+                    }
                     await statusTask?.value
-                    let answer = try await streamModelResponse(messages: messages, generation: generation)
+                    let answer = try await streamModelResponse(messages: responseMessages, generation: generation)
                     guard !responseTransportBlocked else { throw NexusToolTransportLeakError() }
                     let finalSpeechDelta = responseSpeechCursor.consume(delta: "", accumulated: answer)
-                    if !finalSpeechDelta.isEmpty { responseSpeaker.append(finalSpeechDelta) }
+                    if !deferResponseSpeechForCurrentResponse, !finalSpeechDelta.isEmpty {
+                        responseSpeaker.append(finalSpeechDelta)
+                    }
                     toolResult = result
                 }
                 guard !Task.isCancelled, responseGeneration == generation else { return }
                 let reveal = !suppressAutomaticResponseReveal
                 let completedAnswer = toolResult?.appendingWebSources(to: responseSpeechCursor.text)
                     ?? responseSpeechCursor.text
+                if deferResponseSpeechForCurrentResponse {
+                    let spokenAnswer = await messageHandlePatchedSpeech(for: completedAnswer)
+                    if !spokenAnswer.isEmpty { responseSpeaker.append(spokenAnswer) }
+                }
                 interaction.receiveAnswer(completedAnswer, reveal: reveal)
                 let assistantTurn = await conversationSession.appendAssistant(completedAnswer)
                 await memory.conversationDidChange()
@@ -2408,7 +2429,36 @@ final class NotchController: ObservableObject {
         updateOnScreenCompanionBubble(responseSpeechCursor.text)
         automaticRevealIsWaitingForNotchVisit = reveal
         if reveal, let screen { resize(to: expandedSize(for: screen), animated: true) }
-        if !speechDelta.isEmpty { responseSpeaker.append(speechDelta) }
+        if !deferResponseSpeechForCurrentResponse, !speechDelta.isEmpty { responseSpeaker.append(speechDelta) }
+    }
+
+    private func messageHandlePatchedSpeech(for text: String) async -> String {
+        let handles = Self.messageHandleMatches(in: text)
+        guard !handles.isEmpty else { return text }
+        let names = await messagesActions.displayNames(for: Set(handles))
+        guard !names.isEmpty else { return text }
+
+        var patched = text
+        for handle in handles.sorted(by: { $0.count > $1.count }) {
+            let normalized = Self.normalizedMessageHandle(handle)
+            guard let name = names[normalized], !name.isEmpty else { continue }
+            patched = patched.replacingOccurrences(of: handle, with: name)
+        }
+        return patched
+    }
+
+    private static func messageHandleMatches(in text: String) -> [String] {
+        let pattern = #"(?<!\d)\+?(?:\d[\d\s().-]{5,}\d)(?!\d)"#
+        guard let expression = try? NSRegularExpression(pattern: pattern) else { return [] }
+        let range = NSRange(text.startIndex..<text.endIndex, in: text)
+        return expression.matches(in: text, range: range).compactMap { match in
+            guard let swiftRange = Range(match.range, in: text) else { return nil }
+            return String(text[swiftRange])
+        }
+    }
+
+    private static func normalizedMessageHandle(_ handle: String) -> String {
+        handle.lowercased().filter { $0.isNumber }
     }
 
     private func receiveThinkingDelta(_ delta: String, generation: UUID) {

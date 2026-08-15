@@ -415,9 +415,13 @@ private struct ToolActivityIndicator: View {
                     text: liveLine,
                     isFailure: activity.phase == .failed,
                     style: statusStyle,
-                    fontSize: 11.5
+                    fontSize: 11.5,
+                    fillsAvailableWidth: false
                 )
                 .padding(.horizontal, 5)
+                // Keep the live command label coupled to the pet. The
+                // trailing mark still stays pinned at the other side.
+                Spacer(minLength: 4)
             }
 
             activityTrailingMark
@@ -822,6 +826,7 @@ private struct ShimmeringStatusText: View {
     let isFailure: Bool
     var style: StatusShimmerStyle = .white
     var fontSize: CGFloat = 13
+    var fillsAvailableWidth = true
 
     @ViewBuilder
     var body: some View {
@@ -830,7 +835,7 @@ private struct ShimmeringStatusText: View {
                 .foregroundStyle(isFailure ? .red.opacity(0.9) : .white.opacity(0.78))
                 .font(.system(size: fontSize, weight: .medium, design: .rounded))
                 .lineLimit(1)
-                .frame(maxWidth: .infinity)
+                .frame(maxWidth: fillsAvailableWidth ? .infinity : nil, alignment: .leading)
         } else {
             TimelineView(.animation(minimumInterval: 1 / 30)) { timeline in
                 let phase = timeline.date.timeIntervalSinceReferenceDate
@@ -847,7 +852,7 @@ private struct ShimmeringStatusText: View {
                 }
                 .font(.system(size: fontSize, weight: .medium, design: .rounded))
                 .lineLimit(1)
-                .frame(maxWidth: .infinity)
+                .frame(maxWidth: fillsAvailableWidth ? .infinity : nil, alignment: .leading)
             }
         }
     }
