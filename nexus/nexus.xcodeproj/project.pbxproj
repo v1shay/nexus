@@ -72,6 +72,11 @@
 		X100000530075C29006660E4 /* NexusManagedCloudInference.swift in Sources */ = {isa = PBXBuildFile; fileRef = X100000630075C29006660E4 /* NexusManagedCloudInference.swift */; };
 		X100000730075C29006660E4 /* NexusInferenceFallbackError.swift in Sources */ = {isa = PBXBuildFile; fileRef = X100000830075C29006660E4 /* NexusInferenceFallbackError.swift */; };
 		Y100000130075C29006660E4 /* NexusSettings.swift in Sources */ = {isa = PBXBuildFile; fileRef = Y100000230075C29006660E4 /* NexusSettings.swift */; };
+		A900000130075C29006660E4 /* NexusAutomation.swift in Sources */ = {isa = PBXBuildFile; fileRef = A900000230075C29006660E4 /* NexusAutomation.swift */; };
+		A900000530075C29006660E4 /* NexusPermissionCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = A900000630075C29006660E4 /* NexusPermissionCoordinator.swift */; };
+		E200000130075C29006660E4 /* NexusOnScreenCompanion.swift in Sources */ = {isa = PBXBuildFile; fileRef = E200000230075C29006660E4 /* NexusOnScreenCompanion.swift */; };
+		A900000330075C29006660E4 /* NexusAutomationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A900000430075C29006660E4 /* NexusAutomationTests.swift */; };
+		A900000730075C29006660E4 /* NexusPermissionCoordinatorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A900000830075C29006660E4 /* NexusPermissionCoordinatorTests.swift */; };
 		G100000330075C29006660E4 /* NexusConnectFraming.swift in Sources */ = {isa = PBXBuildFile; fileRef = G100000430075C29006660E4 /* NexusConnectFraming.swift */; };
 		G100000530075C29006660E4 /* NexusConnectSecurity.swift in Sources */ = {isa = PBXBuildFile; fileRef = G100000630075C29006660E4 /* NexusConnectSecurity.swift */; };
 		G100000730075C29006660E4 /* NexusConnectPolicy.swift in Sources */ = {isa = PBXBuildFile; fileRef = G100000830075C29006660E4 /* NexusConnectPolicy.swift */; };
@@ -185,6 +190,11 @@
 		X100000630075C29006660E4 /* NexusManagedCloudInference.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NexusManagedCloudInference.swift; sourceTree = "<group>"; };
 		X100000830075C29006660E4 /* NexusInferenceFallbackError.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NexusInferenceFallbackError.swift; sourceTree = "<group>"; };
 		Y100000230075C29006660E4 /* NexusSettings.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NexusSettings.swift; sourceTree = "<group>"; };
+		A900000230075C29006660E4 /* NexusAutomation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NexusAutomation.swift; sourceTree = "<group>"; };
+		A900000630075C29006660E4 /* NexusPermissionCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NexusPermissionCoordinator.swift; sourceTree = "<group>"; };
+		E200000230075C29006660E4 /* NexusOnScreenCompanion.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NexusOnScreenCompanion.swift; sourceTree = "<group>"; };
+		A900000430075C29006660E4 /* NexusAutomationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NexusAutomationTests.swift; sourceTree = "<group>"; };
+		A900000830075C29006660E4 /* NexusPermissionCoordinatorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NexusPermissionCoordinatorTests.swift; sourceTree = "<group>"; };
 		G100000430075C29006660E4 /* NexusConnectFraming.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NexusConnectFraming.swift; sourceTree = "<group>"; };
 		G100000630075C29006660E4 /* NexusConnectSecurity.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NexusConnectSecurity.swift; sourceTree = "<group>"; };
 		G100000830075C29006660E4 /* NexusConnectPolicy.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NexusConnectPolicy.swift; sourceTree = "<group>"; };
@@ -404,6 +414,9 @@
 				X100000630075C29006660E4 /* NexusManagedCloudInference.swift */,
 				X100000830075C29006660E4 /* NexusInferenceFallbackError.swift */,
 				Y100000230075C29006660E4 /* NexusSettings.swift */,
+				A900000230075C29006660E4 /* NexusAutomation.swift */,
+				A900000630075C29006660E4 /* NexusPermissionCoordinator.swift */,
+				E200000230075C29006660E4 /* NexusOnScreenCompanion.swift */,
 				G100000430075C29006660E4 /* NexusConnectFraming.swift */,
 				G100000630075C29006660E4 /* NexusConnectSecurity.swift */,
 				G100000830075C29006660E4 /* NexusConnectPolicy.swift */,
@@ -459,6 +472,8 @@
 				T100000430075C29006660E4 /* NexWebSearchTests.swift */,
 				W100000430075C29006660E4 /* NexPrimaryToolPlannerTests.swift */,
 				X100000430075C29006660E4 /* NexApiClientTests.swift */,
+				A900000430075C29006660E4 /* NexusAutomationTests.swift */,
+				A900000830075C29006660E4 /* NexusPermissionCoordinatorTests.swift */,
 			);
 			path = nexusTests;
 			sourceTree = "<group>";
@@ -673,6 +688,9 @@
 				X100000530075C29006660E4 /* NexusManagedCloudInference.swift in Sources */,
 				X100000730075C29006660E4 /* NexusInferenceFallbackError.swift in Sources */,
 				Y100000130075C29006660E4 /* NexusSettings.swift in Sources */,
+				A900000130075C29006660E4 /* NexusAutomation.swift in Sources */,
+				A900000530075C29006660E4 /* NexusPermissionCoordinator.swift in Sources */,
+				E200000130075C29006660E4 /* NexusOnScreenCompanion.swift in Sources */,
 				G100000330075C29006660E4 /* NexusConnectFraming.swift in Sources */,
 				G100000530075C29006660E4 /* NexusConnectSecurity.swift in Sources */,
 				G100000730075C29006660E4 /* NexusConnectPolicy.swift in Sources */,
@@ -721,6 +739,8 @@
 				T100000330075C29006660E4 /* NexWebSearchTests.swift in Sources */,
 				W100000330075C29006660E4 /* NexPrimaryToolPlannerTests.swift in Sources */,
 				X100000330075C29006660E4 /* NexApiClientTests.swift in Sources */,
+				A900000330075C29006660E4 /* NexusAutomationTests.swift in Sources */,
+				A900000730075C29006660E4 /* NexusPermissionCoordinatorTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -868,10 +888,9 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "system local code signing";
 				CODE_SIGN_ENTITLEMENTS = nexus/nexus.entitlements;
-				CODE_SIGN_STYLE = Automatic;
-				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "-";
-				"CODE_SIGN_STYLE[sdk=macosx*]" = Manual;
+				CODE_SIGN_STYLE = Manual;
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_ASSET_PATHS = "\"nexus/Preview Content\"";
 				"ENABLE_DEBUG_DYLIB[sdk=macosx*]" = NO;
@@ -912,8 +931,6 @@
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_ENTITLEMENTS = nexus/nexus.entitlements;
 				CODE_SIGN_STYLE = Automatic;
-				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "-";
-				"CODE_SIGN_STYLE[sdk=macosx*]" = Manual;
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_ASSET_PATHS = "\"nexus/Preview Content\"";
 				ENABLE_PREVIEWS = YES;
@@ -951,7 +968,8 @@
 			buildSettings = {
 				ALWAYS_EMBED_SWIFT_STANDARD_LIBRARIES = YES;
 				BUNDLE_LOADER = "$(TEST_HOST)";
-				CODE_SIGN_STYLE = Automatic;
+				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "system local code signing";
+				CODE_SIGN_STYLE = Manual;
 				CURRENT_PROJECT_VERSION = 1;
 				GENERATE_INFOPLIST_FILE = YES;
 				IPHONEOS_DEPLOYMENT_TARGET = 17.5;
@@ -994,7 +1012,8 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ALWAYS_EMBED_SWIFT_STANDARD_LIBRARIES = YES;
-				CODE_SIGN_STYLE = Automatic;
+				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "system local code signing";
+				CODE_SIGN_STYLE = Manual;
 				CURRENT_PROJECT_VERSION = 1;
 				GENERATE_INFOPLIST_FILE = YES;
 				IPHONEOS_DEPLOYMENT_TARGET = 17.5;

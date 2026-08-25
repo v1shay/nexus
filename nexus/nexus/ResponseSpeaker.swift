@@ -1,6 +1,38 @@
 import AVFoundation
 import Foundation
 
+/// The visible answer remains the source of truth. This only chooses a
+/// listenable subset after the full answer exists, avoiding a second model
+/// pass that could omit or fabricate details.
+enum NexusSpokenResponseSummary {
+    static func make(from answer: String, maximumWords: Int = 95) -> String {
+        let normalized = answer
+            .replacingOccurrences(of: "```", with: "")
+            .replacingOccurrences(of: "*", with: "")
+            .replacingOccurrences(of: "#", with: "")
+            .replacingOccurrences(of: "\n", with: " ")
+            .replacingOccurrences(of: #"\s+"#, with: " ", options: .regularExpression)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !normalized.isEmpty else { return "" }
+
+        let sentences = normalized.split(whereSeparator: { ".!?".contains($0) })
+        var selected: [String] = []
+        var wordCount = 0
+        for sentence in sentences {
+            let cleaned = sentence.trimmingCharacters(in: .whitespacesAndNewlines)
+            let words = cleaned.split(whereSeparator: \.isWhitespace)
+            guard words.count >= 3 else { continue }
+            if !selected.isEmpty, wordCount + words.count > maximumWords { break }
+            selected.append(cleaned)
+            wordCount += words.count
+            if selected.count == 3 { break }
+        }
+        let result = selected.isEmpty ? normalized : selected.joined(separator: ". ") + "."
+        let boundedWords = result.split(whereSeparator: \.isWhitespace).prefix(maximumWords)
+        return boundedWords.joined(separator: " ") + (result.split(whereSeparator: \.isWhitespace).count > maximumWords ? "." : "")
+    }
+}
+
 /// Owns one Piper process for an entire answer and schedules its raw PCM
 /// output directly into AVAudioEngine. This removes the per-sentence model-load
 /// delay and lets speech follow the model's token stream.
@@ -56,8 +88,12 @@ final class ResponseSpeaker {
     }
 
     /// Bypasses phrase buffering for acknowledgements and tool-status speech.
-    func speakImmediately(_ text: String) {
+    func speakImmediately(_ text: String, voiceModelPath: String? = nil) {
         guard !isMuted else { return }
+        if let voiceModelPath, !voiceModelPath.isEmpty {
+            speakWithConfiguredVoice(text, modelPath: voiceModelPath)
+            return
+        }
         enqueue(text)
     }
 
@@ -202,6 +238,31 @@ final class ResponseSpeaker {
                 speakWithSystemVoice(cleaned)
             }
         } else {
+            speakWithSystemVoice(cleaned)
+        }
+    }
+
+    /// An automation may pin an installed Piper voice while interactive Nexus
+    /// continues using the global response-voice preference. This temporary
+    /// speaker is isolated so it cannot disrupt an active streamed reply.
+    private func speakWithConfiguredVoice(_ text: String, modelPath: String) {
+        let cleaned = SpeechSanitizer.forSpeech(text, suppressCitations: suppressCitationSpeech)
+        guard !cleaned.isEmpty else { return }
+        guard let configuration = PiperVoiceConfiguration.detect(
+            preferredModelPath: modelPath,
+            additionalVoiceDirectories: settings?.piperVoiceDirectories ?? []
+        ) else {
+            speakWithSystemVoice(cleaned)
+            return
+        }
+        do {
+            piperConfiguration = configuration
+            try startPiperStream(configuration)
+            try piperInput?.write(contentsOf: Data((cleaned + "\n").utf8))
+            try piperInput?.close()
+            piperInput = nil
+        } catch {
+            piperConfiguration = nil
             speakWithSystemVoice(cleaned)
         }
     }

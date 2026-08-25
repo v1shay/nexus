@@ -11,15 +11,18 @@ struct ContentView: View {
 
     var body: some View {
         ZStack(alignment: .top) {
-            if notch.isShowingMusic {
+            // Voice always wins the visual surface.  A live browser/music
+            // source may own the resting notch, but it must not hide the
+            // listening or thinking transition after the user starts Nexus.
+            if notch.isListening || notch.isThinking {
+                ListeningWings(isThinking: notch.isThinking)
+                    .transition(.opacity.combined(with: .scale(scale: 0.92, anchor: .top)))
+            } else if notch.isShowingMusic {
                 MusicPlaybackIndicator()
                     .transition(.opacity.combined(with: .scale(scale: 0.94, anchor: .top)))
             } else if notch.isUsingTool, let activity = notch.toolActivity {
                 ToolActivityIndicator(activity: activity)
                     .transition(.opacity.combined(with: .scale(scale: 0.94, anchor: .top)))
-            } else if notch.isListening || notch.isThinking {
-                ListeningWings(isThinking: notch.isThinking)
-                    .transition(.opacity.combined(with: .scale(scale: 0.92, anchor: .top)))
             } else {
                 AdaptiveNotchGlass(isExpanded: notch.isExpanded)
 
@@ -412,9 +415,13 @@ private struct ToolActivityIndicator: View {
                     text: liveLine,
                     isFailure: activity.phase == .failed,
                     style: statusStyle,
-                    fontSize: 11.5
+                    fontSize: 11.5,
+                    fillsAvailableWidth: false
                 )
                 .padding(.horizontal, 5)
+                // Keep the live command label coupled to the pet. The
+                // trailing mark still stays pinned at the other side.
+                Spacer(minLength: 4)
             }
 
             activityTrailingMark
@@ -637,7 +644,8 @@ private struct CodexUsagePopover: View {
 private struct CodexLogoMask: View {
     var body: some View {
         Group {
-            if let image = NSImage(contentsOf: CodexProgressAssets.avatarURL) {
+            if let avatarURL = CodexProgressAssets.avatarURL,
+               let image = NSImage(contentsOf: avatarURL) {
                 Image(nsImage: image).resizable().interpolation(.high).scaledToFit()
             } else {
                 Image(systemName: "chevron.left.forwardslash.chevron.right").resizable().scaledToFit()
@@ -769,6 +777,13 @@ struct ToolIconView: View {
                 } else {
                     Image(systemName: fallback).resizable().scaledToFit()
                 }
+            case .bundleResource(let name, let subdirectory, let fallback):
+                if let url = Bundle.main.url(forResource: name, withExtension: nil, subdirectory: subdirectory),
+                   let image = NSImage(contentsOf: url) {
+                    Image(nsImage: image).resizable().interpolation(.high).scaledToFit()
+                } else {
+                    Image(systemName: fallback).resizable().scaledToFit()
+                }
             case .svg(let data, let fallback):
                 if let image = NSImage(data: data) {
                     Image(nsImage: image).resizable().scaledToFit()
@@ -811,6 +826,7 @@ private struct ShimmeringStatusText: View {
     let isFailure: Bool
     var style: StatusShimmerStyle = .white
     var fontSize: CGFloat = 13
+    var fillsAvailableWidth = true
 
     @ViewBuilder
     var body: some View {
@@ -819,7 +835,7 @@ private struct ShimmeringStatusText: View {
                 .foregroundStyle(isFailure ? .red.opacity(0.9) : .white.opacity(0.78))
                 .font(.system(size: fontSize, weight: .medium, design: .rounded))
                 .lineLimit(1)
-                .frame(maxWidth: .infinity)
+                .frame(maxWidth: fillsAvailableWidth ? .infinity : nil, alignment: .leading)
         } else {
             TimelineView(.animation(minimumInterval: 1 / 30)) { timeline in
                 let phase = timeline.date.timeIntervalSinceReferenceDate
@@ -836,7 +852,7 @@ private struct ShimmeringStatusText: View {
                 }
                 .font(.system(size: fontSize, weight: .medium, design: .rounded))
                 .lineLimit(1)
-                .frame(maxWidth: .infinity)
+                .frame(maxWidth: fillsAvailableWidth ? .infinity : nil, alignment: .leading)
             }
         }
     }
@@ -1138,6 +1154,17 @@ private struct TranscriptContents: View {
                     }
 
                     BatteryPercentageView()
+
+                    Button { notch.openAutomations() } label: {
+                        Image(systemName: "clock.arrow.2.circlepath")
+                            .font(.system(size: 14, weight: .medium))
+                            .frame(width: 30, height: 30)
+                            .background(.cyan.opacity(0.12), in: Circle())
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(.cyan.opacity(0.9))
+                    .help("Automations")
+                    .accessibilityLabel("Open Nexus automations")
 
                     Button { notch.openModelAggregator() } label: {
                         Image(systemName: "cube.transparent")

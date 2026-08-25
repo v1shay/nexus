@@ -479,6 +479,37 @@ final class ModelDownloadViewModel: ObservableObject {
         return .fallback
     }
 
+    /// Automation runs pin a local model without changing the user's visible
+    /// conversational selection. API-backed automations retain the normal
+    /// active-provider path above because those configurations are not local
+    /// model records.
+    func toolPlan(
+        using model: LocalModel,
+        messages: [NexusChatMessage],
+        registeredTools: [NexRegisteredTool]
+    ) async throws -> NexPrimaryToolPlan {
+        guard isUsable(model) else {
+            throw LocalModelError.invalidResponse("The automation model is no longer installed or available")
+        }
+        if model.backend == .ollama,
+           (connect == nil || connect?.modelRoute == .thisMac) {
+            return try await ollama.planTools(
+                model: model.identifier,
+                messages: messages,
+                registeredTools: registeredTools
+            )
+        }
+        let raw = try await response(
+            using: model,
+            messages: messages,
+            temperature: 0,
+            maximumTokens: 360,
+            includeNexusSystemPrompt: true,
+            onDelta: { _, _ in }
+        )
+        return NexPrimaryToolPlanner.parseStrict(raw, registeredTools: registeredTools) ?? .fallback
+    }
+
     /// Used only for optional, non-blocking status-line generation. It never
     /// changes the user's active conversational model or routing selection.
     func response(

@@ -6,6 +6,7 @@ import CryptoKit
 import Darwin
 import IOKit.hid
 import Security
+import ScreenCaptureKit
 import Speech
 
 /// A durable, low-volume trace for the global surfaces that are hardest to
@@ -121,7 +122,7 @@ enum NexusRelaunchProcessPolicy {
         }
         // Two builds in different folders intentionally share a stable bundle
         // identity for TCC.  During a relaunch they can both enumerate one
-        // another; without this ordering check the previous build may win the
+        // another; without this ordering check the coocooprevious build may win the
         // race and terminate the build that was just launched.
         guard let launchDate, let currentLaunchDate else { return true }
         return launchDate < currentLaunchDate
@@ -156,10 +157,11 @@ struct NexusApp: App {
 
 private extension Notification.Name {
     static let nexusOpenControlPanel = Notification.Name("na.nexus.open-control-panel")
+    static let nexusInteractiveHandoff = Notification.Name("na.nexus.interactive-handoff")
 }
 
 private struct NexusSettingsShortcutView: View {
-    @ObservedObject private var permissionHealth = NexusPermissionHealth.shared
+    @ObservedObject private var permissionCoordinator = NexusPermissionCoordinator.shared
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
@@ -168,7 +170,7 @@ private struct NexusSettingsShortcutView: View {
             Text("Permissions and app controls live in the Nexus control panel, where every status is verified against this running build.")
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
-            Text(permissionHealth.statusMessage)
+            Text(permissionCoordinator.statusMessage())
                 .font(.footnote)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
@@ -182,7 +184,9 @@ private struct NexusSettingsShortcutView: View {
         }
         .padding(24)
         .frame(width: 440)
-        .onAppear { permissionHealth.refresh() }
+        .onAppear {
+            Task { await permissionCoordinator.resumeAtLaunch() }
+        }
     }
 }
 
@@ -194,9 +198,12 @@ final class NexusAppDelegate: NSObject, NSApplicationDelegate {
     private var automationWindow: NSWindow?
     private var connectHost: NexusConnectHostDaemon?
     private var nexCLIHost: NexCLIHostDaemon?
+    private var automationHost: NexusAutomationHostDaemon?
     private var headlessControlHost: NexusHeadlessControlHost?
     private var launchTask: Task<Void, Never>?
     private var settingsPanelObserver: NSObjectProtocol?
+    private var interactiveHandoffObserver: NSObjectProtocol?
+    private var ownsInteractiveSession = false
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         settingsPanelObserver = NotificationCenter.default.addObserver(
@@ -206,6 +213,19 @@ final class NexusAppDelegate: NSObject, NSApplicationDelegate {
         ) { [weak self] _ in
             Task { @MainActor [weak self] in
                 self?.notch?.openModelAggregator()
+            }
+        }
+        // A process may have survived a debugger detach or a system hang
+        // while still holding the old UI lease.  A new launch only gives up
+        // after this live process acknowledges its activation request.
+        interactiveHandoffObserver = DistributedNotificationCenter.default().addObserver(
+            forName: .nexusInteractiveHandoff,
+            object: nil,
+            queue: .main
+        ) { notification in
+            guard let token = notification.object as? String else { return }
+            Task { @MainActor in
+                Self.acknowledgeInteractiveHandoff(token)
             }
         }
         // SwiftUI's default Settings command can produce a chrome-only
@@ -260,6 +280,18 @@ final class NexusAppDelegate: NSObject, NSApplicationDelegate {
             launchTask = Task { @MainActor in await host.start() }
             return
         }
+        if CommandLine.arguments.contains("--nexus-automation-power-helper") {
+            NSApp.setActivationPolicy(.prohibited)
+            let requestPath = CommandLine.arguments.drop { $0 != "--nexus-automation-power-helper" }.dropFirst().first
+            Foundation.exit(NexusAutomationPowerScheduler.runPrivilegedHelper(requestPath: requestPath))
+        }
+        if NexusAutomationHostProcess.isCurrentProcess {
+            NSApp.setActivationPolicy(.prohibited)
+            let host = NexusAutomationHostDaemon()
+            automationHost = host
+            launchTask = Task { @MainActor in await host.start() }
+            return
+        }
         if CommandLine.arguments.contains("--nexus-ui-smoke") {
             // This is intentionally a controller-level smoke test, not a
             // hidden production mode. It exercises typed submission through
@@ -281,23 +313,25 @@ final class NexusAppDelegate: NSObject, NSApplicationDelegate {
         }
         if CommandLine.arguments.contains("--nexus-permission-smoke") {
             NSApp.setActivationPolicy(.prohibited)
-            let snapshot = NexusPermissionSnapshot.current
-            let output = """
-            {"inputMonitoring":\(snapshot.inputMonitoring),"accessibility":\(snapshot.accessibility),"screenRecording":\(snapshot.screenRecording),"microphone":\(snapshot.microphone),"microphoneStatus":\(AVCaptureDevice.authorizationStatus(for: .audio).rawValue),"speechRecognition":\(snapshot.speechRecognition),"speechRecognitionStatus":\(SFSpeechRecognizer.authorizationStatus().rawValue),"speechUsageDescription":"\((Bundle.main.object(forInfoDictionaryKey: "NSSpeechRecognitionUsageDescription") as? String ?? "").replacingOccurrences(of: "\\\"", with: "'"))","bundlePath":"\(Bundle.main.bundlePath.replacingOccurrences(of: "\\\"", with: "'"))","identity":"\(NexusPermissionHealth.designatedRequirementFingerprint())"}
+            launchTask = Task { @MainActor in
+                let coordinator = NexusPermissionCoordinator.shared
+                await coordinator.resumeAtLaunch()
+                let identity = NexusPermissionSigningIdentity.current()
+                let output = """
+                {"inputMonitoring":false,"accessibility":\(coordinator.isVerified(.accessibility)),"screenRecording":\(coordinator.isVerified(.screenRecording)),"microphone":\(coordinator.isVerified(.microphone)),"microphoneStatus":\(AVCaptureDevice.authorizationStatus(for: .audio).rawValue),"speechRecognition":\(coordinator.isVerified(.speechRecognition)),"speechRecognitionStatus":\(SFSpeechRecognizer.authorizationStatus().rawValue),"speechUsageDescription":"\((Bundle.main.object(forInfoDictionaryKey: "NSSpeechRecognitionUsageDescription") as? String ?? "").replacingOccurrences(of: "\\\"", with: "'"))","bundlePath":"\(Bundle.main.bundlePath.replacingOccurrences(of: "\\\"", with: "'"))","identity":"\(identity.requirementHash)"}
 
-            """
-            FileHandle.standardOutput.write(Data(output.utf8))
-            Foundation.exit(0)
+                """
+                FileHandle.standardOutput.write(Data(output.utf8))
+                Foundation.exit(0)
+            }
+            return
         }
         if CommandLine.arguments.contains("--nexus-request-speech-smoke") {
             NSApp.setActivationPolicy(.regular)
             launchTask = Task { @MainActor in
-                if SFSpeechRecognizer.authorizationStatus() == .notDetermined,
-                   NexusPermissionHostIdentity.current().isDurable {
+                if SFSpeechRecognizer.authorizationStatus() == .notDetermined {
                     NSApp.activate(ignoringOtherApps: true)
-                    SFSpeechRecognizer.requestAuthorization { status in
-                        NexusDiagnostics.record("[Nexus Permissions] speech smoke result=\(status.rawValue)")
-                    }
+                    _ = await NexusPermissionCoordinator.shared.request(.speechRecognition)
                 }
                 // Speech.framework can fail to invoke its callback for a
                 // replaced local build. Observe the live TCC state after a
@@ -313,16 +347,20 @@ final class NexusAppDelegate: NSObject, NSApplicationDelegate {
         }
         if CommandLine.arguments.contains("--nexus-screen-smoke") {
             NSApp.setActivationPolicy(.prohibited)
-            let attachment = NexusScreenCapture.captureCurrentScreen()
-            let imageBytes = attachment.flatMap { Data(base64Encoded: $0.base64) }
-            let captured = attachment?.mediaType == "image/jpeg"
-                && (imageBytes?.count ?? 0) > 1_000
-            let output = """
-            {"screenRecording":\(NexusScreenCapture.hasAccess),"captured":\(captured),"mediaType":"\(attachment?.mediaType ?? "")","bytes":\(imageBytes?.count ?? 0)}
+            launchTask = Task { @MainActor in
+                await NexusPermissionCoordinator.shared.resumeAtLaunch()
+                let attachment = await NexusScreenCapture.captureCurrentScreen()
+                let imageBytes = attachment.flatMap { Data(base64Encoded: $0.base64) }
+                let captured = attachment?.mediaType == "image/jpeg"
+                    && (imageBytes?.count ?? 0) > 1_000
+                let output = """
+                {"screenRecording":\(NexusScreenCapture.hasAccess),"captured":\(captured),"mediaType":"\(attachment?.mediaType ?? "")","bytes":\(imageBytes?.count ?? 0)}
 
-            """
-            FileHandle.standardOutput.write(Data(output.utf8))
-            Foundation.exit(captured ? 0 : 1)
+                """
+                FileHandle.standardOutput.write(Data(output.utf8))
+                Foundation.exit(captured ? 0 : 1)
+            }
+            return
         }
         if let smokeIndex = CommandLine.arguments.firstIndex(of: "--nexus-vision-smoke") {
             NSApp.setActivationPolicy(.prohibited)
@@ -330,7 +368,7 @@ final class NexusAppDelegate: NSObject, NSApplicationDelegate {
                 ? CommandLine.arguments[smokeIndex + 1]
                 : "qwen3-vl:32b"
             launchTask = Task {
-                guard let attachment = NexusScreenCapture.captureCurrentScreen() else {
+                guard let attachment = await NexusScreenCapture.captureCurrentScreen() else {
                     FileHandle.standardOutput.write(Data(#"{"ok":false,"error":"screen capture failed"}\n"#.utf8))
                     Foundation.exit(1)
                 }
@@ -476,22 +514,26 @@ final class NexusAppDelegate: NSObject, NSApplicationDelegate {
         headlessControlHost.start()
         self.headlessControlHost = headlessControlHost
         launchTask = Task { @MainActor [weak self] in
-            await Self.retireOlderInstances()
+            if await Self.activateExistingInteractiveInstanceIfNeeded() {
+                NSApp.terminate(nil)
+                return
+            }
+            Self.claimInteractiveSession()
+            self?.ownsInteractiveSession = true
             guard !Task.isCancelled else { return }
-            NexusPermissionHealth.shared.validateAtLaunch()
+            // Permission reconciliation includes per-target Apple Event TCC
+            // probes. Some target applications can take a long time to
+            // answer those probes, so never make the visible Nexus surface
+            // wait for them before it has installed.
             let notch = NotchController()
             self?.notch = notch
             notch.install()
             headlessControlHost.attach(controller: notch)
             self?.installMenuBarOrb(for: notch)
-            await NexusPermissionHealth.shared.requestCorePermissionsIfNeeded(
-                // Core onboarding is deliberately comprehensive. A vision
-                // model may be selected after launch, and deferring Screen
-                // Recording until then produces an avoidable second setup
-                // loop.
-                includeScreenRecording: true
-            )
-            notch.reconcilePermissions()
+            Task { @MainActor in
+                await NexusPermissionCoordinator.shared.resumeAtLaunch()
+                notch.reconcilePermissions()
+            }
             // The optional NexCLI worker receives a local runtime lease and
             // must never delay the live notch or its in-process control host.
             Task { @MainActor in
@@ -512,6 +554,13 @@ final class NexusAppDelegate: NSObject, NSApplicationDelegate {
                     NexusDiagnostics.record("[Nexus Launch] NexCLI host deferred: \(error.localizedDescription)")
                 }
             }
+            Task.detached {
+                do {
+                    try NexusAutomationHostManager.shared.installAndStart()
+                } catch {
+                    NexusDiagnostics.record("[Nexus Automation] host deferred: \(error.localizedDescription)")
+                }
+            }
         }
     }
 
@@ -519,18 +568,23 @@ final class NexusAppDelegate: NSObject, NSApplicationDelegate {
         if let settingsPanelObserver {
             NotificationCenter.default.removeObserver(settingsPanelObserver)
         }
+        if let interactiveHandoffObserver {
+            DistributedNotificationCenter.default().removeObserver(interactiveHandoffObserver)
+        }
         launchTask?.cancel()
         notch?.shutdown()
         connectHost?.stop()
         nexCLIHost?.stop()
+        automationHost?.stop()
         headlessControlHost?.stop()
         NexusDuplexVoiceRuntime.shared.stop()
         if let menuBarItem { NSStatusBar.system.removeStatusItem(menuBarItem) }
+        if ownsInteractiveSession { Self.releaseInteractiveSession() }
     }
 
     func applicationDidBecomeActive(_ notification: Notification) {
         routeSettingsMenuToControlPanel()
-        NexusPermissionHealth.shared.refresh()
+        Task { await NexusPermissionCoordinator.shared.resumeAtLaunch() }
         notch?.reconcilePermissions()
     }
 
@@ -578,70 +632,77 @@ final class NexusAppDelegate: NSObject, NSApplicationDelegate {
         item.action = #selector(openNexusControlPanelFromMenu(_:))
     }
 
-    /// Xcode can launch a new debug build while the previous accessory app is
-    /// still alive. Retire the older process before creating any panel so two
-    /// independent notch windows can never be visible together.
-    private static func retireOlderInstances() async {
-        // XCTest injects into the app executable. Killing another injected test
-        // host here can terminate a parallel test run before XCTest boots.
-        guard NSClassFromString("XCTestCase") == nil,
-              !CommandLine.arguments.contains(where: { $0.localizedCaseInsensitiveContains("xctest") }) else {
-            return
-        }
-        guard let identifier = Bundle.main.bundleIdentifier else { return }
-        let currentPID = ProcessInfo.processInfo.processIdentifier
-        let currentLaunchDate = NSRunningApplication.current.launchDate
-        let helperPIDs = Set([
-            NexusConnectHostManager().currentStatus()?.processID,
-            NexCLIHostManager.shared.currentStatus()?.processID
-        ].compactMap { $0 })
-        let olderInstances = NSRunningApplication
-            .runningApplications(withBundleIdentifier: identifier)
-            .filter {
-                NexusRelaunchProcessPolicy.shouldRetire(
-                    processID: $0.processIdentifier,
-                    currentPID: currentPID,
-                    helperPIDs: helperPIDs,
-                    launchDate: $0.launchDate,
-                    currentLaunchDate: currentLaunchDate
-                )
-            }
-
-        guard !olderInstances.isEmpty else { return }
-        NSLog(
-            "Nexus %d is retiring older process(es): %@",
-            currentPID,
-            olderInstances.map { String($0.processIdentifier) }.joined(separator: ", ")
-        )
-        let olderDebugServers = olderInstances.compactMap {
-            debugServerParent(for: $0.processIdentifier)
-        }
-        olderDebugServers.forEach {
-            _ = Darwin.kill($0, SIGTERM)
-        }
-        olderInstances.forEach {
-            _ = Darwin.kill($0.processIdentifier, SIGTERM)
-        }
-        for _ in 0..<12 where olderInstances.contains(where: { !$0.isTerminated }) {
-            try? await Task.sleep(for: .milliseconds(50))
-        }
-        olderInstances.filter { !$0.isTerminated }.forEach {
-            _ = Darwin.kill($0.processIdentifier, SIGKILL)
-        }
+    private static var interactiveSessionURL: URL {
+        FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent("Library/Application Support/Nexus/InteractiveSession.json")
     }
 
-    /// LLDB holds signals sent to a traced app. Retiring that app's dedicated
-    /// debugserver first lets a new Xcode run replace the old notch cleanly.
-    private static func debugServerParent(for processID: pid_t) -> pid_t? {
-        var info = proc_bsdinfo()
-        let infoSize = MemoryLayout<proc_bsdinfo>.size
-        guard proc_pidinfo(processID, PROC_PIDTBSDINFO, 0, &info, Int32(infoSize)) == infoSize else {
-            return nil
+    private struct InteractiveSession: Codable { let pid: pid_t }
+
+    /// Background automation/CLI hosts share the app bundle but never own the
+    /// UI lease. This avoids both invisible handoffs and force-killing a
+    /// process while macOS may be presenting a consent sheet.
+    private static func activateExistingInteractiveInstanceIfNeeded() async -> Bool {
+        guard NSClassFromString("XCTestCase") == nil,
+              !CommandLine.arguments.contains(where: { $0.localizedCaseInsensitiveContains("xctest") }) else {
+            return false
         }
-        let parentID = pid_t(info.pbi_ppid)
-        var pathBuffer = [CChar](repeating: 0, count: 4_096)
-        guard proc_pidpath(parentID, &pathBuffer, UInt32(pathBuffer.count)) > 0 else { return nil }
-        return String(cString: pathBuffer).hasSuffix("/debugserver") ? parentID : nil
+        let currentPID = ProcessInfo.processInfo.processIdentifier
+        guard let data = try? Data(contentsOf: interactiveSessionURL),
+              let session = try? JSONDecoder().decode(InteractiveSession.self, from: data),
+              session.pid != currentPID else { return false }
+        guard kill(session.pid, 0) == 0,
+              let application = NSRunningApplication(processIdentifier: session.pid),
+              !application.isTerminated else {
+            try? FileManager.default.removeItem(at: interactiveSessionURL)
+            return false
+        }
+        application.activate(options: [.activateIgnoringOtherApps])
+        let token = UUID().uuidString
+        let acknowledgement = interactiveHandoffAcknowledgementURL(token: token)
+        try? FileManager.default.removeItem(at: acknowledgement)
+        DistributedNotificationCenter.default().post(
+            name: .nexusInteractiveHandoff,
+            object: token,
+            userInfo: nil
+        )
+        // Do not treat a PID as a healthy UI. A small, asynchronous handshake
+        // lets a responsive existing instance foreground itself, while a hung
+        // process or older implementation cannot strand a fresh launch.
+        try? await Task.sleep(for: .milliseconds(450))
+        let acknowledged = (try? String(contentsOf: acknowledgement, encoding: .utf8)) == token
+        try? FileManager.default.removeItem(at: acknowledgement)
+        return acknowledged
+    }
+
+    private static func interactiveHandoffAcknowledgementURL(token: String) -> URL {
+        interactiveSessionURL.deletingLastPathComponent()
+            .appendingPathComponent("InteractiveHandoff-\(token).ack")
+    }
+
+    private static func acknowledgeInteractiveHandoff(_ token: String) {
+        let currentPID = ProcessInfo.processInfo.processIdentifier
+        guard let data = try? Data(contentsOf: interactiveSessionURL),
+              let session = try? JSONDecoder().decode(InteractiveSession.self, from: data),
+              session.pid == currentPID else { return }
+        let acknowledgement = interactiveHandoffAcknowledgementURL(token: token)
+        try? FileManager.default.createDirectory(at: acknowledgement.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try? token.data(using: .utf8)?.write(to: acknowledgement, options: .atomic)
+        NSApp.activate(ignoringOtherApps: true)
+    }
+
+    private static func claimInteractiveSession() {
+        let url = interactiveSessionURL
+        try? FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        let data = try? JSONEncoder().encode(InteractiveSession(pid: ProcessInfo.processInfo.processIdentifier))
+        try? data?.write(to: url, options: .atomic)
+    }
+
+    private static func releaseInteractiveSession() {
+        guard let data = try? Data(contentsOf: interactiveSessionURL),
+              let session = try? JSONDecoder().decode(InteractiveSession.self, from: data),
+              session.pid == ProcessInfo.processInfo.processIdentifier else { return }
+        try? FileManager.default.removeItem(at: interactiveSessionURL)
     }
 }
 
@@ -689,6 +750,7 @@ final class NotchController: ObservableObject {
     var workingStatus: String? { interaction.workingStatus }
     var thinkingSentence: String? { interaction.thinkingSentence }
     var activeModel: LocalModel? { modelDownloadViewModel.activeModel }
+    var automations: NexusAutomationController { automationController }
     var activeModelSupportsThinking: Bool { modelDownloadViewModel.activeModelSupportsThinking }
     var thinkingModeEnabled: Bool { modelDownloadViewModel.thinkingModeEnabled }
     var isShowingMusic: Bool { interaction.presentation == .idle && music.isPlaying }
@@ -782,6 +844,7 @@ final class NotchController: ObservableObject {
     private var responseGeneration = UUID()
     private var responseSpeechCursor = StreamedSpeechCursor()
     private var responseTransportBlocked = false
+    private var deferResponseSpeechForCurrentResponse = false
     private var thinkingSentenceChunker = SpeechSentenceChunker()
     private var thinkingModelMarkTask: Task<Void, Never>?
     private let conversationSession: NexConversationSession
@@ -810,6 +873,7 @@ final class NotchController: ObservableObject {
     private lazy var connectorAuth = NexConnectorAuthController.shared
     private lazy var connectorManager = NexConnectorManager()
     private lazy var webSearch = NexWebSearchController(registry: memory.registry)
+    private lazy var weatherTools = NexWeatherController(registry: memory.registry)
     private lazy var youtubeTools = NexYouTubeToolController(registry: memory.registry) { [weak self] tab, fullscreen in
         self?.requestYouTubePlayback(tab, fullscreen: fullscreen) ?? false
     }
@@ -819,6 +883,12 @@ final class NotchController: ObservableObject {
         computerRuntime: computerRuntime
     )
     private lazy var toolSearch = NexToolSearchService(registry: memory.registry, computerRegistry: computerRegistry)
+    private lazy var automationController = NexusAutomationController(
+        registry: memory.registry,
+        models: modelDownloadViewModel,
+        settings: settings
+    )
+    private lazy var automationTool = NexusAutomationToolController(controller: automationController)
     private var memoryObservation: AnyCancellable?
     private var connectorCredentialsObserver: NSObjectProtocol?
     private var toolEventTask: Task<Void, Never>?
@@ -890,6 +960,11 @@ final class NotchController: ObservableObject {
 
     func install(startServices: Bool = true) {
         guard panel == nil else { return }
+        NexusOnScreenCompanion.shared.reconcile(
+            enabled: settings.onScreenNexusEnabled && modelDownloadViewModel.activeModelSupportsImageInput,
+            tint: settings.onScreenNexusTint,
+            bubbleEnabled: settings.onScreenNexusBubbleEnabled
+        )
         if startServices { connectController.start() }
         // Permission prompts must be initiated deliberately from Settings.
         // Starting Nexus must never turn a hotkey attempt into a repeating
@@ -937,6 +1012,7 @@ final class NotchController: ObservableObject {
                 )
                 await memory.prepareToolRegistry()
                 try? await webSearch.registerIfNeeded()
+                try? await weatherTools.registerIfNeeded()
                 try? await youtubeTools.registerIfNeeded()
                 try? await terminalActions.register(on: computerRegistry)
                 try? await finderActions.register(on: computerRegistry)
@@ -955,6 +1031,8 @@ final class NotchController: ObservableObject {
                 try? await chromeTabActions.register(on: computerRegistry)
                 try? await connectorManager.registerDisconnectedCapabilities(on: computerRegistry)
                 try? await toolSearch.registerIfNeeded()
+                try? await automationTool.register(in: memory.registry)
+                automationController.start()
             }
             installCommandHoldMonitor()
             installPointerMonitor()
@@ -1076,7 +1154,7 @@ final class NotchController: ObservableObject {
     /// System Settings. A newly granted TCC permission becomes usable without
     /// requiring another quit/relaunch cycle.
     func reconcilePermissions() {
-        NexusPermissionHealth.shared.refresh()
+        Task { await NexusPermissionCoordinator.shared.resumeAtLaunch() }
         commandHoldMonitor?.reconcileAuthorization()
         globalPasteDictationMonitor?.reconcileAuthorization()
     }
@@ -1108,6 +1186,7 @@ final class NotchController: ObservableObject {
         hideThinkingModelMark()
         suppressAutomaticResponseReveal = false
         interaction.beginDictation()
+        updateOnScreenCompanionActivity(.dictating)
         if let screen {
             resize(to: listeningSize(for: screen), animated: true)
         }
@@ -1125,6 +1204,7 @@ final class NotchController: ObservableObject {
             Task { @MainActor in
                 self?.currentDictationTranscript = text
                 self?.interaction.updateTranscript(text)
+                self?.updateOnScreenCompanionBubble(text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "Listening…" : "Listening · \(text)")
             }
         }
     }
@@ -1171,6 +1251,7 @@ final class NotchController: ObservableObject {
                 return
             }
             interaction.beginDictation()
+            updateOnScreenCompanionActivity(.dictating)
             if let screen { resize(to: listeningSize(for: screen), animated: true) }
             return
         }
@@ -1193,6 +1274,7 @@ final class NotchController: ObservableObject {
             Task { @MainActor in
                 self?.currentDictationTranscript = text
                 self?.interaction.updateTranscript(text)
+                self?.updateOnScreenCompanionBubble(text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "Listening…" : "Listening · \(text)")
             }
         }
     }
@@ -1234,6 +1316,7 @@ final class NotchController: ObservableObject {
         responseSpeaker.stop()
         hideThinkingModelMark()
         interaction.dismiss()
+        updateOnScreenCompanionActivity(.idle)
         if let screen { resize(to: idleSize(for: screen), animated: true) }
         armWakePhraseListener()
     }
@@ -1257,6 +1340,8 @@ final class NotchController: ObservableObject {
                 beginAlwaysOnListening()
             } else {
                 interaction.dismiss()
+                updateOnScreenCompanionActivity(.idle)
+                if let screen { resize(to: idleSize(for: screen), animated: true) }
                 armWakePhraseListener()
             }
             return
@@ -1291,6 +1376,7 @@ final class NotchController: ObservableObject {
         // session. Show the compact notch and its shaping/listening orb while
         // keeping its final result separate from the agent conversation.
         interaction.beginDictation()
+        updateOnScreenCompanionActivity(.dictating)
         if let screen { resize(to: listeningSize(for: screen), animated: true) }
         globalPasteSpeculationTask?.cancel()
         globalPasteSpeculationTask = nil
@@ -1301,6 +1387,7 @@ final class NotchController: ObservableObject {
         speechTranscriber.start(engine: settings.speechEngine) { [weak self] partial in
             Task { @MainActor in
                 self?.interaction.updateTranscript(partial)
+                self?.updateOnScreenCompanionBubble(partial.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "Listening…" : "Listening · \(partial)")
                 self?.speculateGlobalDictation(for: partial)
             }
         }
@@ -1425,7 +1512,8 @@ final class NotchController: ObservableObject {
     func performHeadlessControl(_ request: NexusHeadlessControlRequest) async -> NexusHeadlessControlReply {
         switch request.command {
         case "status":
-            let permissions = NexusPermissionSnapshot.current
+            let coordinator = NexusPermissionCoordinator.shared
+            await coordinator.resumeAtLaunch()
             return .init(ok: true, result: [
                 "presentation": String(describing: presentation),
                 "model": activeModel?.name ?? "",
@@ -1433,12 +1521,12 @@ final class NotchController: ObservableObject {
                 "transcript": transcript,
                 "answer": answer,
                 "is_streaming": String(responseIsStreaming),
-                "input_monitoring": String(permissions.inputMonitoring),
-                "accessibility": String(permissions.accessibility),
-                "screen_recording": String(permissions.screenRecording),
-                "microphone": String(permissions.microphone),
-                "speech_recognition": String(permissions.speechRecognition),
-                "full_disk_access_messages": String(permissions.messagesFullDiskAccess),
+                "input_monitoring": "not_required",
+                "accessibility": String(coordinator.isVerified(.accessibility)),
+                "screen_recording": String(coordinator.isVerified(.screenRecording)),
+                "microphone": String(coordinator.isVerified(.microphone)),
+                "speech_recognition": String(coordinator.isVerified(.speechRecognition)),
+                "full_disk_access_messages": String(coordinator.isVerified(.protectedResource("messages"))),
                 "connect_enabled": String(connectController.enabled),
                 "connect_paired": String(connectController.isPaired),
                 "connect_role": connectController.role.rawValue,
@@ -1481,35 +1569,33 @@ final class NotchController: ObservableObject {
             modelDownloadViewModel.use(model)
             return .init(ok: true, result: ["active": model.id, "model": model.name], error: nil)
         case "permissions":
-            let snapshot = NexusPermissionSnapshot.current
-            let host = NexusPermissionHostIdentity.current()
+            let coordinator = NexusPermissionCoordinator.shared
+            await coordinator.resumeAtLaunch()
+            let identity = NexusPermissionSigningIdentity.current()
             return .init(ok: true, result: [
-                "input_monitoring": String(snapshot.inputMonitoring),
-                "accessibility": String(snapshot.accessibility),
-                "screen_recording": String(snapshot.screenRecording),
-                "microphone": String(snapshot.microphone),
-                "speech_recognition": String(snapshot.speechRecognition),
-                "full_disk_access_messages": String(snapshot.messagesFullDiskAccess),
-                "permission_host_durable": String(host.isDurable),
-                "permission_host_message": host.statusMessage
+                "input_monitoring": "not_required",
+                "accessibility": String(coordinator.isVerified(.accessibility)),
+                "screen_recording": String(coordinator.isVerified(.screenRecording)),
+                "microphone": String(coordinator.isVerified(.microphone)),
+                "speech_recognition": String(coordinator.isVerified(.speechRecognition)),
+                "full_disk_access_messages": String(coordinator.isVerified(.protectedResource("messages"))),
+                "permission_host_durable": String(identity.isDurable),
+                "permission_host_message": identity.diagnostic ?? "Stable Nexus signing lineage detected."
             ], error: nil)
         case "permission-host":
-            let host = NexusPermissionHostIdentity.current()
+            let identity = NexusPermissionSigningIdentity.current()
             return .init(ok: true, result: [
-                "durable": String(host.isDurable),
-                "designated_requirement": host.designatedRequirement,
-                "fingerprint": host.fingerprint,
-                "message": host.statusMessage
+                "durable": String(identity.isDurable),
+                "designated_requirement": identity.certificateSubject,
+                "fingerprint": identity.requirementHash,
+                "message": identity.diagnostic ?? "Stable Nexus signing lineage detected."
             ], error: nil)
         case "permission-open":
-            guard let raw = request.arguments["value"], let service = NexusTCCService.cliService(raw) else {
-                return .init(ok: false, result: [:], error: "Use input-monitoring, accessibility, screen-recording, microphone, speech-recognition, or full-disk-access.")
+            guard let raw = request.arguments["value"], let capability = Self.permissionCapability(for: raw) else {
+                return .init(ok: false, result: [:], error: "Use accessibility, screen-recording, microphone, speech-recognition, full-disk-access, or automation.<bundle-id>.")
             }
-            NexusPermissionHealth.shared.openPermissionSettings(for: service)
-            return .init(ok: true, result: ["opened": service.displayName], error: nil)
-        case "permission-repair":
-            NexusPermissionHealth.shared.repairDeniedPermissions()
-            return .init(ok: true, result: ["state": NexusPermissionHealth.shared.statusMessage], error: nil)
+            NexusPermissionCoordinator.shared.openSystemSettings(for: capability)
+            return .init(ok: true, result: ["opened": capability.displayName], error: nil)
         case "memory-save":
             await memory.save()
             return .init(ok: true, result: ["state": memory.saveState.label], error: nil)
@@ -1623,11 +1709,6 @@ final class NotchController: ObservableObject {
             guard let text = request.arguments["text"]?.trimmingCharacters(in: .whitespacesAndNewlines), !text.isEmpty else {
                 return .init(ok: false, result: [:], error: "Missing prompt text.")
             }
-            if settings.shareScreenWithVisionModels,
-               modelDownloadViewModel.activeModelSupportsImageInput,
-               !NexusScreenCapture.hasAccess {
-                return .init(ok: false, result: [:], error: "Screen Recording is required by the active vision model. Run nexusctl permission-open screen-recording, or use nexusctl settings-set screen-sharing false for a text-only test.")
-            }
             let priorAnswer = answer
             headlessToolTrace.removeAll()
             await submitTypedPrompt(text)
@@ -1702,6 +1783,21 @@ final class NotchController: ObservableObject {
         return text
     }
 
+    private static func permissionCapability(for raw: String) -> NexusPermissionCapability? {
+        let normalized = raw.lowercased().replacingOccurrences(of: "_", with: "-")
+        switch normalized {
+        case "accessibility": return .accessibility
+        case "screen-recording", "screenrecording", "screen-capture": return .screenRecording
+        case "microphone", "audio": return .microphone
+        case "speech-recognition", "speechrecognition", "speech": return .speechRecognition
+        case "full-disk-access", "fulldiskaccess", "full-disk": return .protectedResource("messages")
+        default:
+            guard normalized.hasPrefix("automation.") else { return nil }
+            let target = String(raw.dropFirst("automation.".count))
+            return target.isEmpty ? nil : .automation(target)
+        }
+    }
+
     private func pendingHeadlessConfirmationID() -> String? {
         for activity in headlessToolTrace.reversed() {
             guard case .object(let result)? = activity.result,
@@ -1720,16 +1816,7 @@ final class NotchController: ObservableObject {
         if await conversationSession.appendUser(finalizedPrompt) != nil {
             await memory.conversationDidChange()
         }
-        let visionScreenRequired = settings.shareScreenWithVisionModels
-            && modelDownloadViewModel.activeModelSupportsImageInput
-        currentRequestScreenAttachment = captureScreenAttachmentIfNeeded()
-        guard !visionScreenRequired || currentRequestScreenAttachment != nil else {
-            // Do not let a vision question silently degrade to text-only and
-            // make the model ask the user to describe a screen it never saw.
-            interaction.acknowledge("Enable Screen Recording to send the current screen to this vision model.")
-            if let screen { resize(to: expandedSize(for: screen), animated: true) }
-            return
-        }
+        currentRequestScreenAttachment = await captureScreenAttachmentIfNeeded(for: finalizedPrompt)
         automaticRevealIsWaitingForNotchVisit = true
         if let screen {
             resize(to: expandedSize(for: screen), animated: true)
@@ -1749,30 +1836,41 @@ final class NotchController: ObservableObject {
         }
     }
 
-    private func captureScreenAttachmentIfNeeded() -> NexusScreenAttachment? {
+    private func captureScreenAttachmentIfNeeded(for prompt: String) async -> NexusScreenAttachment? {
         guard settings.shareScreenWithVisionModels,
-              modelDownloadViewModel.activeModelSupportsImageInput else { return nil }
-        // The privacy toggle can be correct while CoreGraphics preflight is
-        // stale after an app replacement. Attempt the real capture first.
-        if let attachment = NexusScreenCapture.captureCurrentScreen() {
+              modelDownloadViewModel.activeModelSupportsImageInput,
+              NexusOnScreenLocator.requestNeedsVisualContext(prompt) else { return nil }
+        // Screen sharing enriches a vision request; it must never prevent a
+        // normal text conversation. A functional capture is attached, while
+        // any unavailable/transient ScreenCaptureKit state simply sends text.
+        if let attachment = await NexusScreenCapture.captureCurrentScreen() {
             NSLog("[Nexus Vision] Encoded frontmost app window (%d base64 bytes)", attachment.base64.utf8.count)
             return attachment
         }
-        // Existing access is useful even for a development build, but a
-        // failed capture must not launch a new TCC request from an ad-hoc
-        // identity. That grant would attach to this build's changing cdhash
-        // and immediately recreate the permission loop after the next build.
-        guard NexusPermissionHealth.shared.permissionHostIsDurable else {
-            NexusPermissionHealth.shared.refresh()
-            return nil
+        NSLog("[Nexus Vision] Screen capture unavailable; continuing text-only")
+        return nil
+    }
+
+    /// Visual guidance deliberately happens after the answer has completed.
+    /// It therefore cannot delay, alter, or leak coordinate protocol into the
+    /// user-visible streamed answer. The companion only draws a target ring.
+    private func scheduleOnScreenGuidanceIfRequested(for prompt: String) {
+        guard settings.onScreenNexusEnabled,
+              modelDownloadViewModel.activeModelSupportsImageInput,
+              NexusOnScreenLocator.requestNeedsVisualPointing(prompt) else { return }
+        let generation = responseGeneration
+        let models = modelDownloadViewModel
+        Task { @MainActor in
+            guard generation == self.responseGeneration,
+                  self.settings.onScreenNexusEnabled,
+                  models.activeModelSupportsImageInput,
+                  let target = await NexusOnScreenLocator.locate(for: prompt, models: models) else { return }
+            NexusOnScreenCompanion.shared.point(
+                at: target.point,
+                on: target.frame,
+                label: target.label
+            )
         }
-        _ = NexusScreenCapture.requestAccess(prompt: true)
-        guard let attachment = NexusScreenCapture.captureCurrentScreen() else {
-            NSLog("[Nexus Vision] Screen capture unavailable; request is text-only")
-            return nil
-        }
-        NSLog("[Nexus Vision] Encoded frontmost app window (%d base64 bytes)", attachment.base64.utf8.count)
-        return attachment
     }
 
     private func applyingCurrentScreenAttachment(to messages: [NexusChatMessage]) -> [NexusChatMessage] {
@@ -1782,7 +1880,7 @@ final class NotchController: ObservableObject {
         let original = result[userIndex]
         result[userIndex] = .init(
             role: original.role,
-            content: original.content + "\n\nAn image of the frontmost application window is attached to this message. Inspect it before answering and use its visible content as context even when the user does not explicitly mention the screen. If the user asks about what is on their screen, answer from the image and do not ask them to describe it.",
+            content: original.content + "\n\nAn image of the frontmost application window is attached because the user explicitly requested screen context. Inspect its visible content before answering. Do not claim that anything outside the image was observed.",
             imageBase64: attachment.base64,
             imageMediaType: attachment.mediaType
         )
@@ -1813,6 +1911,7 @@ final class NotchController: ObservableObject {
         let generation = UUID()
         responseGeneration = generation
         responseSpeechCursor = StreamedSpeechCursor()
+        deferResponseSpeechForCurrentResponse = false
         thinkingSentenceChunker = SpeechSentenceChunker()
         // This immediate presentation classifier is deliberately independent
         // from tool routing. It gives the user a useful line without delaying
@@ -1836,6 +1935,9 @@ final class NotchController: ObservableObject {
         responseTask = Task { [weak self] in
             guard let self else { return }
             guard !Task.isCancelled, responseGeneration == generation else { return }
+            // Audio must begin on the first completed sentence, not after a
+            // complete text answer. Concise mode guides the answer's wording;
+            // it must never become a post-generation TTS delay.
             responseSpeaker.beginStreaming()
             responseIsStreaming = true
             do {
@@ -1862,6 +1964,7 @@ final class NotchController: ObservableObject {
                 defer { presentationTask.cancel() }
                 await memory.prepareToolRegistry()
                 try? await webSearch.registerIfNeeded()
+                try? await weatherTools.registerIfNeeded()
                 try? await youtubeTools.registerIfNeeded()
                 try? await terminalActions.register(on: computerRegistry)
                 try? await finderActions.register(on: computerRegistry)
@@ -1892,7 +1995,19 @@ final class NotchController: ObservableObject {
                     tools: definitions
                 )
                 let plan: NexPrimaryToolPlan
-                if discovery.candidates.isEmpty,
+                if let request = NexusYouTubeVoiceIntent.request(in: prompt) {
+                    // Playback is a deterministic interaction contract, not
+                    // an open-ended question for a model to reinterpret. This
+                    // prevents a slow vision model from opening YouTube and
+                    // then replacing the requested playback with a new task.
+                    plan = .init(
+                        status: "Starting YouTube…",
+                        actions: [.init(
+                            tool: "browser.play_youtube",
+                            arguments: request.query.map { ["query": .string($0)] } ?? [:]
+                        )]
+                    )
+                } else if discovery.candidates.isEmpty,
                    NexusIntrinsicPromptClassifier.isClearlyDirect(prompt) {
                     NexusDiagnostics.record("[Nexus Response] skipped planner for clearly intrinsic request")
                     plan = .fallback
@@ -1901,11 +2016,15 @@ final class NotchController: ObservableObject {
                         messages: planningMessages,
                         registeredTools: definitions
                     )
-                    plan = NexPrimaryToolPlanner.groundingActions(
+                    let groundedPlan = NexPrimaryToolPlanner.groundingActions(
                         in: planned,
                         userPrompt: prompt,
                         registeredTools: definitions
                     )
+                    plan = NexPrimaryToolPlanner.deterministicMessagesTriage(
+                        for: prompt,
+                        registeredTools: definitions
+                    ) ?? groundedPlan
                 }
                 guard !Task.isCancelled, responseGeneration == generation else { return }
                 NSLog(
@@ -1957,10 +2076,14 @@ final class NotchController: ObservableObject {
                             definitions.append(contentsOf: newlyAvailable)
                             definitions.sort { $0.name < $1.name }
                         }
-                        let startedPlayback = actions.contains {
+                        let startedNexusBrowserPlayback = actions.contains { $0.tool == "browser.play_youtube" }
+                        let startedOverlayPlayback = actions.contains {
                             ["youtube_play_current", "youtube_play", "youtube_fullscreen"].contains($0.tool)
                         } && mediaOverlayTab != nil
-                        if startedPlayback { break }
+                        // The visible Playwright player owns its browser task
+                        // from here. Do not run another model/planning turn
+                        // that can ask a new question or start a second search.
+                        if startedNexusBrowserPlayback || startedOverlayPlayback { break }
 
                         let planningContext = await conversationSession.contextMessages(
                             memoryLookupPerformed: memoryLookupPerformed,
@@ -1991,6 +2114,13 @@ final class NotchController: ObservableObject {
                         if plannerAdvisory == nil { plannerAdvisory = pendingPlan.memoryWrite }
                     }
                     guard !Task.isCancelled, responseGeneration == generation else { return }
+                    let requestedNexusBrowserPlayback = executedActions.contains { $0.tool == "browser.play_youtube" }
+                    if requestedNexusBrowserPlayback {
+                        responseIsStreaming = false
+                        await responseSpeaker.finishStreamingAndWait()
+                        armWakePhraseListener()
+                        return
+                    }
                     let requestedPlayback = executedActions.contains {
                         ["youtube_play_current", "youtube_play", "youtube_fullscreen"].contains($0.tool)
                     }
@@ -2002,6 +2132,7 @@ final class NotchController: ObservableObject {
                     }
                     responseSpeaker.setWebEvidenceActive(!result.webResponses.isEmpty)
                     interaction.beginThinking()
+                    updateOnScreenCompanionActivity(.thinking)
                     if let screen { resize(to: listeningSize(for: screen), animated: true) }
                     let messages = applyingCurrentScreenAttachment(
                         to: await conversationSession.contextMessages(
@@ -2009,24 +2140,43 @@ final class NotchController: ObservableObject {
                             webContext: result.context
                         )
                     )
+                    let isMessagesTriage = executedActions.contains { $0.tool == "messages.triage" }
+                    deferResponseSpeechForCurrentResponse = isMessagesTriage
+                    var responseMessages = messages
+                    if isMessagesTriage {
+                        responseMessages.append(.init(
+                            role: "system",
+                            content: "Messages triage response contract: each returned record is labeled record, timestamp, sender, recipient, conversation, read, attachment_path, attachment_type, and body. The body= field is the actual message text; read it and report it. Report meaningful body content first, grouped or ordered by sender and time when useful. Treat attachment fields as secondary metadata; never replace a non-empty body with a generic statement that someone sent an image or PDF. If body= is empty, say it is an attachment-only message and include the available attachment type or filename. Do not invent content, and do not expose internal record IDs or raw tool formatting."
+                        ))
+                    }
                     await statusTask?.value
-                    let answer = try await streamModelResponse(messages: messages, generation: generation)
+                    let answer = try await streamModelResponse(messages: responseMessages, generation: generation)
                     guard !responseTransportBlocked else { throw NexusToolTransportLeakError() }
                     let finalSpeechDelta = responseSpeechCursor.consume(delta: "", accumulated: answer)
-                    if !finalSpeechDelta.isEmpty { responseSpeaker.append(finalSpeechDelta) }
+                    if !deferResponseSpeechForCurrentResponse, !finalSpeechDelta.isEmpty {
+                        responseSpeaker.append(finalSpeechDelta)
+                    }
                     toolResult = result
                 }
                 guard !Task.isCancelled, responseGeneration == generation else { return }
                 let reveal = !suppressAutomaticResponseReveal
                 let completedAnswer = toolResult?.appendingWebSources(to: responseSpeechCursor.text)
                     ?? responseSpeechCursor.text
+                if deferResponseSpeechForCurrentResponse {
+                    let spokenAnswer = await messageHandlePatchedSpeech(for: completedAnswer)
+                    if !spokenAnswer.isEmpty { responseSpeaker.append(spokenAnswer) }
+                }
                 interaction.receiveAnswer(completedAnswer, reveal: reveal)
                 let assistantTurn = await conversationSession.appendAssistant(completedAnswer)
                 await memory.conversationDidChange()
                 responseIsStreaming = false
                 automaticRevealIsWaitingForNotchVisit = reveal
                 if reveal, let screen { resize(to: expandedSize(for: screen), animated: true) }
+                scheduleOnScreenGuidanceIfRequested(for: prompt)
+                updateOnScreenCompanionActivity(.speaking)
+                updateOnScreenCompanionBubble(NexusSpokenResponseSummary.make(from: completedAnswer))
                 await responseSpeaker.finishStreamingAndWait()
+                updateOnScreenCompanionActivity(.idle)
                 if alwaysOnVoiceSessionActive {
                     beginAlwaysOnListening()
                 } else {
@@ -2042,6 +2192,7 @@ final class NotchController: ObservableObject {
                 guard !Task.isCancelled, responseGeneration == generation else { return }
                 responseSpeaker.stop()
                 responseIsStreaming = false
+                updateOnScreenCompanionActivity(.idle)
                 let reveal = !suppressAutomaticResponseReveal
                 interaction.failResponse(
                     "Nexus couldn’t get a response. \(error.localizedDescription)",
@@ -2147,6 +2298,7 @@ final class NotchController: ObservableObject {
                 // is active. Do not accept a result after the response ended.
                 guard responseIsStreaming else { return }
                 interaction.updateWorkingStatus(status)
+                updateOnScreenCompanionBubble(status)
                 // Status models run after the Piper stream is warm. Speak the
                 // generated line through that configured voice so it remains
                 // useful even when the compact UI moves on immediately.
@@ -2155,6 +2307,7 @@ final class NotchController: ObservableObject {
                 guard responseGeneration == generation, responseIsStreaming else { return }
                 let fallback = NexusStatusLineGenerator.status(for: prompt)
                 interaction.updateWorkingStatus(fallback)
+                updateOnScreenCompanionBubble(fallback)
                 responseSpeaker.speakImmediately(fallback)
             }
         }
@@ -2206,8 +2359,17 @@ final class NotchController: ObservableObject {
         messages: [NexusChatMessage],
         generation: UUID
     ) async throws -> String {
-        try await modelDownloadViewModel.response(
-            messages: messages,
+        let responseMessages: [NexusChatMessage]
+        if settings.conciseSpokenResponses {
+            responseMessages = messages + [.init(
+                role: "system",
+                content: "The user is listening live. Give a concise, natural spoken answer with short sentences and no filler, but retain every material fact, caveat, requested result, and failed/unavailable source. Do not mention this instruction."
+            )]
+        } else {
+            responseMessages = messages
+        }
+        return try await modelDownloadViewModel.response(
+            messages: responseMessages,
             onThinkingDelta: { [weak self] delta, _ in
                 await self?.receiveThinkingDelta(delta, generation: generation)
             }
@@ -2263,9 +2425,40 @@ final class NotchController: ObservableObject {
         guard !responseSpeechCursor.text.isEmpty else { return }
         let reveal = !suppressAutomaticResponseReveal
         interaction.receivePartialAnswer(responseSpeechCursor.text, reveal: reveal)
+        updateOnScreenCompanionActivity(.speaking)
+        updateOnScreenCompanionBubble(responseSpeechCursor.text)
         automaticRevealIsWaitingForNotchVisit = reveal
         if reveal, let screen { resize(to: expandedSize(for: screen), animated: true) }
-        if !speechDelta.isEmpty { responseSpeaker.append(speechDelta) }
+        if !deferResponseSpeechForCurrentResponse, !speechDelta.isEmpty { responseSpeaker.append(speechDelta) }
+    }
+
+    private func messageHandlePatchedSpeech(for text: String) async -> String {
+        let handles = Self.messageHandleMatches(in: text)
+        guard !handles.isEmpty else { return text }
+        let names = await messagesActions.displayNames(for: Set(handles))
+        guard !names.isEmpty else { return text }
+
+        var patched = text
+        for handle in handles.sorted(by: { $0.count > $1.count }) {
+            let normalized = Self.normalizedMessageHandle(handle)
+            guard let name = names[normalized], !name.isEmpty else { continue }
+            patched = patched.replacingOccurrences(of: handle, with: name)
+        }
+        return patched
+    }
+
+    private static func messageHandleMatches(in text: String) -> [String] {
+        let pattern = #"(?<!\d)\+?(?:\d[\d\s().-]{5,}\d)(?!\d)"#
+        guard let expression = try? NSRegularExpression(pattern: pattern) else { return [] }
+        let range = NSRange(text.startIndex..<text.endIndex, in: text)
+        return expression.matches(in: text, range: range).compactMap { match in
+            guard let swiftRange = Range(match.range, in: text) else { return nil }
+            return String(text[swiftRange])
+        }
+    }
+
+    private static func normalizedMessageHandle(_ handle: String) -> String {
+        handle.lowercased().filter { $0.isNumber }
     }
 
     private func receiveThinkingDelta(_ delta: String, generation: UUID) {
@@ -2277,6 +2470,8 @@ final class NotchController: ObservableObject {
         guard let latest = sentences.last else { return }
         interaction.updateThinkingSentence(latest)
         interaction.beginThinking()
+        // Do not show `latest`: it is an internal thinking-channel fragment.
+        updateOnScreenCompanionActivity(.thinking)
         if let screen { resize(to: thinkingActivitySize(for: screen), animated: true) }
     }
 
@@ -2317,6 +2512,7 @@ final class NotchController: ObservableObject {
         automaticRevealIsWaitingForNotchVisit = false
         suppressAutomaticResponseReveal = false
         interaction.dismiss()
+        updateOnScreenCompanionActivity(.idle)
         if let screen { resize(to: idleSize(for: screen), animated: true) }
         armWakePhraseListener()
     }
@@ -2335,12 +2531,14 @@ final class NotchController: ObservableObject {
         if isListening {
             speechTranscriber.stop()
             interaction.dismiss()
+            updateOnScreenCompanionActivity(.idle)
             if let screen { resize(to: idleSize(for: screen), animated: true) }
             armWakePhraseListener()
         } else if isExpanded {
             collapse()
         } else {
             interaction.dismiss()
+            updateOnScreenCompanionActivity(.idle)
             if let screen { resize(to: idleSize(for: screen), animated: true) }
             armWakePhraseListener()
         }
@@ -2352,12 +2550,15 @@ final class NotchController: ObservableObject {
     func beginToolActivity(_ activity: ToolActivity) {
         hideThinkingModelMark()
         interaction.beginToolActivity(activity)
+        updateOnScreenCompanionActivity(.tool)
+        updateOnScreenCompanionBubble(activity.status)
         if let screen { resize(to: toolActivitySize(for: screen), animated: true) }
         responseSpeaker.speakImmediately(activity.spokenStatus)
     }
 
     func finishToolActivity() {
         interaction.beginThinking()
+        updateOnScreenCompanionActivity(.thinking)
         if let screen { resize(to: listeningSize(for: screen), animated: true) }
     }
 
@@ -2371,6 +2572,7 @@ final class NotchController: ObservableObject {
     func cancelTaskPreview(_ id: UUID?) {
         if let id { Task { _ = try? await memory.registry.execute(name: "cancel_action", arguments: ["actionId": .string(id.uuidString)], invocation: .app) } }
         interaction.dismiss()
+        updateOnScreenCompanionActivity(.idle)
         if let screen { resize(to: idleSize(for: screen), animated: true) }
     }
 
@@ -2396,6 +2598,7 @@ final class NotchController: ObservableObject {
     /// each request an honest visual handoff without increasing notch height.
     private func beginThinkingPresentation() {
         interaction.beginThinking()
+        updateOnScreenCompanionActivity(.thinking)
         guard modelDownloadViewModel.activeModel != nil else { return }
         thinkingModelMarkTask?.cancel()
         isShowingThinkingModelMark = true
@@ -2412,6 +2615,36 @@ final class NotchController: ObservableObject {
         thinkingModelMarkTask?.cancel()
         thinkingModelMarkTask = nil
         isShowingThinkingModelMark = false
+    }
+
+    /// Keep the click-through companion in the same visible phase as the
+    /// notch. It intentionally has no authority over dictation or generation.
+    private func updateOnScreenCompanionActivity(_ activity: NexusPetActivity) {
+        guard settings.onScreenNexusEnabled,
+              modelDownloadViewModel.activeModelSupportsImageInput else { return }
+        NexusOnScreenCompanion.shared.setActivity(activity)
+        // The companion caption is intentionally a presentation affordance,
+        // never a window into hidden model reasoning or tool planning.
+        switch activity {
+        case .idle, .overlay:
+            NexusOnScreenCompanion.shared.setBubble(nil)
+        case .dictating:
+            let transcript = currentDictationTranscript.trimmingCharacters(in: .whitespacesAndNewlines)
+            NexusOnScreenCompanion.shared.setBubble(transcript.isEmpty ? "Listening…" : "Listening · \(transcript)")
+        case .thinking:
+            NexusOnScreenCompanion.shared.setBubble("Thinking…")
+        case .tool:
+            NexusOnScreenCompanion.shared.setBubble("Working…")
+        case .speaking:
+            NexusOnScreenCompanion.shared.setBubble("Speaking…")
+        }
+    }
+
+    private func updateOnScreenCompanionBubble(_ text: String?) {
+        guard settings.onScreenNexusEnabled,
+              settings.onScreenNexusBubbleEnabled,
+              modelDownloadViewModel.activeModelSupportsImageInput else { return }
+        NexusOnScreenCompanion.shared.setBubble(text)
     }
 
     func saveConversation() {
@@ -2464,7 +2697,8 @@ final class NotchController: ObservableObject {
             settings: settings,
             cli: .shared,
             cliSettings: .shared,
-            connectorAuth: connectorAuth
+            connectorAuth: connectorAuth,
+            automations: automationController
         )
         // The app window is a separate NSHostingView from the notch panel.
         // Keep its terminal masthead on the same selected-pet state instead
@@ -2481,6 +2715,13 @@ final class NotchController: ObservableObject {
         modelPanel = panel
     }
 
+    func openAutomations() {
+        // The Automations page is part of the shared control panel; opening
+        // the panel is safe even when a background host is active, and keeps
+        // the visible app as the sole interactive approval surface.
+        openModelAggregator()
+    }
+
     func shutdown() {
         speechTranscriber.stop()
         wakePhraseListener.stop()
@@ -2492,10 +2733,42 @@ final class NotchController: ObservableObject {
         codexProgressMonitor?.stop()
         codexProgressMonitor = nil
         music.stop()
+        automationController.stop()
         memory.stop()
         commandHoldMonitor = nil
         modelDownloadViewModel.shutdown()
         connectController.shutdown()
+    }
+
+    /// Used by the per-user LaunchAgent. It deliberately initializes the same
+    /// registry and model routing as the visible app, but does not create a
+    /// notch panel or global-input monitors in the background host.
+    func startAutomationHost() async {
+        memory.start()
+        await modelDownloadViewModel.prepareLowLatencyModels(statusModelID: settings.secondaryStatusModelID)
+        await memory.prepareToolRegistry()
+        try? await webSearch.registerIfNeeded()
+        try? await weatherTools.registerIfNeeded()
+        try? await youtubeTools.registerIfNeeded()
+        try? await terminalActions.register(on: computerRegistry)
+        try? await finderActions.register(on: computerRegistry)
+        try? await spotifyActions.register(on: computerRegistry)
+        try? await messagesActions.register(on: computerRegistry)
+        try? await photosActions.register(on: computerRegistry)
+        try? await vscodeActions.register(on: computerRegistry)
+        try? await codexActions.register(on: computerRegistry)
+        try? await obsidianActions.register(on: computerRegistry)
+        try? await githubActions.register(on: computerRegistry)
+        try? await systemActions.register(on: computerRegistry)
+        try? await xcodeActions.register(on: computerRegistry)
+        try? await previewActions.register(on: computerRegistry)
+        try? await applicationActions.register(on: computerRegistry)
+        try? await browserActions.register(on: computerRegistry)
+        try? await chromeTabActions.register(on: computerRegistry)
+        try? await connectorManager.registerDisconnectedCapabilities(on: computerRegistry)
+        try? await toolSearch.registerIfNeeded()
+        try? await automationTool.register(in: memory.registry)
+        automationController.start()
     }
 
     func confirmDiscardBeforeQuit() -> Bool {
@@ -2562,6 +2835,8 @@ final class NotchController: ObservableObject {
         case .completed, .failed:
             guard codexAlreadyVisible else { return }
             interaction.completeToolActivity(activity)
+            updateOnScreenCompanionActivity(.tool)
+            updateOnScreenCompanionBubble(activity.status)
             if let screen { resize(to: toolActivitySize(for: screen), animated: true) }
             codexProgressDismissTask?.cancel()
             codexProgressDismissTask = Task { [weak self] in
@@ -2577,6 +2852,8 @@ final class NotchController: ObservableObject {
         case .started, .progress:
             codexProgressDismissTask?.cancel()
             interaction.beginToolActivity(activity)
+            updateOnScreenCompanionActivity(.tool)
+            updateOnScreenCompanionBubble(activity.status)
             if let screen { resize(to: toolActivitySize(for: screen), animated: true) }
         }
     }
@@ -2586,6 +2863,8 @@ final class NotchController: ObservableObject {
         selectedCodexSessionID = id
         codexProgressDismissTask?.cancel()
         interaction.beginToolActivity(.codex(session.latestUpdate))
+        updateOnScreenCompanionActivity(.tool)
+        updateOnScreenCompanionBubble(session.latestUpdate.detail)
         if let screen { resize(to: toolActivitySize(for: screen), animated: true) }
     }
 
@@ -2604,12 +2883,18 @@ final class NotchController: ObservableObject {
         switch event.phase {
         case .started, .progress:
             interaction.beginToolActivity(activity)
+            updateOnScreenCompanionActivity(.tool)
+            updateOnScreenCompanionBubble(activity.status)
             if let screen { resize(to: toolActivitySize(for: screen), animated: true) }
         case .completed:
             interaction.completeToolActivity(activity)
+            updateOnScreenCompanionActivity(.tool)
+            updateOnScreenCompanionBubble(activity.status)
             if let screen { resize(to: toolActivitySize(for: screen), animated: true) }
         case .failed:
             interaction.completeToolActivity(activity)
+            updateOnScreenCompanionActivity(.tool)
+            updateOnScreenCompanionBubble(activity.status)
             if let screen { resize(to: toolActivitySize(for: screen), animated: true) }
         }
     }
@@ -2882,7 +3167,7 @@ enum NexusPanelPresentationPolicy {
     }
 }
 
-private struct NexusScreenAttachment: Sendable {
+struct NexusScreenAttachment: Sendable {
     let base64: String
     let mediaType: String
 }
@@ -2918,7 +3203,11 @@ enum NexusCaptureWindowSelection {
 /// complete desktop can produce a wallpaper-only image when WindowServer
 /// redacts application layers, which is actively misleading for a vision
 /// model. If the real foreground window is unavailable, fail closed instead.
-enum NexusScreenCapture {
+#if false
+// Replaced by the ScreenCaptureKit implementation below. Keep this excluded
+// temporarily only to preserve blame while the project migrates away from
+// deprecated CoreGraphics window snapshots.
+enum NexusLegacyScreenCapture {
     private static var didRequestAccessThisLaunch = false
 
     static var hasAccess: Bool { CGPreflightScreenCaptureAccess() }
@@ -3006,6 +3295,54 @@ enum NexusScreenCapture {
                 properties: [.compressionFactor: 0.68]
               ) else { return nil }
         return .init(base64: jpeg.base64EncodedString(), mediaType: "image/jpeg")
+    }
+}
+
+#endif
+
+/// ScreenCaptureKit is the sole screenshot path. The coordinator separately
+/// verifies this exact operation during onboarding; capture never treats a
+/// System Settings row as proof of usable access.
+@MainActor
+enum NexusScreenCaptureUIAdapter {
+    static var hasAccess: Bool {
+        NexusPermissionCoordinator.shared.isVerified(.screenRecording)
+    }
+
+    static func requestAccess(prompt: Bool = false) async -> Bool {
+        guard prompt else { return hasAccess }
+        return (await NexusPermissionCoordinator.shared.request(.screenRecording)).isAuthorized
+    }
+
+    static func openScreenRecordingSettings() {
+        NexusPermissionCoordinator.shared.openSystemSettings(for: .screenRecording)
+    }
+
+    fileprivate static func captureCurrentScreen() async -> NexusScreenAttachment? {
+        do {
+            let content = try await SCShareableContent.excludingDesktopWindows(
+                false,
+                onScreenWindowsOnly: true
+            )
+            guard let display = content.displays.first else { return nil }
+            let filter = SCContentFilter(display: display, excludingWindows: [])
+            let configuration = SCStreamConfiguration()
+            configuration.width = min(display.width, 1_920)
+            configuration.height = min(display.height, 1_080)
+            let image = try await SCScreenshotManager.captureImage(
+                contentFilter: filter,
+                configuration: configuration
+            )
+            let representation = NSBitmapImageRep(cgImage: image)
+            guard let jpeg = representation.representation(
+                using: .jpeg,
+                properties: [.compressionFactor: 0.68]
+            ) else { return nil }
+            return .init(base64: jpeg.base64EncodedString(), mediaType: "image/jpeg")
+        } catch {
+            NexusDiagnostics.record("[Nexus Vision] ScreenCaptureKit capture failed: \(error.localizedDescription)")
+            return nil
+        }
     }
 }
 
@@ -3550,52 +3887,20 @@ enum NexusHIDModifierFlags {
     }
 }
 
-/// Centralizes the two TCC permissions that the global dictation flow uses.
-/// Input Monitoring gates detection of Command/Option-Command outside Nexus;
-/// Accessibility gates insertion into another app's focused text control.
+/// The global gesture uses Accessibility as its default control permission.
+/// Input Monitoring is deliberately not a required onboarding capability;
+/// managed Macs can decline passive event listening while Accessibility-based
+/// insertion and the in-app gesture remain available.
 enum NexusGlobalHotkeyAccess {
-    private static var didRequestInputMonitoringThisLaunch = false
-    private static var didRequestAccessibilityThisLaunch = false
-
-    static var hasInputMonitoring: Bool { CGPreflightListenEventAccess() }
-    static var hasAccessibility: Bool { AXIsProcessTrusted() }
-
-    @discardableResult
-    static func requestInputMonitoringIfNeeded(prompt: Bool = false) -> Bool {
-        guard !CGPreflightListenEventAccess() else { return true }
-        guard NexusPermissionHostIdentity.current().isDurable else { return false }
-        guard prompt, !didRequestInputMonitoringThisLaunch else { return false }
-        didRequestInputMonitoringThisLaunch = true
-        _ = CGRequestListenEventAccess()
-        return CGPreflightListenEventAccess()
-    }
-
-    static func openInputMonitoringSettings() {
-        openPrivacyPane("Privacy_ListenEvent")
-    }
-
-    /// Accessibility is requested during the explicit launch-onboarding pass
-    /// or from Settings. A hotkey event itself never generates a prompt.
-    @discardableResult
-    static func requestAccessibilityIfNeeded(prompt: Bool = false) -> Bool {
-        guard !AXIsProcessTrusted() else { return true }
-        guard NexusPermissionHostIdentity.current().isDurable else { return false }
-        guard prompt, !didRequestAccessibilityThisLaunch else { return false }
-        didRequestAccessibilityThisLaunch = true
-        let options = [kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true] as CFDictionary
-        return AXIsProcessTrustedWithOptions(options)
-    }
-
-    static func openAccessibilitySettings() {
-        openPrivacyPane("Privacy_Accessibility")
-    }
-
-    static func openPrivacyPane(_ anchor: String) {
-        guard let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?\(anchor)") else { return }
-        NSWorkspace.shared.open(url)
+    static var hasInputMonitoring: Bool { hasAccessibility }
+    static var hasAccessibility: Bool {
+        MainActor.assumeIsolated {
+            NexusPermissionCoordinator.shared.isVerified(.accessibility)
+        }
     }
 }
 
+#if false
 /// TCC associates a grant with the app's designated code requirement, not a
 /// SwiftUI view or the current build directory. An ad-hoc requirement embeds a
 /// changing code hash, so asking for privacy access from an Xcode rebuild
@@ -3934,6 +4239,8 @@ final class NexusPermissionHealth: ObservableObject {
         NexusPermissionHostIdentity.current().fingerprint
     }
 }
+
+#endif
 
 private final class PointerProximityMonitor {
     private var timer: DispatchSourceTimer?

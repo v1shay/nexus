@@ -77,6 +77,7 @@ struct NexTaskPreviewModel: Equatable, Sendable {
         if action.hasPrefix("photos.") { return .photos }
         if action.hasPrefix("finder.") || action.hasPrefix("preview.") || action.hasPrefix("obsidian.") { return .files }
         if action.hasPrefix("vscode.") || action.hasPrefix("xcode.") || action.hasPrefix("git.") || action.hasPrefix("github.") || action.hasPrefix("codex.") || action == "nex_cli_task" { return .code }
+        if action == "browser.play_youtube" { return .media }
         if action.hasPrefix("browser.") || action.hasPrefix("chrome.") || action.hasPrefix("web_") { return .browser }
         if action.hasPrefix("spotify.") || action.hasPrefix("youtube_") { return .media }
         if action.hasPrefix("system.") || action.hasPrefix("applications.") { return .system }

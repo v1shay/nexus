@@ -25,10 +25,11 @@ struct NexusPet: Identifiable, Equatable, Sendable {
     }
 }
 
-enum NexusPetActivity: Sendable {
+enum NexusPetActivity: Equatable, Sendable {
     case idle
     case dictating
     case thinking
+    case speaking
     case overlay
     case tool
 
@@ -37,6 +38,7 @@ enum NexusPetActivity: Sendable {
         case .idle: 0
         case .dictating: 6   // waiting / attentive listening
         case .thinking: 7    // active task work
+        case .speaking: 8    // responsive delivery / talking
         case .overlay: 8     // reviewing the completed response
         case .tool: 7
         }
@@ -49,6 +51,7 @@ enum NexusPetActivity: Sendable {
         case .idle: 0.24
         case .dictating: 0.13
         case .thinking, .tool: 0.14
+        case .speaking: 0.10
         case .overlay: 0.20
         }
     }
@@ -89,9 +92,13 @@ enum NexusPetCatalog {
         NexusPet(
             id: "linux",
             displayName: "Linux",
-            description: "The animated Linux companion from your Downloads folder.",
+            description: "An animated Linux companion bundled with Nexus.",
             artwork: .animatedGIF(
-                URL(fileURLWithPath: "/Users/vishayagarwal/Downloads/icons8-linux.gif")
+                Bundle.main.url(
+                    forResource: "icons8-linux",
+                    withExtension: "gif",
+                    subdirectory: "Pets/linux"
+                ) ?? URL(fileURLWithPath: "/dev/null")
             )
         )
     ]
@@ -253,6 +260,7 @@ private extension NexusPetActivity {
         case .idle: "idle"
         case .dictating: "listening"
         case .thinking: "thinking"
+        case .speaking: "speaking"
         case .overlay: "reviewing the response"
         case .tool: "using a tool"
         }

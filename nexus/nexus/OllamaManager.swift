@@ -29,6 +29,8 @@ enum NexusResponseInstructions {
     - `web_search`: Search the live web whenever the answer needs current, changing, time-sensitive, uncertain, niche, documentation, pricing, news, weather, sports, regulations, versions, releases, APIs, calendars, companies, or another verifiable public fact. Never say you lack real-time access without trying it. Use a focused standalone `query` containing the real objective, important entities, location, and relevant date/recency. Never copy the full request, reuse an unrelated earlier topic, or issue a one-word query.
     - `browser.visit_url`: Use Nexus's separate managed browser for a simple explicit request to visit, open, or inspect one complete HTTP(S) URL. Supply only `url`; Nexus itself safely navigates and extracts the readable page text. Prefer this over `browser.run_task` for ordinary one-page inspection so you do not need to construct browser-step JSON.
     - `browser.run_task`: Use Nexus's separate managed browser for a complex agentic browser action: navigation across multiple pages, click, sign in, fill a form, upload/download, or take a screenshot. Supply one concise `goal` and a structured `steps` array made only of supported steps (`navigate`, `new_tab`, `activate_tab`, `close_tab`, `click`, `type`, `form`, `extract`, `upload`, `download`, `screenshot`); do not encode that array in a JSON string. Do not use it to answer a normal current-facts question when web search results are enough.
+    - `browser.play_youtube`: Use directly when Sir asks Nexus to play something, play a named YouTube request, or open YouTube and start a video. Supply `query` only when he names what to play. It opens the frontmost Nexus browser, starts the first visible result, and only presses YouTube's own displayed Skip control after five seconds if present. Never substitute `youtube_search` or a hand-written browser task when this tool is available.
+    - `browser.check_schoology`: Use directly when Sir asks to check Schoology, school homework, or upcoming assignments. It reads live evidence from the signed-in Nexus browser profile. Supply `school_email` only if Sir gave the exact address; never invent an email, password, MFA, assignment, or empty schedule.
     - `browser.open_profile`: Use when Sir wants to sign in to a private site for future Nexus browser work. It opens a separate persistent Nexus Chrome profile. Tell him to sign in there once and close that Nexus Chrome window before automated tasks; never claim that normal Chrome passwords or cookies can be imported.
     - `browser.import_chrome_profile`: Use only when Sir asks to import normal Chrome browser state. It imports bookmarks, history, and preferences after Chrome is closed; passwords, cookies, and Keychain sessions are intentionally not copied.
     - `chrome.*`: Use live Chrome only if Sir explicitly refers to an existing tab, asks to switch/open/close a live tab, or uses an existing Chrome tab for YouTube playback. Otherwise, browser work stays in the Nexus-managed browser.
@@ -64,7 +66,7 @@ enum NexusResponseInstructions {
 
     Nexus executes tool calls in a separate planning turn. In a normal final answer, never emit `<tool_call>`, `<arg_key>`, `<arg_value>`, JSON tool payloads, or any other raw function-call markup. Use the actual result from the completed tool instead.
 
-    Core rule: personal missing from active chat → `memory_search`; current facts/research → `web_search`; inspect one known URL in Nexus browser → `browser.visit_url`; complex browser interaction → `browser.run_task`; sign in to a private Nexus browser session → `browser.open_profile`; coding → `nex_cli_task`; explicit workspace change → `nex_cli_set_workspace`; current Chrome YouTube video → `youtube_play_current`; find/play YouTube → `youtube_search` then `youtube_play`; existing Nex YouTube playback enlargement → `youtube_fullscreen`; durable user-supported memory change → `memory_write`; mixed request → every required tool; known stable fact → answer directly.
+    Core rule: personal missing from active chat → `memory_search`; current facts/research → `web_search`; inspect one known URL in Nexus browser → `browser.visit_url`; Schoology/homework → `browser.check_schoology`; play in visible Nexus browser → `browser.play_youtube`; complex browser interaction → `browser.run_task`; sign in to a private Nexus browser session → `browser.open_profile`; coding → `nex_cli_task`; explicit workspace change → `nex_cli_set_workspace`; current Chrome YouTube video → `youtube_play_current`; find/play YouTube only when browser.play_youtube is unavailable → `youtube_search` then `youtube_play`; existing Nex YouTube playback enlargement → `youtube_fullscreen`; durable user-supported memory change → `memory_write`; mixed request → every required tool; known stable fact → answer directly.
     """
 
     /// Tool selection happens in a separate, schema-validated planning turn.
@@ -106,10 +108,11 @@ enum NexAssistantIdentityIntent {
 final class OllamaManager: @unchecked Sendable {
     static let serverURL = URL(string: "http://127.0.0.1:11434")!
     static let officialMacDownloadURL = URL(string: "https://ollama.com/download/Ollama-darwin.zip")!
-    /// Inference can legitimately take a long time before emitting an answer,
-    /// especially with native reasoning enabled. This is deliberately far
-    /// beyond normal model work; user cancellation remains immediate.
-    static let inferenceRequestTimeout: TimeInterval = 7 * 24 * 60 * 60
+    /// A local model may need time to load, but leaving a chat request open
+    /// for days means a wedged Ollama daemon looks like Nexus simply ignored
+    /// the user. This bounds the time-to-first-response; a normal generation
+    /// continues streaming once Ollama starts responding.
+    static let inferenceRequestTimeout: TimeInterval = 120
     /// Tool selection is a short advisory pass.  It must never inherit the
     /// effectively-unbounded answer timeout, otherwise a model that stalls
     /// before its first tool token can leave both the notch and nexus CLI in
@@ -304,7 +307,13 @@ final class OllamaManager: @unchecked Sendable {
                 options: .init(temperature: temperature, numPredict: maximumTokens, numContext: 32_768)
             )
         )
-        let (bytes, response) = try await session.bytes(for: request)
+        let bytes: URLSession.AsyncBytes
+        let response: URLResponse
+        do {
+            (bytes, response) = try await session.bytes(for: request)
+        } catch let error as URLError where error.code == .timedOut {
+            throw LocalModelError.serverUnavailable("Ollama accepted the request but produced no response within two minutes. Restart the Ollama service, then retry the local model.")
+        }
         try Self.requireSuccess(response)
         let isToolPlanningPass = messages.contains {
             $0.role == "system" && $0.content.contains("NEXUS_TOOL_PLANNING_PASS")

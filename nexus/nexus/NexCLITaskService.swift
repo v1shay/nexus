@@ -245,7 +245,7 @@ actor NexCLITaskService {
     func runFromConsole(prompt: String) async throws {
         let cleanPrompt = prompt.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !cleanPrompt.isEmpty else { return }
-        let context = NexToolExecutionContext(executionID: UUID()) { _, _ in }
+        let context = NexToolExecutionContext(executionID: UUID(), invocation: .app) { _, _ in }
         _ = try await run(prompt: cleanPrompt, title: cleanPrompt, context: context)
     }
 

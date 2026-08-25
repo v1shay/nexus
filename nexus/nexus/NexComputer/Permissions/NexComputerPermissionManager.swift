@@ -1,10 +1,4 @@
-import AppKit
-import ApplicationServices
-import Contacts
-import CoreGraphics
-import EventKit
 import Foundation
-import Photos
 
 enum NexComputerPermissionState: String, Codable, Sendable {
     case authorized
@@ -70,14 +64,10 @@ actor NexComputerPermissionManager {
     }
 }
 
+/// Adapter retained for the computer-action manifest. It delegates every TCC
+/// query and prompt to NexusPermissionCoordinator; tools never own a second
+/// permission state machine.
 final class NexComputerSystemPermissionBackend: NexComputerPermissionChecking, @unchecked Sendable {
-    private let permissionHostIsDurable: @Sendable () -> Bool
-
-    init(permissionHostIsDurable: @escaping @Sendable () -> Bool = {
-        NexusPermissionHostIdentity.current().isDurable
-    }) {
-        self.permissionHostIsDurable = permissionHostIsDurable
-    }
 
     func status(for requirement: NexComputerPermissionRequirement) async -> NexComputerPermissionStatus {
         await resolve(requirement, request: false)
@@ -91,89 +81,38 @@ final class NexComputerSystemPermissionBackend: NexComputerPermissionChecking, @
         _ requirement: NexComputerPermissionRequirement,
         request: Bool
     ) async -> NexComputerPermissionStatus {
-        let id = requirement.id.lowercased()
-        let effectiveRequest = Self.shouldRequestTCCPermission(
-            id: id,
-            request: request,
-            durableHost: permissionHostIsDurable()
-        )
+        let capability = NexusPermissionCapability.from(requirementID: requirement.id)
+        let result = request
+            ? await NexusPermissionCoordinator.shared.request(capability)
+            : await NexusPermissionCoordinator.shared.check(capability)
         let state: NexComputerPermissionState
-        if id == "accessibility" || id.hasPrefix("accessibility.") {
-            let options = [kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: effectiveRequest] as CFDictionary
-            state = AXIsProcessTrustedWithOptions(options) ? .authorized : (effectiveRequest ? .denied : .notDetermined)
-        } else if id == "contacts" || id.hasPrefix("contacts.") {
-            state = await contactsState(request: effectiveRequest)
-        } else if id == "photos" || id.hasPrefix("photos.") {
-            state = await photosState(request: effectiveRequest)
-        } else if id == "calendar" || id.hasPrefix("calendar.") {
-            state = await calendarState(request: effectiveRequest)
-        } else if id == "screen_recording" || id.hasPrefix("screen_recording.") {
-            if CGPreflightScreenCaptureAccess() {
-                state = .authorized
-            } else if effectiveRequest {
-                state = CGRequestScreenCaptureAccess() ? .authorized : .denied
-            } else {
-                state = .notDetermined
-            }
-        } else if id == "full_disk_access" || id.hasPrefix("full_disk_access.") {
-            // macOS intentionally offers no public API that can grant or
-            // reliably preflight Full Disk Access globally. Check only the
-            // exact protected resource needed by a declared action.
-            if id == "full_disk_access.messages" {
-                let url = FileManager.default.homeDirectoryForCurrentUser
-                    .appendingPathComponent("Library/Messages/chat.db")
-                if FileManager.default.isReadableFile(atPath: url.path) {
-                    state = .authorized
-                } else if FileManager.default.fileExists(atPath: url.path) {
-                    // Full Disk Access has no request API and macOS does not
-                    // distinguish "not yet granted" from "denied" here.
-                    // The database exists, so this is an actionable denied
-                    // permission—not an unsupported capability.
-                    state = .denied
-                } else {
-                    state = .unsupported
-                }
-            } else {
-                state = .unsupported
-            }
-        } else if id.hasPrefix("automation.") {
-            let bundleIdentifier = String(requirement.id.dropFirst("automation.".count))
-            state = Self.automationState(bundleIdentifier: bundleIdentifier, request: effectiveRequest)
-        } else {
-            // Network, app-managed files, memory, and bounded code execution
-            // are enforced by Nexus policy rather than a macOS TCC prompt.
-            state = .authorized
+        switch result.liveState {
+        case .authorized: state = .authorized
+        case .denied: state = .denied
+        case .restricted: state = .restricted
+        case .unsupported: state = .unsupported
+        case .notDetermined, .waitingForSystemSettings, .waitingForRestart: state = .notDetermined
         }
         return .init(
             requirementID: requirement.id,
             state: state,
-            recovery: request && !effectiveRequest
-                ? NexusPermissionHostIdentity.current().statusMessage
-                : requirement.recovery ?? Self.defaultRecovery(for: requirement.id, state: state)
+            recovery: result.recovery ?? requirement.recovery
         )
     }
 
-    static func shouldRequestTCCPermission(
-        id: String,
-        request: Bool,
-        durableHost: Bool
-    ) -> Bool {
-        guard request else { return false }
-        let normalized = id.lowercased()
-        let needsDurableHost = normalized == "accessibility"
-            || normalized.hasPrefix("accessibility.")
-            || normalized == "contacts"
-            || normalized.hasPrefix("contacts.")
-            || normalized == "photos"
-            || normalized.hasPrefix("photos.")
-            || normalized == "calendar"
-            || normalized.hasPrefix("calendar.")
-            || normalized == "screen_recording"
-            || normalized.hasPrefix("screen_recording.")
-            || normalized.hasPrefix("automation.")
-        return !needsDurableHost || durableHost
+    @MainActor
+    static func automationStatus(for bundleIdentifier: String) -> NexComputerPermissionState {
+        guard !bundleIdentifier.isEmpty else { return .unsupported }
+        let state = NexusPermissionCoordinator.shared.state(for: .automation(bundleIdentifier))
+        switch state {
+        case .verified: return .authorized
+        case .needsAttention: return .denied
+        case .notStarted, .explaining, .requesting, .waitingForSystemSettings, .waitingForRestart:
+            return .notDetermined
+        }
     }
 
+#if false
     private func contactsState(request: Bool) async -> NexComputerPermissionState {
         let current = CNContactStore.authorizationStatus(for: .contacts)
         if current == .notDetermined, request {
@@ -273,4 +212,5 @@ final class NexComputerSystemPermissionBackend: NexComputerPermissionChecking, @
         let label = id.replacingOccurrences(of: "_", with: " ").capitalized
         return "Open System Settings > Privacy & Security > \(label) and allow Nexus."
     }
+#endif
 }

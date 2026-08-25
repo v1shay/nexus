@@ -173,7 +173,7 @@ actor NexComputerRegistry {
                 try await registry.invoke(
                     actionID: manifest.actionID,
                     arguments: arguments,
-                    invocation: .modelReadOnly,
+                    invocation: context.invocation,
                     context: context
                 )
             }
@@ -247,7 +247,7 @@ actor NexComputerRegistry {
         } catch let failure as NexComputerPermissionFailure {
             return Self.permissionRequiredJSON(failure.status)
         }
-        if Self.requiresConfirmation(entry.manifest) {
+        if Self.requiresConfirmation(entry.manifest, invocation: invocation) {
             let pending = try await confirmationGateway.request(
                 manifest: entry.manifest,
                 arguments: arguments
@@ -335,7 +335,17 @@ actor NexComputerRegistry {
         }
     }
 
-    private static func requiresConfirmation(_ manifest: NexComputerActionManifest) -> Bool {
+    private static func requiresConfirmation(
+        _ manifest: NexComputerActionManifest,
+        invocation: NexToolInvocation
+    ) -> Bool {
+        // Automations never inherit a blanket ability to mutate the computer.
+        // Only an exact action ID visibly approved in that automation's review
+        // card can skip the interactive confirmation gateway.
+        if invocation.source == .automation,
+           invocation.automationApprovedActions.contains(manifest.actionID) {
+            return false
+        }
         if manifest.riskClass == .high { return true }
         switch manifest.confirmationPolicy {
         case .always: return true

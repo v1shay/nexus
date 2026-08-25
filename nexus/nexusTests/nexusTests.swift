@@ -3,6 +3,33 @@ import WebKit
 @testable import nexus
 
 final class NexusGeometryTests: XCTestCase {
+    func testConciseSpokenResponsePreservesTheFirstInformativeSentences() {
+        let answer = "Your inbox has four unread messages. Your calendar has two events today. Your portfolio is unavailable. Here is a much longer explanation that does not need to be spoken immediately."
+        let spoken = NexusSpokenResponseSummary.make(from: answer, maximumWords: 20)
+        XCTAssertTrue(spoken.contains("four unread messages"))
+        XCTAssertTrue(spoken.contains("two events today"))
+        XCTAssertFalse(spoken.contains("much longer explanation"))
+    }
+
+    @MainActor
+    func testOnScreenNexusOnlyRunsForVisualLocationRequests() {
+        XCTAssertTrue(NexusOnScreenLocator.requestNeedsVisualPointing("Which button should I press on my screen?"))
+        XCTAssertTrue(NexusOnScreenLocator.requestNeedsVisualPointing("Point to the save icon"))
+        XCTAssertFalse(NexusOnScreenLocator.requestNeedsVisualPointing("Explain how OAuth works"))
+        XCTAssertTrue(NexusOnScreenLocator.requestNeedsVisualContext("What is on my screen?"))
+        XCTAssertFalse(NexusOnScreenLocator.requestNeedsVisualContext("Explain how OAuth works"))
+    }
+
+    func testOnScreenCompanionBubbleNormalizesAndBoundsVisibleCaption() {
+        XCTAssertNil(NexusOnScreenCompanion.normalizedBubbleText(" \n\t "))
+        XCTAssertEqual(
+            NexusOnScreenCompanion.normalizedBubbleText("Listening\n\n  to   this"),
+            "Listening to this"
+        )
+        let long = String(repeating: "x", count: 360)
+        XCTAssertEqual(NexusOnScreenCompanion.normalizedBubbleText(long)?.count, 280)
+    }
+
     func testAutomationSecretStoreNeverTouchesLoginKeychain() throws {
         let store = NexusKeychainSecretStore(
             service: "na.nexus.tests.automation",
@@ -309,11 +336,13 @@ final class NexusGeometryTests: XCTestCase {
     }
 
     @MainActor
-    func testWakePhraseListenerMatchesOnlyIntentionalMultiWordPhrases() {
+    func testWakePhraseListenerMatchesConfiguredNexusVariants() {
         XCTAssertEqual(WakePhraseListener.match(in: "Hey, next!"), .heyNext)
         XCTAssertEqual(WakePhraseListener.match(in: "Wake up next"), .wakeUpNext)
-        XCTAssertNil(WakePhraseListener.match(in: "What should I do next?"))
-        XCTAssertNil(WakePhraseListener.match(in: "Nex, open the overlay"))
+        XCTAssertEqual(WakePhraseListener.match(in: "Next"), .next)
+        XCTAssertEqual(WakePhraseListener.match(in: "Hey Nexus"), .heyNexus)
+        XCTAssertEqual(WakePhraseListener.match(in: "Wake up, Nexus"), .wakeUpNexus)
+        XCTAssertEqual(WakePhraseListener.match(in: "Nex, open the overlay"), .nex)
     }
 
     @MainActor
@@ -423,6 +452,26 @@ final class NexusGeometryTests: XCTestCase {
         XCTAssertNotNil(ModelBrandArtwork.icon(for: .groq, size: 18))
         XCTAssertNotNil(ModelBrandArtwork.image(for: .openRouter))
         XCTAssertNotNil(ModelBrandArtwork.icon(for: .openRouter, size: 18))
+    }
+
+    @MainActor
+    func testUploadedProviderMarksArePackagedInTheAppAndNeverResolvedFromDownloads() throws {
+        for identity in [ModelProviderIdentity.openAI, .groq, .github, .gemini, .nvidia] {
+            let url = try XCTUnwrap(ModelBrandArtwork.assetURL(for: identity))
+            XCTAssertTrue(url.path.contains("/Pets/BrandAssets/"), identity.rawValue)
+            XCTAssertFalse(url.path.contains("/Downloads/"), identity.rawValue)
+            XCTAssertGreaterThan(try XCTUnwrap(NSImage(contentsOf: url)).size.width, 0, identity.rawValue)
+            XCTAssertNotNil(ModelBrandArtwork.icon(for: identity, size: 20), identity.rawValue)
+        }
+
+        XCTAssertEqual(
+            NexProviderIconCatalog.icon(for: "github.search_repositories"),
+            .bundleResource(
+                name: "github.webp",
+                subdirectory: "Pets/BrandAssets",
+                fallbackSystemName: "chevron.left.forwardslash.chevron.right"
+            )
+        )
     }
 
     @MainActor
@@ -1439,6 +1488,8 @@ final class NexusGeometryTests: XCTestCase {
         XCTAssertEqual(NexusPetActivity.dictating.atlasRow, 6)
         XCTAssertEqual(NexusPetActivity.thinking.atlasRow, 7)
         XCTAssertEqual(NexusPetActivity.tool.atlasRow, 7)
+        XCTAssertEqual(NexusPetActivity.speaking.atlasRow, 8)
+        XCTAssertLessThan(NexusPetActivity.speaking.frameDuration, NexusPetActivity.idle.frameDuration)
         XCTAssertEqual(NexusPetActivity.overlay.atlasRow, 8)
     }
 

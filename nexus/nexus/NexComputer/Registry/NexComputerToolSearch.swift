@@ -524,12 +524,25 @@ actor NexToolSearchService {
                 unavailableReason: state.reason
             )
         }
-        return engine.search(
+        let result = engine.search(
             query: query,
             documents: documents,
             maximumResults: maximumResults,
             availabilityPolicy: availabilityPolicy
         )
+        // Recent-message retrieval is an executable read request, even when
+        // the user also says to open Messages. Keep the launcher action
+        // available as a secondary candidate, but make the content-bearing
+        // triage action the deterministic first choice.
+        let normalized = query.lowercased()
+        let requestsRecentMessages =
+            ["message", "text", "chat", "sms", "imessage"].contains { normalized.contains($0) } &&
+            ["recent", "latest", "last", "triage", "unread", "new", "couple", "pull", "show", "read"].contains { normalized.contains($0) }
+        guard requestsRecentMessages,
+              let triage = result.candidates.first(where: { $0.tool == "messages.triage" }) else {
+            return result
+        }
+        return .init(query: result.query, candidates: [triage] + result.candidates.filter { $0.tool != triage.tool })
     }
 
     func definitions(for result: NexToolSearchResult) async -> [NexRegisteredTool] {

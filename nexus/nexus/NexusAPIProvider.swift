@@ -299,7 +299,10 @@ final class NexusAPIProviderStore: ObservableObject {
 }
 
 enum NexusAPIProviderClient {
-    private static let inferenceRequestTimeout: TimeInterval = 7 * 24 * 60 * 60
+    /// A cloud stream that produces no first byte is a failed request, not a
+    /// week-long notch state. Once an API starts streaming, URLSession keeps
+    /// receiving progress normally; this bounds only a wedged initial call.
+    private static let inferenceRequestTimeout: TimeInterval = 120
     private struct OpenAIRequest: Encodable {
         struct Message: Encodable {
             private enum CodingKeys: String, CodingKey { case role, content }

@@ -335,6 +335,52 @@ final class NexComputerExtendedActionTests: XCTestCase {
         XCTAssertEqual(result.candidates.first?.tool, "browser.run_task")
     }
 
+    func testPlayYouTubeRequestDiscoversVisibleManagedPlaybackTool() async throws {
+        let tools = NexToolRegistry()
+        let computer = NexComputerRegistry(toolRegistry: tools, permissionManager: NexComputerPermissionManager(backend: AuthorizedPermissions()))
+        try await NexBrowserActionCatalog().register(on: computer)
+        let search = NexToolSearchService(registry: tools)
+        let result = await search.search(query: "Play something for me in the Nexus browser and put it on screen.")
+        XCTAssertEqual(result.candidates.first?.tool, "browser.play_youtube")
+    }
+
+    func testDirectYouTubeVoiceIntentAvoidsModelRouting() {
+        XCTAssertEqual(NexusYouTubeVoiceIntent.request(in: "Play something for me"), .init(query: nil))
+        XCTAssertEqual(NexusYouTubeVoiceIntent.request(in: "Play lo-fi beats on YouTube"), .init(query: "lo-fi beats"))
+        XCTAssertNil(NexusYouTubeVoiceIntent.request(in: "Explain YouTube recommendations"))
+    }
+
+    func testSchoologyRequestDiscoversDedicatedLiveEvidenceTool() async throws {
+        let tools = NexToolRegistry()
+        let computer = NexComputerRegistry(toolRegistry: tools, permissionManager: NexComputerPermissionManager(backend: AuthorizedPermissions()))
+        try await NexBrowserActionCatalog().register(on: computer)
+        let search = NexToolSearchService(registry: tools)
+        let result = await search.search(query: "Check Schoology for my upcoming school assignments.")
+        XCTAssertEqual(result.candidates.first?.tool, "browser.check_schoology")
+    }
+
+    func testYouTubePlaybackPlanUsesVisibleFirstResultAndNormalSkipControl() throws {
+        let json = try NexBrowserActionCatalog.youtubePlaybackSteps(query: "lofi beats")
+        let steps = try XCTUnwrap(try JSONSerialization.jsonObject(with: Data(json.utf8)) as? [[String: Any]])
+        XCTAssertEqual(steps.first?["action"] as? String, "navigate")
+        XCTAssertTrue((steps.first?["url"] as? String)?.contains("search_query=lofi") == true)
+        XCTAssertTrue(steps.contains { ($0["action"] as? String) == "bring_to_front" })
+        XCTAssertTrue(steps.contains { ($0["action"] as? String) == "youtube_start_first_visible" })
+        let skip = try XCTUnwrap(steps.first { ($0["action"] as? String) == "skip_youtube_ad" })
+        XCTAssertEqual(skip["minimumWaitMs"] as? Int, 5_000)
+        XCTAssertTrue(steps.contains { ($0["action"] as? String) == "youtube_fullscreen" })
+        XCTAssertTrue(steps.contains { ($0["action"] as? String) == "hold_open" })
+    }
+
+    func testSchoologyPlanUsesFUHSDAndNeverEmbedsAUserAccount() throws {
+        let json = try NexBrowserActionCatalog.schoologyCheckSteps(schoolEmail: nil)
+        let steps = try XCTUnwrap(try JSONSerialization.jsonObject(with: Data(json.utf8)) as? [[String: Any]])
+        let schoology = try XCTUnwrap(steps.first)
+        XCTAssertEqual(schoology["action"] as? String, "schoology_check")
+        XCTAssertEqual(schoology["url"] as? String, "https://fuhsd.schoology.com/")
+        XCTAssertEqual(schoology["schoolEmail"] as? String, "")
+    }
+
     func testManagedBrowserReadsPublicPageAndPersistsItsResult() async throws {
         let chrome = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
         let node = "/opt/homebrew/bin/node"
