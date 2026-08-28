@@ -223,6 +223,35 @@ final class NexusGeometryTests: XCTestCase {
         XCTAssertEqual(object["video_id"], .string("abcDEF_1234"))
     }
 
+    @MainActor
+    func testSearchedYouTubeSelectionDelegatesToManagedFullScreenBrowser() async throws {
+        let registry = NexToolRegistry()
+        try await registry.register(.init(
+            name: "browser.play_youtube",
+            description: "test",
+            statusLabel: "test",
+            spokenStatus: "test",
+            iconSystemName: "play.rectangle.fill",
+            permission: .automation,
+            schema: .init(fields: ["video_id": .init(.string, required: true)]),
+            handler: { arguments, _ in
+                .object([
+                    "status": .string("playing"),
+                    "video_id": arguments["video_id"] ?? .string("")
+                ])
+            }
+        ))
+        let controller = NexYouTubeToolController(registry: registry) { _, _ in false }
+        try await controller.registerIfNeeded()
+        let result = try await registry.execute(
+            name: "youtube_play",
+            arguments: ["video_id": .string("abcDEF_1234")],
+            invocation: .modelReadOnly
+        )
+        XCTAssertEqual(result.object?["status"], .string("playing"))
+        XCTAssertEqual(result.object?["video_id"], .string("abcDEF_1234"))
+    }
+
     func testChromeMediaClassificationKeepsNonMediaTabsOutOfTheNotch() throws {
         let url = try XCTUnwrap(URL(string: "https://developer.apple.com/documentation"))
         let tab = BrowserTab(

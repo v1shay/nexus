@@ -59,8 +59,11 @@ final class NexusAutomationTests: XCTestCase {
         XCTAssertEqual(blueprint.steps[0].arguments["steps"]?.array?.first?.object?["url"]?.string, "https://mail.google.com/mail/u/0/#search/in%3Ainbox%20is%3Aunread%20newer_than%3A1d")
         XCTAssertTrue(blueprint.steps[0].purpose.contains("every unread Gmail"))
         XCTAssertTrue(blueprint.steps[1].purpose.contains("every Google Calendar event"))
-        XCTAssertEqual(blueprint.steps[0].arguments["steps"]?.array?.last?.object?["selector"]?.string, "tr.zA")
-        XCTAssertEqual(blueprint.steps[1].arguments["steps"]?.array?.last?.object?["selector"]?.string, "[data-eventchip]")
+        XCTAssertEqual(blueprint.steps[0].arguments["steps"]?.array?.last?.object?["action"]?.string, "gmail_extract")
+        XCTAssertEqual(blueprint.steps[1].arguments["steps"]?.array?.last?.object?["action"]?.string, "calendar_extract")
+        XCTAssertEqual(blueprint.steps[0].arguments["steps"]?.array?.first?.object?["waitUntil"]?.string, "commit")
+        XCTAssertEqual(blueprint.steps[1].arguments["steps"]?.array?.first?.object?["waitUntil"]?.string, "commit")
+        XCTAssertEqual(blueprint.steps[3].arguments["steps"]?.array?.first?.object?["waitUntil"]?.string, "commit")
         XCTAssertEqual(blueprint.steps[2].tool, "weather.current")
         XCTAssertEqual(blueprint.steps[2].arguments["location"]?.string, "San Jose, California")
         XCTAssertTrue(NexusMorningBriefingRecipe.isCurrentRecipe(blueprint))
@@ -90,6 +93,50 @@ final class NexusAutomationTests: XCTestCase {
         let counted = "Good morning, Vishay. It is Tuesday, August 12 at 7:00 AM PDT. Weather: It is 68 degrees and clear. Your inbox: You have 4 unread messages. Your calendar: You have 2 events today and tomorrow. Your portfolio: Portfolio data is unavailable today. Market context: Technology shares are higher after earnings."
         XCTAssertTrue(NexusMorningBriefingRecipe.conformsToBriefingFormat(counted, expectedItemCounts: ["Gmail": 4, "Google Calendar": 2]))
         XCTAssertFalse(NexusMorningBriefingRecipe.conformsToBriefingFormat(counted, expectedItemCounts: ["Gmail": 99, "Google Calendar": 2]))
+        let repaired = NexusMorningBriefingRecipe.enforcingVerifiedItemCounts(
+            fidelityUnavailable,
+            counts: ["Gmail": 4, "Google Calendar": 0]
+        )
+        XCTAssertTrue(repaired.contains("Your inbox: 4 unread email items were retrieved;"))
+        XCTAssertTrue(repaired.contains("Your calendar: 0 events were retrieved for today and tomorrow;"))
+        XCTAssertTrue(NexusMorningBriefingRecipe.conformsToBriefingFormat(repaired, expectedItemCounts: ["Gmail": 4, "Google Calendar": 0]))
+    }
+
+    func testMorningBriefingSupportsSchwabTeenInvestorPortfolio() {
+        let blueprint = NexusMorningBriefingRecipe.blueprint(
+            modelID: "ollama:qwen",
+            prompt: "Every morning include Gmail, calendar, weather, and my Schwab Teen Investor portfolio with stock research."
+        )
+        let portfolio = blueprint.steps[3]
+        XCTAssertEqual(NexusMorningBriefingRecipe.sourceName(for: portfolio), "Schwab portfolio")
+        XCTAssertEqual(portfolio.arguments["steps"]?.array?.first?.object?["url"]?.string, "https://client.schwab.com/")
+        XCTAssertTrue(portfolio.purpose.contains("Schwab portfolio"))
+        XCTAssertTrue(portfolio.arguments["goal"]?.string?.contains("strictly read-only") == true)
+    }
+
+    func testPortfolioResearchQueryRetainsOnlyDistinctTickerSymbols() {
+        let result: NexJSONValue = .object([
+            "text": .string("Account value $12,345.67\nAAPL Apple Inc 4 shares\nTSLA Tesla 2 shares\nAAPL gain $51.20\nTOTAL VALUE USD")
+        ])
+        let query = NexusMorningBriefingRecipe.marketResearchQuery(from: result)
+        XCTAssertTrue(query.contains("AAPL"))
+        XCTAssertTrue(query.contains("TSLA"))
+        XCTAssertEqual(query.components(separatedBy: "AAPL").count - 1, 1)
+        XCTAssertFalse(query.contains("12,345"))
+        XCTAssertFalse(query.contains("51.20"))
+        XCTAssertFalse(query.contains("TOTAL"))
+    }
+
+    func testMorningBriefingAcceptsExplicitPortfolioPageURL() {
+        let blueprint = NexusMorningBriefingRecipe.blueprint(
+            modelID: "ollama:qwen",
+            prompt: "Include Gmail calendar weather and the portfolio at https://invest.example.test/read-only/holdings in my morning briefing."
+        )
+        XCTAssertEqual(
+            blueprint.steps[3].arguments["steps"]?.array?.first?.object?["url"]?.string,
+            "https://invest.example.test/read-only/holdings"
+        )
+        XCTAssertEqual(NexusMorningBriefingRecipe.sourceName(for: blueprint.steps[3]), "Portfolio")
     }
 
     func testMorningBriefingCompositionKeepsEveryCompletedToolResult() {
@@ -102,7 +149,7 @@ final class NexusAutomationTests: XCTestCase {
             .init(role: "system", content: "Fidelity is unavailable for this run. Do not infer values.")
         ]
         let composition = NexusMorningBriefingRecipe.compositionMessages(from: messages)
-        XCTAssertEqual(composition.count, 6)
+        XCTAssertEqual(composition.count, 5)
         XCTAssertTrue(composition.contains { $0.content.contains("all-mail-evidence") })
         XCTAssertTrue(composition.contains { $0.content.contains("weather-evidence") })
         XCTAssertFalse(composition.contains { $0.content.contains("Reviewed automation canvas") })

@@ -346,8 +346,18 @@ final class NexComputerExtendedActionTests: XCTestCase {
 
     func testDirectYouTubeVoiceIntentAvoidsModelRouting() {
         XCTAssertEqual(NexusYouTubeVoiceIntent.request(in: "Play something for me"), .init(query: nil))
+        XCTAssertEqual(NexusYouTubeVoiceIntent.request(in: "Open YouTube"), .init(query: nil))
+        XCTAssertEqual(NexusYouTubeVoiceIntent.request(in: "add more"), .init(query: nil))
         XCTAssertEqual(NexusYouTubeVoiceIntent.request(in: "Play lo-fi beats on YouTube"), .init(query: "lo-fi beats"))
         XCTAssertNil(NexusYouTubeVoiceIntent.request(in: "Explain YouTube recommendations"))
+    }
+
+    func testSchoologyVoiceIntentsKeepOpenAndCheckDistinct() {
+        XCTAssertEqual(NexusSchoologyVoiceIntent.request(in: "Open Schoology"), .open)
+        XCTAssertEqual(NexusSchoologyVoiceIntent.request(in: "Show Schoology"), .open)
+        XCTAssertEqual(NexusSchoologyVoiceIntent.request(in: "Check Schoology"), .check)
+        XCTAssertEqual(NexusSchoologyVoiceIntent.request(in: "Do I have any new assignments?"), .check)
+        XCTAssertNil(NexusSchoologyVoiceIntent.request(in: "Open the school website"))
     }
 
     func testSchoologyRequestDiscoversDedicatedLiveEvidenceTool() async throws {
@@ -359,17 +369,46 @@ final class NexComputerExtendedActionTests: XCTestCase {
         XCTAssertEqual(result.candidates.first?.tool, "browser.check_schoology")
     }
 
+    func testOpenSchoologyRequestDiscoversDedicatedPresentationTool() async throws {
+        let tools = NexToolRegistry()
+        let computer = NexComputerRegistry(toolRegistry: tools, permissionManager: NexComputerPermissionManager(backend: AuthorizedPermissions()))
+        try await NexBrowserActionCatalog().register(on: computer)
+        let result = await NexToolSearchService(registry: tools).search(query: "Open Schoology in the frontmost full-screen Nexus browser.")
+        XCTAssertEqual(result.candidates.first?.tool, "browser.open_schoology")
+    }
+
     func testYouTubePlaybackPlanUsesVisibleFirstResultAndNormalSkipControl() throws {
         let json = try NexBrowserActionCatalog.youtubePlaybackSteps(query: "lofi beats")
         let steps = try XCTUnwrap(try JSONSerialization.jsonObject(with: Data(json.utf8)) as? [[String: Any]])
         XCTAssertEqual(steps.first?["action"] as? String, "navigate")
         XCTAssertTrue((steps.first?["url"] as? String)?.contains("search_query=lofi") == true)
         XCTAssertTrue(steps.contains { ($0["action"] as? String) == "bring_to_front" })
+        XCTAssertTrue(steps.contains { ($0["action"] as? String) == "browser_fullscreen" })
         XCTAssertTrue(steps.contains { ($0["action"] as? String) == "youtube_start_first_visible" })
         let skip = try XCTUnwrap(steps.first { ($0["action"] as? String) == "skip_youtube_ad" })
         XCTAssertEqual(skip["minimumWaitMs"] as? Int, 5_000)
         XCTAssertTrue(steps.contains { ($0["action"] as? String) == "youtube_fullscreen" })
         XCTAssertTrue(steps.contains { ($0["action"] as? String) == "hold_open" })
+    }
+
+    func testExactSearchedYouTubeResultUsesSameFullScreenBrowserPath() throws {
+        let json = try NexBrowserActionCatalog.youtubePlaybackSteps(query: nil, videoID: "abcDEF_1234")
+        let steps = try XCTUnwrap(try JSONSerialization.jsonObject(with: Data(json.utf8)) as? [[String: Any]])
+        XCTAssertEqual(steps.first?["url"] as? String, "https://www.youtube.com/watch?v=abcDEF_1234")
+        XCTAssertFalse(steps.contains { ($0["action"] as? String) == "youtube_start_first_visible" })
+        XCTAssertTrue(steps.contains { ($0["action"] as? String) == "browser_fullscreen" })
+        XCTAssertTrue(steps.contains { ($0["action"] as? String) == "youtube_fullscreen" })
+        XCTAssertEqual(steps.last?["readyStatus"] as? String, "playing")
+    }
+
+    func testOpenSchoologyPlanAuthenticatesThenPresentsFullScreen() throws {
+        let json = try NexBrowserActionCatalog.schoologyOpenSteps(schoolEmail: nil)
+        let steps = try XCTUnwrap(try JSONSerialization.jsonObject(with: Data(json.utf8)) as? [[String: Any]])
+        XCTAssertEqual(steps.first?["action"] as? String, "schoology_check")
+        XCTAssertEqual(steps.first?["openOnly"] as? Bool, true)
+        XCTAssertTrue(steps.contains { ($0["action"] as? String) == "bring_to_front" })
+        XCTAssertTrue(steps.contains { ($0["action"] as? String) == "browser_fullscreen" })
+        XCTAssertEqual(steps.last?["readyStatus"] as? String, "presented")
     }
 
     func testSchoologyPlanUsesFUHSDAndNeverEmbedsAUserAccount() throws {
@@ -405,6 +444,57 @@ final class NexComputerExtendedActionTests: XCTestCase {
         XCTAssertEqual(persisted?.taskID, result.taskID)
         XCTAssertEqual(persisted?.status, "completed")
         XCTAssertEqual(persisted?.text, result.text)
+    }
+
+    func testManagedBrowserRetainsEveryVisiblePortfolioRowWithoutAuthentication() async throws {
+        let chrome = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
+        let node = "/opt/homebrew/bin/node"
+        guard FileManager.default.isExecutableFile(atPath: chrome),
+              FileManager.default.isExecutableFile(atPath: node) else {
+            throw XCTSkip("Managed-browser runtime is not installed on this host.")
+        }
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("NexPortfolioE2E-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let html = "<html><body><div data-position>AAPL Apple Inc 4 shares +1.2%</div><div data-position>TSLA Tesla Inc 2 shares -0.8%</div></body></html>"
+        let encoded = html.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? html
+        let steps = "[{\"action\":\"navigate\",\"url\":\"data:text/html,\(encoded)\"},{\"action\":\"extract\",\"selector\":\"[data-position]\"}]"
+        let result = try await NexManagedBrowserProvider(root: root).run(goal: "Read a generic read-only portfolio page", stepsJSON: steps) { _ in }
+        XCTAssertEqual(result.status, "completed")
+        XCTAssertTrue(result.text.contains("AAPL Apple Inc 4 shares +1.2%"))
+        XCTAssertTrue(result.text.contains("TSLA Tesla Inc 2 shares -0.8%"))
+        XCTAssertTrue(result.text.contains("--- Nexus source item ---"))
+    }
+
+    func testManagedBrowserReadsEveryVisibleSchoologyNewAssignmentInBackground() async throws {
+        let chrome = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
+        let node = "/opt/homebrew/bin/node"
+        guard FileManager.default.isExecutableFile(atPath: chrome),
+              FileManager.default.isExecutableFile(atPath: node) else {
+            throw XCTSkip("Managed-browser runtime is not installed on this host.")
+        }
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("NexSchoologyE2E-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let html = """
+        <html><body>
+          <button>New Assignments</button>
+          <section role="tabpanel" aria-label="New Assignments">
+            <article>Robotics Lab — Engineering — Due Monday at 9:00 AM</article>
+            <article>Chapter 7 Problems — Algebra II — Due Tuesday at 11:59 PM</article>
+          </section>
+        </body></html>
+        """
+        let encoded = html.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? html
+        let url = "data:text/html,\(encoded)"
+        let steps = try NexBrowserActionCatalog.schoologyCheckSteps(schoolEmail: nil, url: url)
+        let result = try await NexManagedBrowserProvider(root: root).run(
+            goal: "Read the New Assignments area without presenting the browser",
+            stepsJSON: steps
+        ) { _ in }
+        XCTAssertEqual(result.status, "completed", result.error)
+        XCTAssertTrue(result.text.contains("Robotics Lab"), result.text)
+        XCTAssertTrue(result.text.contains("Chapter 7 Problems"), result.text)
+        XCTAssertTrue(result.text.contains("Due Monday at 9:00 AM"), result.text)
+        XCTAssertTrue(result.text.contains("Due Tuesday at 11:59 PM"), result.text)
     }
 
     func testManagedBrowserStartsAndCancelsByStableTaskID() async throws {

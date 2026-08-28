@@ -266,6 +266,50 @@ final class NexusAppDelegate: NSObject, NSApplicationDelegate {
             }
             return
         }
+        if let index = CommandLine.arguments.firstIndex(of: "--nexus-automation-test") {
+            NSApp.setActivationPolicy(.prohibited)
+            let requested = CommandLine.arguments.indices.contains(index + 1)
+                ? CommandLine.arguments[index + 1]
+                : "Morning Briefing"
+            launchTask = Task { @MainActor in
+                let controller = NotchController()
+                await controller.startAutomationHost()
+                await controller.automations.reload()
+                let automation = controller.automations.automations.first { candidate in
+                    candidate.id.uuidString.caseInsensitiveCompare(requested) == .orderedSame
+                        || candidate.title.caseInsensitiveCompare(requested) == .orderedSame
+                }
+                guard let automation else {
+                    let data = try? JSONSerialization.data(withJSONObject: ["ok": false, "error": "No saved automation matches \(requested)."], options: [.sortedKeys])
+                    FileHandle.standardOutput.write(data ?? Data("{\"ok\":false}".utf8))
+                    FileHandle.standardOutput.write(Data("\n".utf8))
+                    controller.shutdown()
+                    Foundation.exit(2)
+                }
+                let beganAt = Date()
+                await controller.automations.testNow(automation)
+                await controller.automations.reload()
+                let run = controller.automations.runs
+                    .filter { $0.automationID == automation.id && $0.scheduledFor >= beganAt.addingTimeInterval(-1) }
+                    .max(by: { $0.scheduledFor < $1.scheduledFor })
+                let succeeded = run?.state == .completed
+                let payload: [String: Any] = [
+                    "ok": succeeded,
+                    "id": automation.id.uuidString,
+                    "title": automation.title,
+                    "state": run?.state.rawValue ?? "missing",
+                    "summary": run?.summary ?? "",
+                    "diagnostic": run?.diagnostic ?? "",
+                    "tools": run?.executedTools ?? []
+                ]
+                let data = try? JSONSerialization.data(withJSONObject: payload, options: [.sortedKeys])
+                FileHandle.standardOutput.write(data ?? Data("{\"ok\":false}".utf8))
+                FileHandle.standardOutput.write(Data("\n".utf8))
+                controller.shutdown()
+                Foundation.exit(succeeded ? 0 : 2)
+            }
+            return
+        }
         if NexusConnectHostProcess.isCurrentProcess {
             NSApp.setActivationPolicy(.prohibited)
             let host = NexusConnectHostDaemon()
@@ -1640,6 +1684,61 @@ final class NotchController: ObservableObject {
             let registryActions = await memory.registry.definitions().map(\.name)
             let tools = Set(computerActions + registryActions).sorted().joined(separator: "\n")
             return .init(ok: true, result: ["tools": tools], error: nil)
+        case "automation-list":
+            await automationController.reload()
+            let formatter = ISO8601DateFormatter()
+            let rows = automationController.automations.map { automation in
+                [
+                    automation.id.uuidString,
+                    automation.title,
+                    automation.enabled ? "enabled" : "paused",
+                    automation.nextRun.map(formatter.string(from:)) ?? "not-scheduled"
+                ].joined(separator: "|")
+            }.joined(separator: "\n")
+            return .init(ok: true, result: ["automations": rows], error: nil)
+        case "automation-enable":
+            guard let raw = request.arguments["automation"],
+                  let enabledText = request.arguments["enabled"],
+                  let enabled = Bool(enabledText) else {
+                return .init(ok: false, result: [:], error: "Use an automation ID or title and true or false.")
+            }
+            await automationController.reload()
+            guard let automation = resolveAutomation(raw) else {
+                return .init(ok: false, result: [:], error: "No unique saved automation matches \(raw).")
+            }
+            do {
+                try await automationController.setEnabled(automation, enabled: enabled)
+                let updated = automationController.automations.first(where: { $0.id == automation.id })
+                return .init(ok: true, result: [
+                    "id": automation.id.uuidString,
+                    "title": automation.title,
+                    "enabled": String(updated?.enabled ?? enabled),
+                    "next_run": updated?.nextRun.map(ISO8601DateFormatter().string(from:)) ?? ""
+                ], error: nil)
+            } catch {
+                return .init(ok: false, result: [:], error: error.localizedDescription)
+            }
+        case "automation-test":
+            guard let raw = request.arguments["automation"] else {
+                return .init(ok: false, result: [:], error: "Use an automation ID or title.")
+            }
+            await automationController.reload()
+            guard let automation = resolveAutomation(raw) else {
+                return .init(ok: false, result: [:], error: "No unique saved automation matches \(raw).")
+            }
+            await automationController.testNow(automation)
+            guard let run = automationController.runs.first(where: { $0.automationID == automation.id }) else {
+                return .init(ok: false, result: [:], error: "The automation did not create a run record.")
+            }
+            let succeeded = run.state == .completed
+            return .init(ok: succeeded, result: [
+                "id": automation.id.uuidString,
+                "title": automation.title,
+                "state": run.state.rawValue,
+                "summary": run.summary,
+                "diagnostic": run.diagnostic,
+                "tools": run.executedTools.joined(separator: ",")
+            ], error: succeeded ? nil : (run.diagnostic.isEmpty ? "The automation run failed." : run.diagnostic))
         case "tool-execute", "tool-dry-run":
             guard let action = request.arguments["action"],
                   let rawArguments = request.arguments["json"],
@@ -1764,6 +1863,22 @@ final class NotchController: ObservableObject {
             try? await Task.sleep(for: .milliseconds(120))
         }
         return false
+    }
+
+    private func resolveAutomation(_ raw: String) -> NexusAutomation? {
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let id = UUID(uuidString: trimmed) {
+            return automationController.automations.first(where: { $0.id == id })
+        }
+        if let exact = automationController.automations.first(where: {
+            $0.title.caseInsensitiveCompare(trimmed) == .orderedSame
+        }) {
+            return exact
+        }
+        let partial = automationController.automations.filter {
+            $0.title.localizedCaseInsensitiveContains(trimmed)
+        }
+        return partial.count == 1 ? partial[0] : nil
     }
 
     private func headlessToolTraceJSON() -> String {
@@ -1995,7 +2110,15 @@ final class NotchController: ObservableObject {
                     tools: definitions
                 )
                 let plan: NexPrimaryToolPlan
-                if let request = NexusYouTubeVoiceIntent.request(in: prompt) {
+                if let request = NexusSchoologyVoiceIntent.request(in: prompt) {
+                    plan = .init(
+                        status: request == .open ? "Opening Schoology…" : "Checking Schoology…",
+                        actions: [.init(
+                            tool: request == .open ? "browser.open_schoology" : "browser.check_schoology",
+                            arguments: [:]
+                        )]
+                    )
+                } else if let request = NexusYouTubeVoiceIntent.request(in: prompt) {
                     // Playback is a deterministic interaction contract, not
                     // an open-ended question for a model to reinterpret. This
                     // prevents a slow vision model from opening YouTube and
@@ -2076,14 +2199,17 @@ final class NotchController: ObservableObject {
                             definitions.append(contentsOf: newlyAvailable)
                             definitions.sort { $0.name < $1.name }
                         }
-                        let startedNexusBrowserPlayback = actions.contains { $0.tool == "browser.play_youtube" }
+                        let startedNexusBrowserPlayback = actions.contains {
+                            $0.tool == "browser.play_youtube" || $0.tool == "youtube_play"
+                        }
+                        let startedVisibleSchoology = actions.contains { $0.tool == "browser.open_schoology" }
                         let startedOverlayPlayback = actions.contains {
                             ["youtube_play_current", "youtube_play", "youtube_fullscreen"].contains($0.tool)
                         } && mediaOverlayTab != nil
                         // The visible Playwright player owns its browser task
                         // from here. Do not run another model/planning turn
                         // that can ask a new question or start a second search.
-                        if startedNexusBrowserPlayback || startedOverlayPlayback { break }
+                        if startedNexusBrowserPlayback || startedVisibleSchoology || startedOverlayPlayback { break }
 
                         let planningContext = await conversationSession.contextMessages(
                             memoryLookupPerformed: memoryLookupPerformed,
@@ -2114,8 +2240,11 @@ final class NotchController: ObservableObject {
                         if plannerAdvisory == nil { plannerAdvisory = pendingPlan.memoryWrite }
                     }
                     guard !Task.isCancelled, responseGeneration == generation else { return }
-                    let requestedNexusBrowserPlayback = executedActions.contains { $0.tool == "browser.play_youtube" }
-                    if requestedNexusBrowserPlayback {
+                    let requestedNexusBrowserPlayback = executedActions.contains {
+                        $0.tool == "browser.play_youtube" || $0.tool == "youtube_play"
+                    }
+                    let requestedVisibleSchoology = executedActions.contains { $0.tool == "browser.open_schoology" }
+                    if requestedNexusBrowserPlayback || requestedVisibleSchoology {
                         responseIsStreaming = false
                         await responseSpeaker.finishStreamingAndWait()
                         armWakePhraseListener()

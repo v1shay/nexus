@@ -1,5 +1,6 @@
 import AppKit
 import CryptoKit
+import Darwin
 import Foundation
 
 struct NexBrowserTaskResult: Codable, Sendable {
@@ -28,6 +29,12 @@ enum NexusYouTubeVoiceIntent {
         if genericPhrases.contains(where: normalized.contains) {
             return .init(query: nil)
         }
+        let normalizedWords = normalized
+            .replacingOccurrences(of: #"[^a-z0-9]+"#, with: " ", options: .regularExpression)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        if ["add more", "add more please"].contains(normalizedWords) {
+            return .init(query: nil)
+        }
         guard normalized.hasPrefix("play "), normalized.count > "play ".count else { return nil }
         var query = String(trimmed.dropFirst(5))
         for suffix in [" on youtube", " in youtube", " in the nexus browser", " on the nexus browser", " for me"] {
@@ -38,6 +45,33 @@ enum NexusYouTubeVoiceIntent {
         query = query.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !query.isEmpty, !["it", "that", "this", "current video"].contains(query.lowercased()) else { return nil }
         return .init(query: query)
+    }
+}
+
+/// Schoology's two common requests have intentionally different presentation
+/// contracts. Opening it is a foreground, full-screen browser action; checking
+/// assignments stays in the background and returns evidence to the model.
+enum NexusSchoologyVoiceIntent {
+    enum Request: Equatable, Sendable { case open, check }
+
+    static func request(in prompt: String) -> Request? {
+        let normalized = prompt
+            .lowercased()
+            .replacingOccurrences(of: #"[^a-z0-9]+"#, with: " ", options: .regularExpression)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard normalized.contains("schoology") || normalized.contains("new assignments") else { return nil }
+        if normalized.contains("check")
+            || normalized.contains("new assignment")
+            || normalized.contains("any assignment")
+            || normalized.contains("homework") {
+            return .check
+        }
+        if normalized == "open schoology"
+            || normalized == "show schoology"
+            || normalized == "go to schoology" {
+            return .open
+        }
+        return nil
     }
 }
 
@@ -53,6 +87,7 @@ actor NexManagedBrowserProvider {
     private var processes: [String: Process] = [:]
     private var results: [String: NexBrowserTaskResult] = [:]
     private var cancelledTaskIDs: Set<String> = []
+    private var watchdogs: [String: Task<Void, Never>] = [:]
     init(root: URL? = nil, chromeIsRunning: @escaping @Sendable () -> Bool = {
         NSWorkspace.shared.runningApplications.contains { $0.bundleIdentifier == "com.google.Chrome" }
     }) {
@@ -72,15 +107,38 @@ actor NexManagedBrowserProvider {
     /// Playback has a visible completion point. Do not report success until
     /// the browser has actually selected a video and entered full screen.
     func startPlayback(goal: String, stepsJSON: String, progress: @escaping @Sendable (String) async -> Void) async throws -> NexBrowserTaskResult {
+        try await startPresentation(
+            goal: goal,
+            stepsJSON: stepsJSON,
+            expectedStatus: "playing",
+            failureCode: "youtube_playback_failed",
+            timeoutCode: "youtube_playback_timeout",
+            timeoutMessage: "YouTube did not reach visible playback within two minutes. Nexus left the browser task stopped rather than claiming it played.",
+            progress: progress
+        )
+    }
+
+    /// Visible browser workflows remain owned by the managed runner after the
+    /// tool returns. A positive ready event proves that navigation, account
+    /// selection, OS-window full screen, and foreground presentation all ran.
+    func startPresentation(
+        goal: String,
+        stepsJSON: String,
+        expectedStatus: String,
+        failureCode: String,
+        timeoutCode: String,
+        timeoutMessage: String,
+        progress: @escaping @Sendable (String) async -> Void
+    ) async throws -> NexBrowserTaskResult {
         let task = try await launch(goal: goal, stepsJSON: stepsJSON, visible: true, keepOpen: true)
         Task { _ = await self.collect(task, progress: progress) }
         for _ in 0..<1_200 { // two minutes, sampled every 100 ms
             if let result = results[task.taskID] {
-                if result.status == "playing" { return result }
+                if result.status == expectedStatus { return result }
                 if result.status == "failed" || result.status == "cancelled" {
                     throw NexToolError.executionFailed(
-                        code: "youtube_playback_failed",
-                        message: result.error.isEmpty ? "YouTube did not begin playback." : result.error
+                        code: failureCode,
+                        message: result.error.isEmpty ? "The visible browser task did not become ready." : result.error
                     )
                 }
             }
@@ -88,8 +146,8 @@ actor NexManagedBrowserProvider {
         }
         try? cancel(task.taskID)
         throw NexToolError.executionFailed(
-            code: "youtube_playback_timeout",
-            message: "YouTube did not reach visible playback within two minutes. Nexus left the browser task stopped rather than claiming it played."
+            code: timeoutCode,
+            message: timeoutMessage
         )
     }
 
@@ -111,6 +169,12 @@ actor NexManagedBrowserProvider {
         let request: [String: Any] = ["taskID": taskID, "goal": goal, "steps": try JSONSerialization.jsonObject(with: stepsData), "profile": root.appendingPathComponent("Profile").path, "taskRoot": taskRoot.path, "chrome": "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome", "visible": visible, "keepOpen": keepOpen]
         let input = try JSONSerialization.data(withJSONObject: request)
         let process = Process(), stdin = Pipe(), stdout = Pipe(); process.executableURL = URL(fileURLWithPath: "/opt/homebrew/bin/node"); process.arguments = [runtime.appendingPathComponent("agent.mjs").path]; process.standardInput = stdin; process.standardOutput = stdout; process.standardError = stdout; processes[taskID] = process; try process.run(); try stdin.fileHandleForWriting.write(contentsOf: input); try stdin.fileHandleForWriting.close()
+        if !keepOpen {
+            watchdogs[taskID] = Task {
+                do { try await Task.sleep(for: .seconds(120)) } catch { return }
+                await self.stopTimedOutTask(taskID)
+            }
+        }
         let running = NexBrowserTaskResult(taskID: taskID, status: "running", text: "", tabs: [], downloads: [], screenshots: [], error: "")
         results[taskID] = running
         return .init(taskID: taskID, process: process, stdout: stdout)
@@ -120,9 +184,18 @@ actor NexManagedBrowserProvider {
         let taskID = task.taskID
         var final = NexBrowserTaskResult(taskID: taskID, status: "running", text: "", tabs: [], downloads: [], screenshots: [], error: "")
         do {
-            for try await line in task.stdout.fileHandleForReading.bytes.lines { guard let data = line.data(using: .utf8), let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { continue }; let event = json["event"] as? String; if event == "media_ready" { final = .init(taskID: taskID, status: "playing", text: json["text"] as? String ?? "", tabs: json["tabs"] as? [String] ?? [], downloads: [], screenshots: [], error: ""); results[taskID] = final; try? persist(final) }; if let event, event != "completed" { await progress((json["message"] as? String) ?? event) }; if event == "completed" { final = .init(taskID: taskID, status: json["status"] as? String ?? "completed", text: json["text"] as? String ?? "", tabs: json["tabs"] as? [String] ?? [], downloads: json["downloads"] as? [String] ?? [], screenshots: json["screenshots"] as? [String] ?? [], error: json["error"] as? String ?? "") } }
-        } catch { task.process.terminate() }
-        task.process.waitUntilExit(); processes[taskID] = nil
+            readLoop: for try await line in task.stdout.fileHandleForReading.bytes.lines { guard let data = line.data(using: .utf8), let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { continue }; let event = json["event"] as? String; if event == "media_ready" { final = .init(taskID: taskID, status: json["status"] as? String ?? "playing", text: json["text"] as? String ?? "", tabs: json["tabs"] as? [String] ?? [], downloads: [], screenshots: [], error: ""); results[taskID] = final; try? persist(final) }; if let event, event != "completed" { await progress((json["message"] as? String) ?? event) }; if event == "completed" { final = .init(taskID: taskID, status: json["status"] as? String ?? "completed", text: json["text"] as? String ?? "", tabs: json["tabs"] as? [String] ?? [], downloads: json["downloads"] as? [String] ?? [], screenshots: json["screenshots"] as? [String] ?? [], error: json["error"] as? String ?? ""); break readLoop } }
+        } catch {
+            task.process.terminate()
+            terminateHeadlessProfileProcesses()
+        }
+        // The completed event is the protocol boundary. Do not wait for a
+        // Chromium child that inherited the stdout pipe to close it; stop the
+        // exact task and its exact headless profile immediately after saving
+        // the final payload.
+        if task.process.isRunning { task.process.terminate() }
+        terminateHeadlessProfileProcesses()
+        task.process.waitUntilExit(); processes[taskID] = nil; watchdogs.removeValue(forKey: taskID)?.cancel()
         let cancelled = cancelledTaskIDs.remove(taskID) != nil
         if cancelled {
             final = .init(taskID: taskID, status: "cancelled", text: "", tabs: [], downloads: [], screenshots: [], error: "")
@@ -132,7 +205,7 @@ actor NexManagedBrowserProvider {
         results[taskID] = final; try? persist(final); return final
     }
     func status(_ id: String) -> NexBrowserTaskResult? { results[id] ?? (processes[id] != nil ? .init(taskID: id, status: "running", text: "", tabs: [], downloads: [], screenshots: [], error: "") : persistedResult(id)) }
-    func cancel(_ id: String) throws { guard let process = processes[id], process.isRunning else { throw NexToolError.executionFailed(code: "browser_task_missing", message: "Browser task is not running.") }; cancelledTaskIDs.insert(id); process.terminate(); processes[id] = nil; let cancelled = NexBrowserTaskResult(taskID: id, status: "cancelled", text: "", tabs: [], downloads: [], screenshots: [], error: ""); results[id] = cancelled; try persist(cancelled) }
+    func cancel(_ id: String) throws { guard let process = processes[id], process.isRunning else { throw NexToolError.executionFailed(code: "browser_task_missing", message: "Browser task is not running.") }; cancelledTaskIDs.insert(id); process.terminate(); terminateHeadlessProfileProcesses(); processes[id] = nil; watchdogs.removeValue(forKey: id)?.cancel(); let cancelled = NexBrowserTaskResult(taskID: id, status: "cancelled", text: "", tabs: [], downloads: [], screenshots: [], error: ""); results[id] = cancelled; try persist(cancelled) }
     func importProfile(chromeRoot: URL) throws -> [String] {
         guard !chromeIsRunning() else { throw NexToolError.executionFailed(code: "chrome_must_close", message: "Quit Chrome before importing browser state.") }
         let source = chromeRoot.appendingPathComponent("Default"), destination = root.appendingPathComponent("Profile/Default"); try FileManager.default.createDirectory(at: destination, withIntermediateDirectories: true); var copied: [String] = []
@@ -167,7 +240,7 @@ actor NexManagedBrowserProvider {
         ]
         try process.run()
     }
-    func reset() throws { cancelledTaskIDs.formUnion(processes.keys); for process in processes.values { process.terminate() }; processes.removeAll(); try? FileManager.default.removeItem(at: root.appendingPathComponent("Profile")); try FileManager.default.createDirectory(at: root.appendingPathComponent("Profile"), withIntermediateDirectories: true) }
+    func reset() throws { cancelledTaskIDs.formUnion(processes.keys); for process in processes.values { process.terminate() }; processes.removeAll(); for watchdog in watchdogs.values { watchdog.cancel() }; watchdogs.removeAll(); try? FileManager.default.removeItem(at: root.appendingPathComponent("Profile")); try FileManager.default.createDirectory(at: root.appendingPathComponent("Profile"), withIntermediateDirectories: true) }
 
     /// Browser actions may be started and inspected by separate `nex-computer`
     /// invocations.  Keep the final, non-secret task result beside the task's
@@ -189,6 +262,51 @@ actor NexManagedBrowserProvider {
     private func taskDirectory(for id: String) -> URL? {
         guard UUID(uuidString: id) != nil else { return nil }
         return root.appendingPathComponent("tasks", isDirectory: true).appendingPathComponent(id.lowercased(), isDirectory: true)
+    }
+
+    private func stopTimedOutTask(_ id: String) {
+        guard let process = processes[id] else { return }
+        if process.isRunning { process.terminate() }
+        terminateHeadlessProfileProcesses()
+        let timedOut = NexBrowserTaskResult(
+            taskID: id,
+            status: "failed",
+            text: "",
+            tabs: [],
+            downloads: [],
+            screenshots: [],
+            error: "Managed browser task exceeded the two-minute execution limit and was stopped."
+        )
+        results[id] = timedOut
+        try? persist(timedOut)
+    }
+
+    /// A Chromium child can outlive a crashed Node/Playwright parent and keep
+    /// the stdout pipe and profile SingletonLock open forever. Match both the
+    /// exact Nexus profile and the runner's debugging transport so normal
+    /// Chrome and the visible sign-in browser can never be selected here.
+    private func terminateHeadlessProfileProcesses() {
+        let process = Process()
+        let pipe = Pipe()
+        process.executableURL = URL(fileURLWithPath: "/bin/ps")
+        process.arguments = ["-axo", "pid=,command="]
+        process.standardOutput = pipe
+        process.standardError = FileHandle.nullDevice
+        guard (try? process.run()) != nil else { return }
+        // Drain while `ps` is running. Waiting first can deadlock when the
+        // process table is large enough to fill the pipe buffer.
+        let data = pipe.fileHandleForReading.readDataToEndOfFile()
+        process.waitUntilExit()
+        let output = String(data: data, encoding: .utf8) ?? ""
+        let profileArgument = "--user-data-dir=\(root.appendingPathComponent("Profile").path)"
+        for line in output.split(separator: "\n") {
+            let fields = line.split(maxSplits: 1, whereSeparator: { $0.isWhitespace })
+            guard fields.count == 2,
+                  let pid = pid_t(fields[0]),
+                  fields[1].contains(profileArgument),
+                  (fields[1].contains("--remote-debugging-pipe") || fields[1].contains("--remote-debugging-port=")) else { continue }
+            _ = Darwin.kill(pid, SIGTERM)
+        }
     }
 
     private func ensureRuntime() async throws -> URL {
@@ -217,33 +335,60 @@ actor NexManagedBrowserProvider {
 
     private static let script = #"""
 import fs from 'node:fs';
+import { spawn } from 'node:child_process';
 import { chromium } from 'playwright-core';
 const request = JSON.parse(fs.readFileSync(0, 'utf8'));
 const emit = value => process.stdout.write(JSON.stringify(value) + '\n');
-let context; const downloads = [], screenshots = [], extracted = [];
+let browser, context, chromeProcess; const downloads = [], screenshots = [], extracted = [];
 try {
   emit({event:'started',message:'Starting secure browser…'});
-  // The sign-in window and an automation run deliberately share this one
-  // Nexus-owned user-data directory.  Playwright normally adds
-  // `--password-store=basic` and `--use-mock-keychain` to Chrome.  Those
-  // flags prevent the automation process from reading the real macOS
-  // Keychain-encrypted cookies which Chrome saved during interactive sign-in,
-  // making Gmail appear logged out after the window is quit.  Let Chrome use
-  // its normal Keychain integration for this persistent, local-only profile.
-  context = await chromium.launchPersistentContext(request.profile,{
-    headless:request.visible !== true,
-    executablePath:request.chrome,
-    acceptDownloads:true,
-    args:['--disable-background-mode'],
-    ignoreDefaultArgs:['--password-store=basic','--use-mock-keychain']
-  });
+  // Start Chrome ourselves, then attach Playwright over loopback CDP. Recent
+  // Chrome builds can hang indefinitely while Playwright negotiates its pipe
+  // against a mature, signed-in persistent profile. The loopback endpoint is
+  // bound locally, works with the real macOS Keychain-backed cookies, and is
+  // removed with the exact Chrome child when this task ends.
+  fs.mkdirSync(request.profile,{recursive:true});
+  const activePortFile=`${request.profile}/DevToolsActivePort`;
+  fs.rmSync(activePortFile,{force:true});
+  const chromeArgs=[
+    `--user-data-dir=${request.profile}`,
+    '--profile-directory=Default',
+    '--remote-debugging-address=127.0.0.1',
+    '--remote-debugging-port=0',
+    '--no-first-run',
+    '--no-default-browser-check',
+    '--disable-background-mode',
+    '--disable-extensions',
+    '--disable-session-crashed-bubble',
+    '--no-sandbox'
+  ];
+  if(request.visible !== true) chromeArgs.push('--headless=new','--hide-scrollbars','--mute-audio');
+  chromeArgs.push('about:blank');
+  chromeProcess=spawn(request.chrome,chromeArgs,{stdio:'ignore'});
+  let endpoint='';
+  for(let attempt=0;attempt<150;attempt++) {
+    if(chromeProcess.exitCode!==null) throw new Error(`Chrome exited before its secure browser endpoint was ready (${chromeProcess.exitCode}).`);
+    try {
+      const lines=fs.readFileSync(activePortFile,'utf8').trim().split(/\r?\n/);
+      if(/^\d+$/.test(lines[0] || '')) { endpoint=`http://127.0.0.1:${lines[0]}`; break; }
+    } catch {}
+    await new Promise(resolve=>setTimeout(resolve,100));
+  }
+  if(!endpoint) throw new Error('Chrome did not publish its secure local browser endpoint within 15 seconds.');
+  browser=await chromium.connectOverCDP(endpoint);
+  context=browser.contexts()[0];
+  if(!context) throw new Error('Chrome opened without a usable browser context.');
   emit({event:'progress',message:'Using saved Nexus browser session…'});
   let page = context.pages()[0] || await context.newPage();
   page.on('download', async download => { const target=`${request.taskRoot}/${download.suggestedFilename()}`; await download.saveAs(target); downloads.push(target); emit({event:'download',message:`Downloaded ${download.suggestedFilename()}`}); });
   for (const [index,step] of request.steps.entries()) {
     emit({event:'progress',message:step.label || `${step.action} ${index+1}/${request.steps.length}`});
     switch(step.action) {
-      case 'navigate': await page.goto(step.url,{waitUntil:'domcontentloaded',timeout:30000}); break;
+      case 'navigate': {
+        await page.goto(step.url,{waitUntil:step.waitUntil || 'domcontentloaded',timeout:30000});
+        if(Number(step.settleMs)>0) await page.waitForTimeout(Math.min(Number(step.settleMs),10000));
+        break;
+      }
       case 'new_tab': page=await context.newPage(); if(step.url) await page.goto(step.url,{waitUntil:'domcontentloaded'}); break;
       case 'activate_tab': { const pages=context.pages(); if(!pages[step.index]) throw new Error('Tab index unavailable'); page=pages[step.index]; await page.bringToFront(); break; }
       case 'close_tab': await page.close(); page=context.pages()[0] || await context.newPage(); break;
@@ -253,6 +398,15 @@ try {
         break;
       }
       case 'bring_to_front': await page.bringToFront(); break;
+      case 'browser_fullscreen': {
+        await page.bringToFront();
+        const session=await context.newCDPSession(page);
+        const {windowId}=await session.send('Browser.getWindowForTarget');
+        await session.send('Browser.setWindowBounds',{windowId,bounds:{windowState:'fullscreen'}});
+        await page.waitForTimeout(500);
+        emit({event:'progress',message:'Made the Nexus browser fill the screen.'});
+        break;
+      }
       // A wait only establishes that the page has rendered at least one
       // matching element. `locator.waitFor` is strict, so waiting on Gmail's
       // many rows or Calendar's many event chips throws before extraction.
@@ -268,13 +422,53 @@ try {
         // row/event as individually delimited evidence.
         const count=await locator.count();
         if(count===0) throw new Error(`No readable elements matched ${step.selector || 'body'}`);
-        const values=[];
-        for(let item=0;item<count;item++) {
-          const text=(await locator.nth(item).innerText({timeout:15000})).trim();
-          if(text) values.push(text);
-        }
+        // Snapshot all matching text in one renderer round trip. Iterating a
+        // live Gmail row locator one item at a time can spend 15 seconds on
+        // each row that detaches while the inbox refreshes, turning a normal
+        // 50-row inbox into a multi-minute hang.
+        const values=(await locator.allInnerTexts()).map(value=>value.trim()).filter(Boolean);
         if(values.length===0) throw new Error(`Matched ${count} elements but none had readable text for ${step.selector || 'body'}`);
         extracted.push(values.join('\n--- Nexus source item ---\n'));
+        break;
+      }
+      case 'gmail_extract': {
+        var body='';
+        for(let attempt=0;attempt<60;attempt++) {
+          const rows=(await page.locator('tr.zA').allInnerTexts()).map(value=>value.trim()).filter(Boolean);
+          if(rows.length>0) { extracted.push(rows.join('\n--- Nexus source item ---\n')); break; }
+          body=(await page.locator('body').innerText().catch(()=>'' )).trim();
+          if(/no (?:emails?|conversations?|mail)(?: matched| found)?|inbox is empty/i.test(body)) {
+            extracted.push('Nexus verified there are no visible unread Gmail rows in the requested last-24-hours inbox search.');
+            break;
+          }
+          await page.waitForTimeout(500);
+        }
+        if(!extracted.length) throw new Error(`Gmail did not finish rendering its requested unread-mail search. Last page state: ${body.slice(-500)}`);
+        break;
+      }
+      case 'calendar_extract': {
+        const dates=(step.dates || []).map(value=>String(value).toLowerCase());
+        var body='', loaded=false, matches=[];
+        for(let attempt=0;attempt<60;attempt++) {
+          body=(await page.locator('body').innerText().catch(()=>'' )).trim();
+          loaded=/\bLoaded\b|Showing events until|Schedule starting/i.test(body);
+          const chips=page.locator('[data-eventchip]');
+          matches=[];
+          for(let item=0;item<await chips.count();item++) {
+            const chip=chips.nth(item);
+            const text=(await chip.innerText().catch(()=>'' )).trim();
+            const aria=(await chip.getAttribute('aria-label').catch(()=>'' ) || '').trim();
+            const title=(await chip.getAttribute('title').catch(()=>'' ) || '').trim();
+            const evidence=[aria,title,text].filter(Boolean).join('\n');
+            if(evidence && dates.some(date=>evidence.toLowerCase().includes(date))) matches.push(evidence);
+          }
+          if(matches.length>0 || loaded) break;
+          await page.waitForTimeout(500);
+        }
+        if(!loaded && matches.length===0) throw new Error('Google Calendar did not finish rendering the requested date window.');
+        extracted.push(matches.length>0
+          ? [...new Set(matches)].join('\n--- Nexus source item ---\n')
+          : `Nexus verified there are no visible Google Calendar event items for ${step.windowLabel || dates.join(' and ')}.`);
         break;
       }
       case 'upload': await page.locator(step.selector).setInputFiles(step.paths || []); break;
@@ -396,15 +590,31 @@ try {
         if(new URL(url).hostname.includes('google.com') || /(?:^|\\n)\s*(sign in|log in)\b/i.test(text)) {
           throw new Error('Schoology still requires sign-in. Nexus will not enter a password or MFA code; open the Nexus browser profile, complete the sign-in once, then retry.');
         }
-        const upcoming=page.locator('[class*="upcoming" i], [id*="upcoming" i], [data-testid*="upcoming" i]');
+        if(step.openOnly===true) {
+          extracted.push(`Opened the signed-in Schoology home page at ${url}.`);
+          break;
+        }
+        const assignmentTabs=page.locator('button:has-text("New Assignments"), a:has-text("New Assignments"), [role="tab"]:has-text("New Assignments"), button:has-text("Upcoming"), a:has-text("Upcoming"), [role="tab"]:has-text("Upcoming")');
+        for(let item=0;item<await assignmentTabs.count();item++) {
+          const tab=assignmentTabs.nth(item);
+          if(await tab.isVisible().catch(()=>false)) {
+            await tab.click().catch(()=>{});
+            await page.waitForTimeout(500);
+            break;
+          }
+        }
+        const upcoming=page.locator('[role="tabpanel"], [class*="new-assignment" i], [id*="new-assignment" i], [data-testid*="new-assignment" i], [class*="upcoming" i], [id*="upcoming" i], [data-testid*="upcoming" i]');
         const count=await upcoming.count();
         const items=[];
         for(let item=0;item<count;item++) {
-          const value=(await upcoming.nth(item).innerText().catch(()=>'' )).trim();
+          const candidate=upcoming.nth(item);
+          if(!await candidate.isVisible().catch(()=>false)) continue;
+          const value=(await candidate.innerText().catch(()=>'' )).trim();
           if(value) items.push(value);
         }
-        const evidence=items.length>0 ? items.join('\\n--- Nexus Schoology item ---\\n') : text;
-        if(!/upcoming|assignment|course|grade/i.test(evidence)) {
+        const explicitEmpty=/no (?:new |upcoming )?assignments|you(?:'|’)re all caught up|nothing (?:new |upcoming)/i.test(text);
+        const evidence=items.length>0 ? items.join('\\n--- Nexus Schoology item ---\\n') : (explicitEmpty ? 'Schoology explicitly reports no new assignments.' : text);
+        if(items.length===0 && !explicitEmpty && !/upcoming|assignment|course|grade/i.test(text)) {
           throw new Error('Schoology opened, but Nexus could not locate a readable upcoming-assignments area. It will not report that there are no assignments without live page evidence.');
         }
         extracted.push(`Live Schoology evidence from ${url}:\\n${evidence}`);
@@ -412,7 +622,9 @@ try {
       }
       case 'hold_open': {
         await page.bringToFront();
-        emit({event:'media_ready',message:'YouTube is playing in the frontmost Nexus browser window.',text:'YouTube is playing in the frontmost Nexus browser window.',tabs:context.pages().map(p=>p.url())});
+        const readyStatus=step.readyStatus || 'playing';
+        const readyMessage=step.readyMessage || 'YouTube is playing in the frontmost Nexus browser window.';
+        emit({event:'media_ready',status:readyStatus,message:readyMessage,text:readyMessage,tabs:context.pages().map(p=>p.url())});
         // Keep this one media session alive so the visible, Nexus-owned
         // browser remains on screen and continues playback. Cancellation or
         // closing the browser ends it; ordinary browser tasks still close.
@@ -424,7 +636,7 @@ try {
   }
   emit({event:'completed',status:'completed',text:extracted.join('\n\n').slice(0,100000),tabs:context.pages().map(p=>p.url()),downloads,screenshots,error:''});
 } catch(error) { emit({event:'completed',status:'failed',text:extracted.join('\n\n'),tabs:context?.pages().map(p=>p.url()) || [],downloads,screenshots,error:String(error?.message || error)}); process.exitCode=1; }
-finally { await context?.close(); }
+finally { await browser?.close().catch(()=>{}); chromeProcess?.kill('SIGTERM'); }
 """#
 }
 
@@ -439,12 +651,34 @@ actor NexBrowserActionCatalog {
             let result = try await managed.run(goal: "Visit \(url.host ?? url.absoluteString) and extract its readable page text.", stepsJSON: steps) { await context.reportProgress($0, nil) }
             return Self.result(result)
         }
-        try await registry.register(manifest: Self.manifest("browser.run_task", "Start a bounded Playwright task in Nexus's separate persistent browser profile and return its stable task ID while it runs. Use it for an agentic, multi-step website workflow: navigate pages, wait for elements, click controls, fill forms, extract evidence, download or upload files, or take a full-page screenshot. Supply structured steps, not a JSON string. Set visible only for a site that cannot be read in background browser mode; it opens the Nexus browser window.", ["Take a full-page screenshot of this website", "Research this site and extract the results", "Fill this form but do not submit without confirmation", "Wait for a page element before continuing"], ["goal": .init(.string, required: true), "steps": .init(.array, description: "Structured array of browser step objects. Supported actions: navigate, new_tab, activate_tab, close_tab, click, type, form, extract, upload, download, wait_for_element, screenshot."), "visible": .init(.boolean, description: "Open the Nexus browser window for compatibility with a site that rejects background browser mode."), "steps_json": .init(.string, description: "Legacy JSON-encoded browser step array. Use steps instead for new calls.", deprecated: true)], risk: .high, confirmation: .always, method: .browserAgent, aliases: ["wait for an element on a page", "watch a webpage condition"], tags: ["wait", "element", "selector", "page condition"])) { args, context in let result = try await managed.start(goal: try Self.required(args, "goal"), stepsJSON: try Self.stepsJSON(args), visible: args["visible"]?.bool ?? false) { await context.reportProgress($0, nil) }; return Self.result(result) }
+        try await registry.register(manifest: Self.manifest("browser.run_task", "Start a bounded Playwright task in Nexus's separate persistent browser profile and return its stable task ID while it runs. Use it for an agentic, multi-step website workflow: navigate pages, wait for elements, click controls, fill forms, extract evidence, download or upload files, or take a full-page screenshot. Supply structured steps, not a JSON string. Set visible only for a site that cannot be read in background browser mode; it opens the Nexus browser window.", ["Take a full-page screenshot of this website", "Research this site and extract the results", "Fill this form but do not submit without confirmation", "Wait for a page element before continuing"], ["goal": .init(.string, required: true), "steps": .init(.array, description: "Structured array of browser step objects. Supported actions: navigate, new_tab, activate_tab, close_tab, click, type, form, extract, upload, download, wait_for_element, screenshot."), "visible": .init(.boolean, description: "Open the Nexus browser window for compatibility with a site that rejects background browser mode."), "steps_json": .init(.string, description: "Legacy JSON-encoded browser step array. Use steps instead for new calls.", deprecated: true)], risk: .high, confirmation: .always, method: .browserAgent, aliases: ["wait for an element on a page", "watch a webpage condition"], tags: ["wait", "element", "selector", "page condition"])) { args, context in
+            let goal = try Self.required(args, "goal")
+            let steps = try Self.stepsJSON(args)
+            let visible = args["visible"]?.bool ?? false
+            let result: NexBrowserTaskResult
+            if context.invocation.source == .automation {
+                // A scheduled workflow cannot rely on an unowned collector
+                // after its tool call returns. Keep the call alive until the
+                // final evidence is persisted and hand that result directly
+                // to the automation composer.
+                result = try await managed.run(goal: goal, stepsJSON: steps, visible: visible) {
+                    await context.reportProgress($0, nil)
+                }
+            } else {
+                result = try await managed.start(goal: goal, stepsJSON: steps, visible: visible) {
+                    await context.reportProgress($0, nil)
+                }
+            }
+            return Self.result(result)
+        }
         try await registry.register(manifest: Self.manifest(
             "browser.play_youtube",
             "Play a requested YouTube video through Nexus's signed-in managed browser. This is the one browser action that intentionally brings the Nexus browser to the foreground and keeps it open while media plays. It opens YouTube, clicks the first visible video result, uses only YouTube's own visible Skip button after five seconds when one is offered, then presses YouTube's normal full-screen control; it never bypasses ads.",
             ["Play something for me on YouTube", "Play lo-fi beats in Nexus browser", "Open YouTube and play a video"],
-            ["query": .init(.string, required: false, description: "Optional music, video, or search request. Omit only when the user asks for any first video from YouTube home.")],
+            [
+                "query": .init(.string, required: false, description: "Optional music, video, or search request. Omit only when the user asks for any first video from YouTube home."),
+                "video_id": .init(.string, required: false, description: "Optional exact 11-character ID returned by youtube_search. Never invent one or combine it with query.")
+            ],
             risk: .medium,
             confirmation: .never,
             method: .browserAgent,
@@ -452,11 +686,42 @@ actor NexBrowserActionCatalog {
             tags: ["youtube", "play", "video", "music", "visible browser"]
         )) { args, context in
             let query = args["query"]?.string?.trimmingCharacters(in: .whitespacesAndNewlines)
+            let videoID = args["video_id"]?.string?.trimmingCharacters(in: .whitespacesAndNewlines)
+            if query?.isEmpty == false, videoID?.isEmpty == false {
+                throw NexToolError.executionFailed(code: "youtube_playback_target_ambiguous", message: "Use either a YouTube query or a returned video_id, not both.")
+            }
+            if let videoID, !videoID.isEmpty, !NexYouTubeToolController.isValidVideoID(videoID) {
+                throw NexToolError.executionFailed(code: "youtube_invalid_video_id", message: "YouTube video_id must be an 11-character ID returned by youtube_search.")
+            }
             let result = try await managed.startPlayback(
-                goal: query?.isEmpty == false ? "Play the first YouTube result for \(query!)." : "Play the first visible YouTube video.",
-                stepsJSON: try Self.youtubePlaybackSteps(query: query)
+                goal: videoID?.isEmpty == false
+                    ? "Play the exact selected YouTube result."
+                    : (query?.isEmpty == false ? "Play the first YouTube result for \(query!)." : "Play the first visible YouTube video."),
+                stepsJSON: try Self.youtubePlaybackSteps(query: query, videoID: videoID)
             ) { await context.reportProgress($0, nil) }
             return Self.result(result)
+        }
+        try await registry.register(manifest: Self.manifest(
+            "browser.open_schoology",
+            "Open the signed-in FUHSD Schoology home page in the foreground Nexus browser, select the one saved FUHSD Google account when needed, and make the browser window full screen. This is presentation-only; use browser.check_schoology to read and summarize assignments in the background.",
+            ["Open Schoology", "Show Schoology", "Go to Schoology"],
+            ["school_email": .init(.string, required: false, description: "Optional exact FUHSD Google address. Omit only when exactly one signed-in @fuhsd.org account exists in the Nexus browser profile.")],
+            risk: .medium,
+            confirmation: .never,
+            method: .browserAgent,
+            aliases: ["open schoology", "show schoology", "go to schoology"],
+            tags: ["schoology", "school", "foreground", "fullscreen", "visible browser"]
+        )) { args, context in
+            let schoolEmail = args["school_email"]?.string?.trimmingCharacters(in: .whitespacesAndNewlines)
+            return Self.result(try await managed.startPresentation(
+                goal: "Open the user's signed-in Schoology home page in the frontmost full-screen Nexus browser.",
+                stepsJSON: try Self.schoologyOpenSteps(schoolEmail: schoolEmail),
+                expectedStatus: "presented",
+                failureCode: "schoology_open_failed",
+                timeoutCode: "schoology_open_timeout",
+                timeoutMessage: "Schoology did not reach a signed-in, foreground full-screen presentation within two minutes.",
+                progress: { await context.reportProgress($0, nil) }
+            ))
         }
         try await registry.register(manifest: Self.manifest(
             "browser.check_schoology",
@@ -486,7 +751,7 @@ actor NexBrowserActionCatalog {
         }
         try await registry.register(manifest: Self.manifest("browser.open_profile", "Open Nexus's separate persistent Chrome profile so Sir can sign in once to private sites. Its session stays local to Nexus and is reused by future managed-browser tasks.", ["Open the Nexus browser so I can sign in to Notion", "Let me sign in to a website in Nexus browser"], [:], risk: .medium, confirmation: .never, method: .nativeAPI)) { _, _ in
             try await managed.openProfileForSignIn()
-            return Self.result(.init(taskID: "", status: "completed", text: "Opened the separate Nexus browser profile directly at Gmail. Sign in there once, open Google Calendar and Fidelity in that same window if needed, then use Command-Q to quit the separate Nexus Chrome app. The saved session is reused automatically; simply closing a window does not quit Chrome on macOS.", tabs: [], downloads: [], screenshots: [], error: ""))
+            return Self.result(.init(taskID: "", status: "completed", text: "Opened the separate Nexus browser profile directly at Gmail. Sign in there once, then open Google Calendar and each read-only portfolio site you want Nexus to use in that same window. When finished, use Command-Q to quit the separate Nexus Chrome app. The saved session is reused automatically; simply closing a window does not quit Chrome on macOS.", tabs: [], downloads: [], screenshots: [], error: ""))
         }
         try await registry.register(manifest: Self.manifest("browser.reset_profile", "Reset only the Nexus-owned browser profile and cancel managed browser tasks.", ["Reset Nexus browser"], [:], risk: .high, confirmation: .always, method: .nativeAPI)) { _, _ in try await managed.reset(); return Self.result(.init(taskID: "", status: "completed", text: "Nexus browser profile reset.", tabs: [], downloads: [], screenshots: [], error: "")) }
         registered = true
@@ -517,31 +782,49 @@ actor NexBrowserActionCatalog {
         ]
         return String(data: try JSONSerialization.data(withJSONObject: steps), encoding: .utf8) ?? "[]"
     }
-    nonisolated static func youtubePlaybackSteps(query: String?) throws -> String {
+    nonisolated static func youtubePlaybackSteps(query: String?, videoID: String? = nil) throws -> String {
         let trimmed = query?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let selectedID = videoID?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         let destination: String
-        if trimmed.isEmpty {
+        if !selectedID.isEmpty {
+            destination = "https://www.youtube.com/watch?v=\(selectedID)"
+        } else if trimmed.isEmpty {
             destination = "https://www.youtube.com/"
         } else {
             var components = URLComponents(string: "https://www.youtube.com/results")!
             components.queryItems = [.init(name: "search_query", value: trimmed)]
             destination = components.url!.absoluteString
         }
-        let steps: [[String: Any]] = [
+        var steps: [[String: Any]] = [
             ["action": "navigate", "url": destination, "label": "Opening YouTube in the Nexus browser"],
             ["action": "bring_to_front", "label": "Bringing Nexus browser forward"],
-            ["action": "youtube_start_first_visible", "label": "Starting the first visible video"],
+            ["action": "browser_fullscreen", "label": "Making the Nexus browser fill the screen"]
+        ]
+        if selectedID.isEmpty {
+            steps.append(["action": "youtube_start_first_visible", "label": "Starting the first visible video"])
+        }
+        steps.append(contentsOf: [
             ["action": "skip_youtube_ad", "minimumWaitMs": 5_000, "timeout": 90_000, "label": "Waiting for YouTube playback"],
             ["action": "youtube_fullscreen", "label": "Entering YouTube full screen"],
-            ["action": "hold_open", "label": "Keeping YouTube open and playing"]
+            ["action": "hold_open", "readyStatus": "playing", "readyMessage": "YouTube is playing in the frontmost full-screen Nexus browser window.", "label": "Keeping YouTube open and playing"]
+        ])
+        return String(data: try JSONSerialization.data(withJSONObject: steps), encoding: .utf8) ?? "[]"
+    }
+    nonisolated static func schoologyOpenSteps(schoolEmail: String?) throws -> String {
+        let email = schoolEmail?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let steps: [[String: Any]] = [
+            ["action": "schoology_check", "url": "https://fuhsd.schoology.com/", "schoolEmail": email, "openOnly": true, "label": "Opening the signed-in Schoology home page"],
+            ["action": "bring_to_front", "label": "Bringing the Nexus Schoology browser forward"],
+            ["action": "browser_fullscreen", "label": "Making the Schoology browser fill the screen"],
+            ["action": "hold_open", "readyStatus": "presented", "readyMessage": "Schoology is open in the frontmost full-screen Nexus browser window.", "label": "Keeping Schoology open"]
         ]
         return String(data: try JSONSerialization.data(withJSONObject: steps), encoding: .utf8) ?? "[]"
     }
-    nonisolated static func schoologyCheckSteps(schoolEmail: String?) throws -> String {
+    nonisolated static func schoologyCheckSteps(schoolEmail: String?, url: String = "https://fuhsd.schoology.com/") throws -> String {
         let email = schoolEmail?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         let steps: [[String: Any]] = [[
             "action": "schoology_check",
-            "url": "https://fuhsd.schoology.com/",
+            "url": url,
             "schoolEmail": email,
             "label": "Checking live upcoming Schoology assignments"
         ]]

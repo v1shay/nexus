@@ -100,7 +100,7 @@ final class NexusHeadlessControlHost {
 
 enum NexusHeadlessControlClient {
     static func run(arguments: [String]) async -> Int32 {
-        guard let command = arguments.first else { return fail("Usage: nexusctl <status|nexcli-status|prompt|cancel|models|model-select|permissions|permission-host|permission-open|permission-repair|memory-status|memory-save|settings|settings-set|tools|tool-execute|tool-dry-run|tool-confirm|tool-cancel-confirmation|connect-enable|connect-role|connect-route>") }
+        guard let command = arguments.first else { return fail("Usage: nexusctl <status|nexcli-status|prompt|cancel|models|model-select|permissions|permission-host|permission-open|permission-repair|memory-status|memory-save|settings|settings-set|tools|tool-execute|tool-dry-run|tool-confirm|tool-cancel-confirmation|automation-list|automation-enable|automation-test|connect-enable|connect-role|connect-route>") }
         var values: [String: String] = [:]
         if ["prompt", "model-select", "permission-open", "connect-enable", "connect-role", "connect-route"].contains(command) {
             guard arguments.count > 1 else { return fail("Missing value for \(command).") }
@@ -124,12 +124,23 @@ enum NexusHeadlessControlClient {
             }
             values["actionId"] = arguments[1]
         }
+        if command == "automation-test" {
+            guard arguments.count >= 2 else { return fail("Usage: nexusctl automation-test <id-or-title>") }
+            values["automation"] = arguments.dropFirst().joined(separator: " ")
+        }
+        if command == "automation-enable" {
+            guard arguments.count >= 3, let enabled = Bool(arguments.last ?? "") else {
+                return fail("Usage: nexusctl automation-enable <id-or-title> <true|false>")
+            }
+            values["automation"] = arguments.dropFirst().dropLast().joined(separator: " ")
+            values["enabled"] = String(enabled)
+        }
         do {
             try NexusHeadlessControlPaths.prepare()
             let request = NexusHeadlessControlRequest(id: UUID(), command: command, arguments: values)
             try JSONEncoder().encode(request).write(to: NexusHeadlessControlPaths.requests.appendingPathComponent("\(request.id.uuidString).json"), options: .atomic)
             let replyURL = NexusHeadlessControlPaths.replies.appendingPathComponent("\(request.id.uuidString).json")
-            let polls = command == "prompt" ? 1_750 : 750
+            let polls = ["prompt", "automation-test"].contains(command) ? 1_750 : 750
             for _ in 0..<polls {
                 if let data = try? Data(contentsOf: replyURL), let reply = try? JSONDecoder().decode(NexusHeadlessControlReply.self, from: data) {
                     try? FileManager.default.removeItem(at: replyURL)

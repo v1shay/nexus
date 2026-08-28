@@ -855,9 +855,9 @@ actor NexWeatherController {
         ]
         let geocodePayload: (Data, URLResponse)
         do {
-            geocodePayload = try await session.data(from: geocode.url!)
+            geocodePayload = try await requestWithRetry(geocode.url!, session: session)
         } catch {
-            throw NexToolError.executionFailed(code: "weather_geocode_failed", message: "The live weather location lookup could not be reached: \(error.localizedDescription)")
+            throw NexToolError.executionFailed(code: "weather_geocode_failed", message: "The live weather location lookup could not be reached after three attempts: \(error.localizedDescription)")
         }
         let (geocodeData, geocodeResponse) = geocodePayload
         guard let geocodeHTTP = geocodeResponse as? HTTPURLResponse,
@@ -880,9 +880,9 @@ actor NexWeatherController {
         ]
         let forecastPayload: (Data, URLResponse)
         do {
-            forecastPayload = try await session.data(from: forecast.url!)
+            forecastPayload = try await requestWithRetry(forecast.url!, session: session)
         } catch {
-            throw NexToolError.executionFailed(code: "weather_forecast_failed", message: "The live weather provider could not be reached: \(error.localizedDescription)")
+            throw NexToolError.executionFailed(code: "weather_forecast_failed", message: "The live weather provider could not be reached after three attempts: \(error.localizedDescription)")
         }
         let (forecastData, forecastResponse) = forecastPayload
         guard let forecastHTTP = forecastResponse as? HTTPURLResponse,
@@ -905,6 +905,26 @@ actor NexWeatherController {
             "today_high_f": .number(high),
             "today_low_f": .number(low)
         ])
+    }
+
+    private static func requestWithRetry(_ url: URL, session: URLSession) async throws -> (Data, URLResponse) {
+        var lastError: Error = URLError(.badServerResponse)
+        for attempt in 0..<3 {
+            do {
+                let result = try await session.data(from: url)
+                if let response = result.1 as? HTTPURLResponse,
+                   (200...299).contains(response.statusCode) {
+                    return result
+                }
+                lastError = URLError(.badServerResponse)
+            } catch {
+                lastError = error
+            }
+            if attempt < 2 {
+                try? await Task.sleep(for: .milliseconds(500 * (attempt + 1)))
+            }
+        }
+        throw lastError
     }
 
     private static func condition(for code: Int) -> String {

@@ -219,15 +219,15 @@ final class NexYouTubeToolController {
     private func registerPlayTool() async throws {
         try await register(.init(
             name: "youtube_play",
-            description: "Play one YouTube search candidate in Nex. video_id must be a stable 11-character ID returned by youtube_search; do not invent one.",
+            description: "Play one YouTube search candidate in the frontmost full-screen Nexus browser. video_id must be a stable 11-character ID returned by youtube_search; do not invent one.",
             statusLabel: "Starting YouTube…",
             completionLabel: "Playing YouTube",
-            spokenStatus: "Starting YouTube.",
+            spokenStatus: "I found a video for you. Starting it now.",
             iconSystemName: "play.rectangle.fill",
             permission: .automation,
             schema: .init(fields: ["video_id": .init(.string, required: true, description: "Stable video ID returned by youtube_search.")]),
             application: "YouTube",
-            provider: "Nex media overlay",
+            provider: "Nexus browser",
             examples: ["Play the selected YouTube search result"],
             aliases: ["play selected video", "start YouTube result"],
             tags: ["YouTube", "video", "playback", "media"],
@@ -287,22 +287,18 @@ final class NexYouTubeToolController {
                 message: "YouTube video_id must be an 11-character ID returned by youtube_search."
             )
         }
-        let candidate = NexYouTubeCandidate(videoID: videoID, title: "YouTube video \(videoID)")
-        let tab = BrowserTab(
-            id: "nex:youtube:\(videoID)",
-            windowIndex: 0,
-            tabIndex: 0,
-            title: candidate.title,
-            url: candidate.url,
-            isActive: false
-        )
-        guard let media = MediaTab(tab: tab) else {
-            throw NexToolError.executionFailed(code: "youtube_invalid_video_id", message: "Nex could not open that YouTube video.")
+        do {
+            return try await registry.execute(
+                name: "browser.play_youtube",
+                arguments: ["video_id": .string(videoID)],
+                invocation: .app
+            )
+        } catch NexToolError.notFound(_) {
+            throw NexToolError.executionFailed(
+                code: "youtube_browser_playback_unavailable",
+                message: "The full-screen Nexus browser playback action is not ready yet. Try again after Nexus finishes starting."
+            )
         }
-        guard onPlaybackRequested(media, false) else {
-            throw NexToolError.executionFailed(code: "youtube_presentation_unavailable", message: "Nex could not open the YouTube player.")
-        }
-        return candidate.toolValue
     }
 
     private func makeFullscreen() async throws -> NexJSONValue {
